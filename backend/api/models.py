@@ -66,6 +66,11 @@ class Problem(models.Model):
     platform = models.CharField(max_length=50)
     problem_id = models.CharField(max_length=50)
     title = models.CharField(max_length=255)
+    problem_url = models.URLField(blank=True, null=True, help_text='Full URL to the problem')
+    tags = models.JSONField(default=list, blank=True, help_text='List of tags for the problem')
+    solution_code = models.TextField(blank=True, null=True, help_text='Solution code for the problem')
+    language = models.CharField(max_length=50, blank=True, null=True, help_text='Programming language of solution')
+    constraints = models.TextField(blank=True, null=True, help_text='Input constraints for the problem')
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

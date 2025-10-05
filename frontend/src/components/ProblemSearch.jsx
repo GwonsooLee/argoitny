@@ -11,7 +11,7 @@ function ProblemSearch({ onSelectProblem }) {
 
   const handleSearch = async () => {
     if (!query.trim()) {
-      alert('검색어를 입력하세요');
+      alert('Please enter a search term');
       return;
     }
 
@@ -32,7 +32,7 @@ function ProblemSearch({ onSelectProblem }) {
       setProblems(data);
     } catch (error) {
       console.error('Error searching problems:', error);
-      alert('문제 검색 중 오류가 발생했습니다');
+      alert('An error occurred while searching for problems');
     } finally {
       setLoading(false);
     }
@@ -46,7 +46,7 @@ function ProblemSearch({ onSelectProblem }) {
 
   return (
     <div className="problem-search">
-      <h2>문제 검색</h2>
+      <h2>Problem Search</h2>
 
       <div className="platform-selector">
         <label>
@@ -56,7 +56,7 @@ function ProblemSearch({ onSelectProblem }) {
             checked={platform === 'baekjoon'}
             onChange={(e) => setPlatform(e.target.value)}
           />
-          백준 (Baekjoon)
+          Baekjoon
         </label>
         <label>
           <input
@@ -72,19 +72,19 @@ function ProblemSearch({ onSelectProblem }) {
       <div className="search-box">
         <input
           type="text"
-          placeholder="문제 번호 또는 제목으로 검색"
+          placeholder="Search by problem number or title"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyPress={handleKeyPress}
         />
         <button onClick={handleSearch} disabled={loading}>
-          {loading ? '검색 중...' : '검색'}
+          {loading ? 'Searching...' : 'Search'}
         </button>
       </div>
 
       {problems.length > 0 && (
         <div className="problem-list">
-          <h3>검색 결과</h3>
+          <h3>Search Results</h3>
           {problems.map((problem) => (
             <div
               key={problem.id}
@@ -99,7 +99,7 @@ function ProblemSearch({ onSelectProblem }) {
       )}
 
       {!loading && problems.length === 0 && query && (
-        <p className="no-results">검색 결과가 없습니다</p>
+        <p className="no-results">No results found</p>
       )}
     </div>
   );

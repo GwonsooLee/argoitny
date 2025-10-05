@@ -11,7 +11,7 @@ function CodeModal({ code, onClose }) {
     <div className="modal-backdrop" onClick={handleBackdropClick}>
       <div className="modal-content">
         <div className="modal-header">
-          <h3>코드 보기</h3>
+          <h3>View Code</h3>
           <button className="modal-close" onClick={onClose}>
             ✕
           </button>
@@ -19,14 +19,14 @@ function CodeModal({ code, onClose }) {
 
         <div className="modal-body">
           <div className="code-info">
-            <span className="info-label">문제:</span>
+            <span className="info-label">Problem:</span>
             <span className="info-value">
-              {code.platform === 'baekjoon' ? '백준' : 'Codeforces'} - {code.problemNumber} ({code.problemTitle})
+              {code.platform === 'baekjoon' ? 'Baekjoon' : 'Codeforces'} - {code.problemNumber} ({code.problemTitle})
             </span>
           </div>
 
           <div className="code-info">
-            <span className="info-label">언어:</span>
+            <span className="info-label">Language:</span>
             <span className="info-value">{code.language}</span>
           </div>
 
@@ -39,7 +39,7 @@ function CodeModal({ code, onClose }) {
 
         <div className="modal-footer">
           <button className="modal-close-btn" onClick={onClose}>
-            닫기
+            Close
           </button>
         </div>
       </div>

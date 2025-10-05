@@ -8,7 +8,13 @@ import json
 from dotenv import load_dotenv
 
 # Load .env file in local environment
-load_dotenv()
+# Try root .env first (for local dev), then backend/.env
+from pathlib import Path
+root_env = Path(__file__).resolve().parent.parent.parent / '.env'
+if root_env.exists():
+    load_dotenv(root_env)
+else:
+    load_dotenv()
 
 
 def get_secret(secret_name, default=None):

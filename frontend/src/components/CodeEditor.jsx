@@ -50,7 +50,7 @@ function CodeEditor({ problemId, onTestResults }) {
 
   const handleExecute = async () => {
     if (!code.trim()) {
-      alert('코드를 입력하세요');
+      alert('Please enter your code');
       return;
     }
 
@@ -80,7 +80,7 @@ function CodeEditor({ problemId, onTestResults }) {
       onTestResults(data);
     } catch (error) {
       console.error('Error executing code:', error);
-      alert('코드 실행 중 오류가 발생했습니다');
+      alert('An error occurred while executing your code');
     } finally {
       setLoading(false);
     }
@@ -89,9 +89,9 @@ function CodeEditor({ problemId, onTestResults }) {
   return (
     <div className="code-editor">
       <div className="editor-header">
-        <h3>코드 입력</h3>
+        <h3>Code Editor</h3>
         <div className="language-selector">
-          <label>언어: </label>
+          <label>Language: </label>
           <select value={language} onChange={(e) => setLanguage(e.target.value)}>
             <option value="python">Python</option>
             <option value="javascript">JavaScript</option>
@@ -99,7 +99,7 @@ function CodeEditor({ problemId, onTestResults }) {
             <option value="java">Java</option>
           </select>
           <span className="detected-language">
-            (자동 감지됨)
+            (Auto-detected)
           </span>
         </div>
       </div>
@@ -108,16 +108,16 @@ function CodeEditor({ problemId, onTestResults }) {
         className="code-input"
         value={code}
         onChange={(e) => setCode(e.target.value)}
-        placeholder="여기에 코드를 입력하세요..."
+        placeholder="Enter your code here..."
         spellCheck="false"
       />
 
       <div className="user-settings">
         <div className="user-id-input">
-          <label>사용자 ID (선택):</label>
+          <label>User ID (Optional):</label>
           <input
             type="text"
-            placeholder="익명"
+            placeholder="Anonymous"
             value={userId}
             onChange={(e) => setUserId(e.target.value)}
           />
@@ -130,7 +130,7 @@ function CodeEditor({ problemId, onTestResults }) {
               checked={isCodePublic}
               onChange={(e) => setIsCodePublic(e.target.checked)}
             />
-            코드 공개
+            Make code public
           </label>
         </div>
       </div>
@@ -140,7 +140,7 @@ function CodeEditor({ problemId, onTestResults }) {
         onClick={handleExecute}
         disabled={loading}
       >
-        {loading ? '실행 중...' : '반례 검증하기'}
+        {loading ? 'Executing...' : 'Validate Test Cases'}
       </button>
     </div>
   );

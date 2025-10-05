@@ -91,31 +91,31 @@ function SearchHistory() {
 
   return (
     <div className="search-history">
-      <h2>최근 반례 검색 이력</h2>
+      <h2>Recent Test Case Validation History</h2>
 
       {loading && history.length === 0 ? (
-        <div className="loading">로딩 중...</div>
+        <div className="loading">Loading...</div>
       ) : (
         <>
           <div className="history-table-container">
             <table className="history-table">
               <thead>
                 <tr>
-                  <th>시간</th>
-                  <th>플랫폼</th>
-                  <th>문제 번호</th>
-                  <th>문제 제목</th>
-                  <th>언어</th>
-                  <th>사용자</th>
-                  <th>결과</th>
-                  <th>코드</th>
+                  <th>Time</th>
+                  <th>Platform</th>
+                  <th>Problem #</th>
+                  <th>Problem Title</th>
+                  <th>Language</th>
+                  <th>User</th>
+                  <th>Result</th>
+                  <th>Code</th>
                 </tr>
               </thead>
               <tbody>
                 {history.length === 0 ? (
                   <tr>
                     <td colSpan="8" className="no-data">
-                      검색 이력이 없습니다
+                      No search history available
                     </td>
                   </tr>
                 ) : (
@@ -124,7 +124,7 @@ function SearchHistory() {
                       <td className="date-cell">{formatDate(item.created_at)}</td>
                       <td className="platform-cell">
                         <span className={`platform-badge ${item.platform}`}>
-                          {item.platform === 'baekjoon' ? '백준' : 'Codeforces'}
+                          {item.platform === 'baekjoon' ? 'Baekjoon' : 'Codeforces'}
                         </span>
                       </td>
                       <td className="problem-number-cell">{item.problem_number}</td>
@@ -132,7 +132,7 @@ function SearchHistory() {
                       <td className="language-cell">
                         <span className="language-badge">{item.language}</span>
                       </td>
-                      <td className="user-cell">{item.user_identifier || item.user_email || '익명'}</td>
+                      <td className="user-cell">{item.user_identifier || item.user_email || 'Anonymous'}</td>
                       <td className={`result-cell ${getResultStatus(item)}`}>
                         <div className="result-info">
                           <span className="passed">{item.passed_count}</span>
@@ -146,10 +146,10 @@ function SearchHistory() {
                             className="view-code-btn"
                             onClick={() => handleCodeClick(item)}
                           >
-                            보기
+                            View
                           </button>
                         ) : (
-                          <span className="private-code">비공개</span>
+                          <span className="private-code">Private</span>
                         )}
                       </td>
                     </tr>
@@ -166,7 +166,7 @@ function SearchHistory() {
                 disabled={offset === 0 || loading}
                 className="pagination-btn"
               >
-                ← 이전
+                ← Previous
               </button>
 
               <div className="page-info">
@@ -182,7 +182,7 @@ function SearchHistory() {
                 disabled={!hasMore || loading}
                 className="pagination-btn"
               >
-                다음 →
+                Next →
               </button>
             </div>
           )}

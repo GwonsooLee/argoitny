@@ -13,44 +13,44 @@ function TestResults({ results }) {
 
   return (
     <div className="test-results">
-      <h3>반례 검증 결과</h3>
+      <h3>Test Case Validation Results</h3>
 
       <div className="summary">
-        <span className="passed">통과: {summary.passed}</span>
-        <span className="failed">실패: {summary.failed}</span>
-        <span className="total">전체: {summary.total}</span>
+        <span className="passed">Passed: {summary.passed}</span>
+        <span className="failed">Failed: {summary.failed}</span>
+        <span className="total">Total: {summary.total}</span>
       </div>
 
       {failedTests.length > 0 ? (
         <>
-          <h4>틀린 반례</h4>
+          <h4>Failed Test Cases</h4>
           {failedTests.map((result, index) => (
             <div key={result.testCaseId} className="test-case failed">
               <div className="test-case-header">
-                <strong>반례 #{index + 1}</strong>
+                <strong>Test Case #{index + 1}</strong>
               </div>
 
               <div className="test-case-content">
                 <div className="io-section">
-                  <label>입력:</label>
+                  <label>Input:</label>
                   <pre>{result.input}</pre>
                 </div>
 
                 <div className="io-section">
-                  <label>예상 출력:</label>
+                  <label>Expected Output:</label>
                   <pre>{result.expected || result.expectedOutput}</pre>
                 </div>
 
                 <div className="io-section">
-                  <label>실제 출력:</label>
+                  <label>Actual Output:</label>
                   <pre className="actual-output">
-                    {result.output || result.actualOutput || '(출력 없음)'}
+                    {result.output || result.actualOutput || '(No output)'}
                   </pre>
                 </div>
 
                 {result.error && (
                   <div className="io-section error">
-                    <label>에러:</label>
+                    <label>Error:</label>
                     <pre>{result.error}</pre>
                   </div>
                 )}
@@ -60,7 +60,7 @@ function TestResults({ results }) {
         </>
       ) : (
         <div className="all-passed">
-          ✓ 모든 반례를 통과했습니다!
+          ✓ All test cases passed!
         </div>
       )}
     </div>

@@ -75,7 +75,7 @@ const GoogleLogin = ({ onLoginSuccess }) => {
   return (
     <div className="google-login-container">
       <div id="google-signin-button"></div>
-      {isLoading && <p className="loading-text">로그인 중...</p>}
+      {isLoading && <p className="loading-text">Signing in...</p>}
       {error && <p className="error-text">{error}</p>}
     </div>
   );

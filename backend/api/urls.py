@@ -11,6 +11,9 @@ from .views import (
     SearchHistoryDetailView,
     RegisterProblemView,
     GenerateTestCasesView,
+    ExecuteTestCasesView,
+    DraftProblemsView,
+    SaveProblemView,
 )
 
 urlpatterns = [
@@ -33,4 +36,7 @@ urlpatterns = [
     # Problem Registration
     path('register/problem/', RegisterProblemView.as_view(), name='register-problem'),
     path('register/generate-test-cases/', GenerateTestCasesView.as_view(), name='generate-test-cases'),
+    path('register/execute-test-cases/', ExecuteTestCasesView.as_view(), name='execute-test-cases'),
+    path('register/drafts/', DraftProblemsView.as_view(), name='draft-problems'),
+    path('register/save/', SaveProblemView.as_view(), name='save-problem'),
 ]

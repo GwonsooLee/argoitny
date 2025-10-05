@@ -26,6 +26,9 @@ export const API_ENDPOINTS = {
   // Problem Registration
   registerProblem: '/register/problem/',
   generateTestCases: '/register/generate-test-cases/',
+  executeTestCases: '/register/execute-test-cases/',
+  drafts: '/register/drafts/',
+  saveDraft: '/register/save/',
 };
 
 /**
