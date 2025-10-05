@@ -1,4 +1,4 @@
-.PHONY: help up down restart logs logs-backend logs-frontend logs-mysql ps clean build stop start
+.PHONY: help up down restart logs logs-backend logs-frontend logs-mysql ps clean build stop start frontend-deploy frontend-build s3-upload cf-invalidate cf-status
 
 # Default target
 help:
@@ -35,13 +35,37 @@ help:
 	@echo "  make ecr-help     - ECR 명령어 도움말"
 	@echo "  make ecr-list     - ECR 이미지 목록"
 	@echo ""
+	@echo "☸️  Helm 배포 (EKS):"
+	@echo "  make deploy       - 🌟 EKS에 배포 (Helm)"
+	@echo "  make k8s-status   - 배포 상태 확인"
+	@echo "  make k8s-logs     - 애플리케이션 로그 확인"
+	@echo "  make k8s-rollback - 이전 버전으로 롤백"
+	@echo "  make helm-dry-run - Dry-run (배포 미리보기)"
+	@echo "  make helm-diff    - 현재 배포와 비교 (플러그인 필요)"
+	@echo ""
+	@echo "🌐 CloudFront 배포:"
+	@echo "  make frontend-deploy - 🌟 프론트엔드 빌드 & CloudFront 배포"
+	@echo "  make frontend-build  - 프론트엔드 빌드만"
+	@echo "  make s3-upload       - S3에 업로드"
+	@echo "  make cf-invalidate   - CloudFront 캐시 무효화"
+	@echo ""
 	@echo "🧹 정리:"
 	@echo "  make clean        - 모든 컨테이너, 볼륨, 이미지 제거 (주의!)"
 	@echo "  make ecr-clean    - 로컬 ECR 이미지 제거"
+	@echo "  make k8s-undeploy - 배포 삭제"
 	@echo ""
 	@echo "💡 팁:"
 	@echo "  릴리스 가이드: cat RELEASE.md"
-	@echo "  ECR 배포 가이드: cat nest/README.md"
+	@echo "  EKS 배포 가이드: cat nest/README.md"
+	@echo ""
+	@echo "📝 전체 워크플로우:"
+	@echo "  Backend:"
+	@echo "    1. make release              # 이미지 빌드 & ECR push"
+	@echo "    2. make deploy VERSION=v1.0.0  # EKS에 배포"
+	@echo "    3. make k8s-status           # 배포 확인"
+	@echo ""
+	@echo "  Frontend:"
+	@echo "    make frontend-deploy         # 빌드 & CloudFront 배포"
 	@echo "════════════════════════════════════════════════════════════════"
 
 # 서비스 시작/중지
@@ -515,6 +539,10 @@ build-multiarch: setup-buildx ecr-login ## 멀티 아키텍처 이미지 빌드 
 verify-manifest: ## Manifest 검증
 	@echo "🔍 Manifest를 검증합니다..."
 	@CURRENT_TAG=$$(git describe --exact-match --tags HEAD 2>/dev/null); \
+	if [ -z "$$CURRENT_TAG" ]; then \
+		echo "❌ Error: Git tag를 찾을 수 없습니다."; \
+		exit 1; \
+	fi; \
 	echo ""; \
 	echo "📋 Manifest for $(IMAGE_NAME):$$CURRENT_TAG:"; \
 	docker buildx imagetools inspect $(IMAGE_NAME):$$CURRENT_TAG; \
@@ -548,7 +576,13 @@ release: check-docker check-aws check-git-tag ## 전체 릴리스 프로세스 (
 	@$(MAKE) build-multiarch
 	@echo ""
 	@echo "🔍 Step 3/3: Manifest를 검증합니다..."
-	@$(MAKE) verify-manifest
+	@CURRENT_TAG=$$(git describe --exact-match --tags HEAD 2>/dev/null); \
+	echo ""; \
+	echo "📋 Manifest for $(IMAGE_NAME):$$CURRENT_TAG:"; \
+	docker buildx imagetools inspect $(IMAGE_NAME):$$CURRENT_TAG; \
+	echo ""; \
+	echo "📋 Manifest for $(IMAGE_NAME):latest:"; \
+	docker buildx imagetools inspect $(IMAGE_NAME):latest
 	@echo ""
 	@echo "════════════════════════════════════════════════════════════════"
 	@echo "✅ Release 완료!"
@@ -781,3 +815,73 @@ helm-diff: check-kubectl check-helm ## 현재 배포와 새 버전 비교 (helm-
 		--namespace $(HELM_NAMESPACE) \
 		--values $(HELM_VALUES_FILE) \
 		--set image.tag=$(DEPLOY_VERSION)
+
+# ============================================================================
+# CloudFront Deployment
+# ============================================================================
+
+CLOUDFRONT_ID ?= E2FHGERNFYQ96Z
+S3_BUCKET ?= zte-testcase-run-zteapne2
+FRONTEND_DIR = frontend
+FRONTEND_BUILD_DIR = $(FRONTEND_DIR)/dist
+
+.PHONY: frontend-build
+frontend-build: ## 프론트엔드 빌드
+	@echo "🔨 프론트엔드를 빌드합니다..."
+	@cd $(FRONTEND_DIR) && npm install
+	@cd $(FRONTEND_DIR) && npm run build
+	@echo "✅ 프론트엔드 빌드 완료: $(FRONTEND_BUILD_DIR)"
+
+.PHONY: s3-upload
+s3-upload: check-aws ## S3에 빌드 파일 업로드
+	@echo "📤 S3에 파일을 업로드합니다..."
+	@if [ ! -d "$(FRONTEND_BUILD_DIR)" ]; then \
+		echo "❌ Error: 빌드 디렉토리가 없습니다: $(FRONTEND_BUILD_DIR)"; \
+		echo "💡 먼저 빌드를 실행하세요: make frontend-build"; \
+		exit 1; \
+	fi
+	@echo "Bucket: s3://$(S3_BUCKET)/"
+	@aws s3 sync $(FRONTEND_BUILD_DIR)/ s3://$(S3_BUCKET)/ \
+		--delete \
+		--cache-control "public, max-age=31536000" \
+		--exclude "index.html" \
+		--exclude "*.map"
+	@aws s3 cp $(FRONTEND_BUILD_DIR)/index.html s3://$(S3_BUCKET)/index.html \
+		--cache-control "public, max-age=0, must-revalidate" \
+		--content-type "text/html"
+	@echo "✅ S3 업로드 완료"
+
+.PHONY: cf-invalidate
+cf-invalidate: check-aws ## CloudFront 캐시 무효화
+	@echo "🔄 CloudFront 캐시를 무효화합니다..."
+	@echo "Distribution ID: $(CLOUDFRONT_ID)"
+	@INVALIDATION_ID=$$(aws cloudfront create-invalidation \
+		--distribution-id $(CLOUDFRONT_ID) \
+		--paths "/*" \
+		--query 'Invalidation.Id' \
+		--output text); \
+	echo "✅ 무효화 시작됨: $$INVALIDATION_ID"; \
+	echo ""; \
+	echo "📊 무효화 상태를 확인하려면:"; \
+	echo "  aws cloudfront get-invalidation --distribution-id $(CLOUDFRONT_ID) --id $$INVALIDATION_ID"
+
+.PHONY: cf-status
+cf-status: check-aws ## CloudFront 배포 상태 확인
+	@echo "📊 CloudFront 배포 상태:"
+	@aws cloudfront get-distribution --id $(CLOUDFRONT_ID) \
+		--query 'Distribution.{Status:Status,DomainName:DomainName,Enabled:DistributionConfig.Enabled}' \
+		--output table
+
+.PHONY: frontend-deploy
+frontend-deploy: check-aws frontend-build s3-upload cf-invalidate ## 전체 프론트엔드 배포 프로세스
+	@echo ""
+	@echo "════════════════════════════════════════════════════════════════"
+	@echo "✅ 프론트엔드 배포 완료!"
+	@echo "════════════════════════════════════════════════════════════════"
+	@echo ""
+	@DOMAIN=$$(aws cloudfront get-distribution --id $(CLOUDFRONT_ID) \
+		--query 'Distribution.DomainName' --output text); \
+	echo "🌐 CloudFront URL: https://$$DOMAIN"; \
+	echo "📦 S3 Bucket: s3://$(S3_BUCKET)"; \
+	echo ""; \
+	echo "💡 캐시 무효화는 2-5분 정도 소요됩니다."

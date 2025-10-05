@@ -56,7 +56,33 @@ resource "aws_s3_bucket_policy" "testcase_run_main" {
   })
 }
 
-# Cloudfront Origin Access Identity 
+# CloudFront Function for www redirect
+resource "aws_cloudfront_function" "www_redirect" {
+  name    = "testcase-run-www-redirect"
+  runtime = "cloudfront-js-1.0"
+  comment = "Redirect www to root domain"
+  publish = true
+  code    = <<-EOT
+function handler(event) {
+  var request = event.request;
+  var host = request.headers.host.value;
+
+  if (host === 'www.testcase.run') {
+    return {
+      statusCode: 301,
+      statusDescription: 'Moved Permanently',
+      headers: {
+        'location': { value: 'https://testcase.run' + request.uri }
+      }
+    };
+  }
+
+  return request;
+}
+EOT
+}
+
+# Cloudfront Origin Access Identity
 resource "aws_cloudfront_origin_access_identity" "testcase_run_cdn_distribution_origin_access_identity" {
   comment = "Testcase.Run origin access identity in ${var.region_namespace}"
 }
@@ -82,9 +108,9 @@ resource "aws_cloudfront_distribution" "testcase_run_cdn_distribution" {
   default_root_object = "index.html"
 
   # Alias of cloudfront distribution
-  aliases = var.public_testcase_run_cdn_domain_name != "sample" ? [var.public_testcase_run_cdn_domain_name] : []
+  aliases = ["testcase.run", "www.testcase.run"]
 
-  # Default Cache behavior 
+  # Default Cache behavior
   default_cache_behavior {
     allowed_methods  = ["GET", "HEAD"]
     cached_methods   = ["GET", "HEAD"]
@@ -100,31 +126,18 @@ resource "aws_cloudfront_distribution" "testcase_run_cdn_distribution" {
       }
     }
 
-    # List of Lambda Edge Association
-    #lambda_function_association {
-    #  event_type   = "viewer-request"
-    #  lambda_arn   = "<< Lambda Edge ARN"
-    #  include_body = true
-    #}
-
-    #lambda_function_association {
-    #  event_type   = "origin-response"
-    #  lambda_arn   = "<< Lambda Edge ARN"
-    #  include_body = false
-    #}
-
-    #lambda_function_association {
-    #  event_type = "viewer-response"
-    #  lambda_arn   = "<< Lambda Edge ARN"
-    #  include_body = false
-    #}
-
     viewer_protocol_policy = "redirect-to-https"
 
     # cache TTL Setting
     min_ttl     = 0
     default_ttl = 1800
     max_ttl     = 1800
+
+    # CloudFront Function for www redirect
+    function_association {
+      event_type   = "viewer-request"
+      function_arn = aws_cloudfront_function.www_redirect.arn
+    }
 
   }
 
@@ -152,6 +165,12 @@ resource "aws_cloudfront_distribution" "testcase_run_cdn_distribution" {
         forward = "all"
       }
     }
+
+    # CloudFront Function for www redirect
+    function_association {
+      event_type   = "viewer-request"
+      function_arn = aws_cloudfront_function.www_redirect.arn
+    }
   }
 
   restrictions {
@@ -162,10 +181,9 @@ resource "aws_cloudfront_distribution" "testcase_run_cdn_distribution" {
 
   # Certification Settings
   viewer_certificate {
-    acm_certificate_arn            = var.public_testcase_run_cdn_domain_name != "sample" ? var.r53_variables.prod.star_testcase_run_acm_arn_useast1 : null
-    cloudfront_default_certificate = var.public_testcase_run_cdn_domain_name == "sample" ? true : false
-    minimum_protocol_version       = "TLSv1.1_2016"
-    ssl_support_method             = var.public_testcase_run_cdn_domain_name != "sample" ? "sni-only" : null
+    acm_certificate_arn      = var.r53_variables.prod.star_testcase_run_acm_arn_useast1
+    minimum_protocol_version = "TLSv1.1_2016"
+    ssl_support_method       = "sni-only"
   }
 
   # Cloudfront Logging Settings
@@ -194,15 +212,27 @@ resource "aws_cloudfront_distribution" "testcase_run_cdn_distribution" {
 
   # Tags of cloudfront
   tags = {
-    Name = "sample.testcase.run"
+    Name = "testcase.run"
   }
 }
 
-# Route 53 Record for cloudfront
-resource "aws_route53_record" "testcase_run_cdn" {
-  count   = var.public_testcase_run_cdn_domain_name != "sample" ? 1 : 0
+# Route 53 Record for testcase.run
+resource "aws_route53_record" "testcase_run_root" {
   zone_id = var.r53_variables.prod.testcase_run_zone_id
-  name    = var.public_testcase_run_cdn_domain_name
+  name    = "testcase.run"
+  type    = "A"
+
+  alias {
+    name                   = aws_cloudfront_distribution.testcase_run_cdn_distribution.domain_name
+    zone_id                = "Z2FDTNDATAQYW2"
+    evaluate_target_health = false
+  }
+}
+
+# Route 53 Record for www.testcase.run
+resource "aws_route53_record" "testcase_run_www" {
+  zone_id = var.r53_variables.prod.testcase_run_zone_id
+  name    = "www.testcase.run"
   type    = "A"
 
   alias {
