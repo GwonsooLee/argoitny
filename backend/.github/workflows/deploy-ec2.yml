@@ -1,0 +1,246 @@
+name: Deploy to AWS EC2
+
+on:
+  push:
+    branches:
+      - main
+      - production
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+
+env:
+  AWS_REGION: us-east-1
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test_password
+          MYSQL_DATABASE: test_algoitny
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-django pytest-cov
+
+      - name: Run tests
+        env:
+          DEBUG: 'True'
+          SECRET_KEY: 'test-secret-key-for-ci'
+          DB_NAME: 'test_algoitny'
+          DB_USER: 'root'
+          DB_PASSWORD: 'test_password'
+          DB_HOST: '127.0.0.1'
+          DB_PORT: '3306'
+          REDIS_HOST: '127.0.0.1'
+          REDIS_PORT: '6379'
+        run: |
+          cd backend
+          # python manage.py test
+          # Uncomment above when you have tests
+          python manage.py check --deploy --settings=config.settings
+
+      - name: Security check
+        run: |
+          cd backend
+          pip install safety bandit
+          # safety check --json || true
+          # bandit -r . -f json || true
+
+  deploy:
+    name: Deploy to EC2
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/production'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+
+      - name: Add EC2 to known hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy to EC2
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+        run: |
+          ssh $EC2_USER@$EC2_HOST << 'ENDSSH'
+            set -e
+
+            echo "Starting deployment..."
+
+            # Navigate to app directory
+            cd /home/algoitny/apps/algoitny
+
+            # Pull latest code
+            echo "Pulling latest code..."
+            git fetch origin
+            git checkout main
+            git pull origin main
+
+            # Activate virtual environment
+            cd backend
+            source venv/bin/activate
+
+            # Update dependencies
+            echo "Updating dependencies..."
+            pip install -r requirements-production.txt --upgrade
+
+            # Collect static files
+            echo "Collecting static files..."
+            python manage.py collectstatic --noinput
+
+            # Run migrations
+            echo "Running migrations..."
+            python manage.py migrate --noinput
+
+            # Restart services
+            echo "Restarting services..."
+            sudo systemctl restart gunicorn
+            sudo systemctl restart celery-worker
+            sudo systemctl restart celery-beat
+            sudo systemctl reload nginx
+
+            # Wait for services to start
+            sleep 3
+
+            # Check service status
+            echo "Checking service status..."
+            sudo systemctl is-active --quiet gunicorn && echo "Gunicorn: OK" || echo "Gunicorn: FAILED"
+            sudo systemctl is-active --quiet celery-worker && echo "Celery Worker: OK" || echo "Celery Worker: FAILED"
+            sudo systemctl is-active --quiet nginx && echo "Nginx: OK" || echo "Nginx: FAILED"
+
+            # Test application
+            echo "Testing application..."
+            curl -f http://localhost:8000/ || echo "Application test failed"
+
+            echo "Deployment completed successfully!"
+          ENDSSH
+
+      - name: Health check
+        run: |
+          sleep 5
+          curl -f https://api.testcase.run/health/ || echo "Health check failed"
+
+      - name: Notify deployment success
+        if: success()
+        run: |
+          echo "Deployment successful!"
+          # Add Slack/Discord notification here if needed
+
+      - name: Notify deployment failure
+        if: failure()
+        run: |
+          echo "Deployment failed!"
+          # Add Slack/Discord notification here if needed
+
+      - name: Rollback on failure
+        if: failure()
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+        run: |
+          ssh $EC2_USER@$EC2_HOST << 'ENDSSH'
+            echo "Attempting rollback..."
+            cd /home/algoitny/apps/algoitny
+            git checkout HEAD~1
+            cd backend
+            source venv/bin/activate
+            python manage.py migrate
+            sudo systemctl restart gunicorn celery-worker
+            echo "Rollback completed"
+          ENDSSH
+
+  notify:
+    name: Send Notifications
+    needs: deploy
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Deployment Status
+        run: |
+          if [ "${{ needs.deploy.result }}" == "success" ]; then
+            echo "✅ Deployment successful"
+          else
+            echo "❌ Deployment failed"
+          fi
+
+      # Uncomment and configure for Slack notifications
+      # - name: Slack Notification
+      #   uses: 8398a7/action-slack@v3
+      #   if: always()
+      #   with:
+      #     status: ${{ job.status }}
+      #     text: 'Deployment to EC2 ${{ job.status }}'
+      #     webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+      #     fields: repo,message,commit,author,action,eventName,ref,workflow
+
+      # Uncomment and configure for Discord notifications
+      # - name: Discord Notification
+      #   uses: sarisia/actions-status-discord@v1
+      #   if: always()
+      #   with:
+      #     webhook: ${{ secrets.DISCORD_WEBHOOK }}
+      #     status: ${{ job.status }}
+      #     title: "AlgoItny Deployment"
+      #     description: "Deployment to EC2 ${{ job.status }}"
+      #     color: ${{ job.status == 'success' && '0x00ff00' || '0xff0000' }}

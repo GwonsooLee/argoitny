@@ -1,0 +1,90 @@
+# AlgoItny Production Requirements
+# Python 3.11+
+
+# Django and Core
+django>=5.0.0,<6.0.0
+djangorestframework>=3.14.0
+django-cors-headers>=4.3.0
+
+# Database
+mysqlclient>=2.2.0
+# Alternative MySQL driver (if mysqlclient installation fails):
+# PyMySQL>=1.1.0
+
+# PostgreSQL support (optional, if switching from MySQL)
+# psycopg2-binary>=2.9.0
+
+# Authentication & Security
+djangorestframework-simplejwt>=5.3.0
+google-auth>=2.25.0
+google-auth-oauthlib>=1.2.0
+google-auth-httplib2>=0.2.0
+
+# Environment & Configuration
+python-dotenv>=1.0.0
+
+# WSGI Server
+gunicorn>=21.2.0
+gevent>=23.9.0  # For async worker support
+
+# Async Support (ASGI server - optional if using ASGI)
+uvicorn[standard]>=0.25.0
+uvloop>=0.19.0  # High-performance event loop
+
+# Task Queue
+celery>=5.3.0
+redis>=5.0.0
+kombu>=5.3.0
+django-celery-results>=2.5.0
+django-celery-beat>=2.5.0  # For periodic tasks
+flower>=2.0.0  # Celery monitoring
+
+# Caching
+django-redis>=5.4.0
+hiredis>=2.2.0  # C parser for Redis (performance boost)
+
+# API Integrations
+google-generativeai>=0.3.0
+requests>=2.31.0
+pycurl>=7.45.0
+
+# AWS Services
+boto3>=1.34.0
+django-storages>=1.14.0  # For S3 static files storage
+
+# Monitoring & Logging
+# sentry-sdk>=1.40.0  # Error tracking (uncomment if using Sentry)
+
+# Security
+django-ratelimit>=4.1.0  # Additional rate limiting
+whitenoise>=6.6.0  # Static file serving
+
+# Database Connection Pooling
+# django-db-geventpool>=4.0.0  # For gevent workers
+# sqlalchemy>=2.0.0  # Optional for connection pooling
+
+# Performance
+django-compressor>=4.4  # CSS/JS compression
+django-debug-toolbar>=4.2.0  # Only for staging, not production
+
+# Utilities
+pytz>=2024.1
+python-dateutil>=2.8.0
+
+# Testing (for CI/CD)
+pytest>=7.4.0
+pytest-django>=4.7.0
+pytest-cov>=4.1.0
+coverage>=7.3.0
+
+# Code Quality
+# black>=23.12.0  # Code formatter
+# flake8>=6.1.0  # Linting
+# isort>=5.13.0  # Import sorting
+
+# Production-specific packages
+# New Relic APM (uncomment if using New Relic)
+# newrelic>=9.5.0
+
+# Monitoring
+# django-prometheus>=2.3.0  # Prometheus metrics

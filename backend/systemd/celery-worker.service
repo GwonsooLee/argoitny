@@ -1,0 +1,44 @@
+[Unit]
+Description=Celery Worker for AlgoItny
+Documentation=https://docs.celeryproject.org/
+After=network.target redis.service mysql.service
+
+[Service]
+Type=forking
+User=algoitny
+Group=www-data
+WorkingDirectory=/home/algoitny/apps/algoitny/backend
+Environment="PATH=/home/algoitny/apps/algoitny/backend/venv/bin"
+EnvironmentFile=/home/algoitny/apps/algoitny/backend/.env
+
+# Celery worker execution
+ExecStart=/home/algoitny/apps/algoitny/backend/venv/bin/celery -A config worker \
+    --loglevel=info \
+    --concurrency=4 \
+    --max-tasks-per-child=1000 \
+    --time-limit=1800 \
+    --soft-time-limit=1500 \
+    --logfile=/var/log/celery/worker.log \
+    --pidfile=/var/run/celery/worker.pid \
+    --detach
+
+# Graceful reload
+ExecReload=/bin/kill -s HUP $MAINPID
+
+# Graceful shutdown
+ExecStop=/bin/kill -s TERM $MAINPID
+
+# Process management
+Restart=always
+RestartSec=10
+TimeoutStopSec=600
+
+# Security settings
+PrivateTmp=true
+NoNewPrivileges=true
+
+# Performance tuning
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

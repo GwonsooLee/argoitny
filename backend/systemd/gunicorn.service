@@ -1,0 +1,54 @@
+[Unit]
+Description=Gunicorn daemon for AlgoItny Django Application
+Documentation=https://docs.gunicorn.org/
+After=network.target mysql.service redis.service
+
+[Service]
+Type=notify
+User=algoitny
+Group=www-data
+WorkingDirectory=/home/algoitny/apps/algoitny/backend
+Environment="PATH=/home/algoitny/apps/algoitny/backend/venv/bin"
+EnvironmentFile=/home/algoitny/apps/algoitny/backend/.env
+
+# Gunicorn execution
+ExecStart=/home/algoitny/apps/algoitny/backend/venv/bin/gunicorn \
+    --workers 4 \
+    --worker-class sync \
+    --worker-connections 1000 \
+    --max-requests 1000 \
+    --max-requests-jitter 100 \
+    --timeout 30 \
+    --graceful-timeout 30 \
+    --keep-alive 5 \
+    --bind unix:/home/algoitny/apps/algoitny/backend/gunicorn.sock \
+    --access-logfile /var/log/gunicorn/access.log \
+    --error-logfile /var/log/gunicorn/error.log \
+    --log-level info \
+    --capture-output \
+    --enable-stdio-inheritance \
+    config.wsgi:application
+
+# Reload Gunicorn gracefully
+ExecReload=/bin/kill -s HUP $MAINPID
+
+# Process management
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=5
+Restart=always
+RestartSec=5
+
+# Security settings
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=false
+ReadWritePaths=/home/algoitny/apps/algoitny/backend
+ReadWritePaths=/var/log/gunicorn
+
+# Performance tuning
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

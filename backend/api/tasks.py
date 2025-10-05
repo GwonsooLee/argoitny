@@ -22,10 +22,10 @@ def generate_script_task(self, job_id):
         # Get the job
         job = ScriptGenerationJob.objects.get(id=job_id)
 
-        # Update status to PROCESSING
+        # Update status to PROCESSING (optimized: use update_fields)
         job.status = 'PROCESSING'
         job.celery_task_id = self.request.id
-        job.save()
+        job.save(update_fields=['status', 'celery_task_id'])
 
         # Prepare problem info for Gemini
         problem_info = {
@@ -42,10 +42,10 @@ def generate_script_task(self, job_id):
         gemini_service = GeminiService()
         generator_code = gemini_service.generate_test_case_generator_code(problem_info)
 
-        # Update job with result
+        # Update job with result (optimized: use update_fields)
         job.status = 'COMPLETED'
         job.generator_code = generator_code
-        job.save()
+        job.save(update_fields=['status', 'generator_code'])
 
         # Execute generator code to create test cases and save to Problem
         try:
@@ -59,29 +59,21 @@ def generate_script_task(self, job_id):
                 num_cases=20
             )
 
-            # Get or create the problem
-            problem, created = Problem.objects.get_or_create(
+            # Get or create the problem (optimized: use update_or_create for atomic operation)
+            problem_defaults = {
+                'title': job.title,
+                'problem_url': job.problem_url or '',
+                'tags': job.tags or [],
+                'solution_code': job.solution_code or '',
+                'language': job.language,
+                'constraints': job.constraints
+            }
+
+            problem, created = Problem.objects.update_or_create(
                 platform=job.platform,
                 problem_id=job.problem_id,
-                defaults={
-                    'title': job.title,
-                    'problem_url': job.problem_url or '',
-                    'tags': job.tags or [],
-                    'solution_code': job.solution_code or '',
-                    'language': job.language,
-                    'constraints': job.constraints
-                }
+                defaults=problem_defaults
             )
-
-            # If problem exists, update it
-            if not created:
-                problem.title = job.title
-                problem.problem_url = job.problem_url or ''
-                problem.tags = job.tags or []
-                problem.solution_code = job.solution_code or ''
-                problem.language = job.language
-                problem.constraints = job.constraints
-                problem.save()
 
             # Delete existing test cases for this problem first
             with transaction.atomic():
@@ -170,8 +162,10 @@ def generate_outputs_task(self, platform, problem_id):
         dict: Result with status and count
     """
     try:
-        # Get the problem with test cases
-        problem = Problem.objects.prefetch_related('test_cases').get(
+        # Get the problem with test cases (optimized: only fetch needed fields)
+        problem = Problem.objects.only(
+            'id', 'solution_code', 'language'
+        ).prefetch_related('test_cases').get(
             platform=platform,
             problem_id=problem_id
         )
@@ -202,12 +196,17 @@ def generate_outputs_task(self, platform, problem_id):
             test_inputs=test_inputs
         )
 
-        # Update test cases with outputs
+        # Update test cases with outputs (optimized: use bulk_update instead of individual saves)
         with transaction.atomic():
+            test_cases_to_update = []
             for tc, result in zip(test_cases, test_results):
                 if result['status'] == 'success':
                     tc.output = result['output']
-                    tc.save()
+                    test_cases_to_update.append(tc)
+
+            # Bulk update all test cases at once (single query)
+            if test_cases_to_update:
+                TestCase.objects.bulk_update(test_cases_to_update, ['output'])
 
         success_count = len([r for r in test_results if r['status'] == 'success'])
 
@@ -251,8 +250,12 @@ def execute_code_task(self, code, language, problem_id, user_id, user_identifier
         dict: Execution results
     """
     try:
-        # Get problem with test cases
-        problem = Problem.objects.prefetch_related('test_cases').get(id=problem_id)
+        # Get problem with test cases (optimized: only fetch needed fields)
+        problem = Problem.objects.only(
+            'id', 'platform', 'problem_id', 'title', 'metadata'
+        ).prefetch_related(
+            'test_cases'
+        ).get(id=problem_id)
 
         if not problem.test_cases.exists():
             return {
@@ -260,7 +263,7 @@ def execute_code_task(self, code, language, problem_id, user_id, user_identifier
                 'error': 'No test cases available for this problem'
             }
 
-        # Get test cases
+        # Get test cases (already prefetched)
         test_cases = problem.test_cases.all()
         test_inputs = [tc.input for tc in test_cases]
 
@@ -310,7 +313,8 @@ def execute_code_task(self, code, language, problem_id, user_id, user_identifier
         try:
             user = None
             if user_id:
-                user = User.objects.filter(id=user_id).first()
+                # Use only() to fetch minimal user data
+                user = User.objects.only('id').filter(id=user_id).first()
 
             SearchHistory.objects.create(
                 user=user,
@@ -329,11 +333,11 @@ def execute_code_task(self, code, language, problem_id, user_id, user_identifier
                 test_results=history_results
             )
 
-            # Update problem execution count in metadata
+            # Update problem execution count in metadata (optimized with update_fields)
             if not problem.metadata:
                 problem.metadata = {}
             problem.metadata['execution_count'] = problem.metadata.get('execution_count', 0) + 1
-            problem.save()
+            problem.save(update_fields=['metadata'])
         except Exception as e:
             print(f"Failed to save search history: {str(e)}")
 

@@ -46,45 +46,44 @@ class SearchHistoryListView(APIView):
                 "has_more": true
             }
         """
-        import sys
-        print(f"[HISTORY] Request from user: {request.user}, authenticated: {request.user.is_authenticated}", file=sys.stderr)
-
         try:
             # Get pagination params
             offset = int(request.query_params.get('offset', 0))
             limit = min(int(request.query_params.get('limit', 20)), 100)
             my_only = request.query_params.get('my_only', 'false').lower() == 'true'
 
-            # Build queryset
-            queryset = SearchHistory.objects.select_related('user').order_by('-created_at')
+            # Build queryset with optimized select_related
+            # Only fetch user email field to minimize data transfer
+            queryset = SearchHistory.objects.select_related('user').only(
+                'id', 'user_id', 'user__email', 'user_identifier',
+                'platform', 'problem_number', 'problem_title', 'language',
+                'passed_count', 'failed_count', 'total_count',
+                'is_code_public', 'created_at', 'code'
+            )
 
             # Filter by user if my_only is true
             if my_only:
                 if request.user.is_authenticated:
                     # Show only current user's history (both public and private)
+                    # This query uses sh_user_created_idx composite index
                     queryset = queryset.filter(user=request.user)
-                    import sys
-                    print(f"[DEBUG] my_only=True, user={request.user.id}, count={queryset.count()}", file=sys.stderr)
                 else:
                     # Return empty result if not authenticated
                     queryset = queryset.none()
             else:
                 # Show user's own history (all) + public history from others
                 if request.user.is_authenticated:
-                    import sys
-                    print(f"[DEBUG] my_only=False, user={request.user.id}, authenticated=True", file=sys.stderr)
                     # My history (all) OR public history (including others')
+                    # Uses sh_user_created_idx and sh_public_created_idx indexes
                     queryset = queryset.filter(
                         Q(user=request.user) | Q(is_code_public=True)
                     )
-                    print(f"[DEBUG] After filter, count={queryset.count()}", file=sys.stderr)
                 else:
                     # Anonymous users see only public history
-                    import sys
+                    # This query uses sh_public_created_idx composite index
                     queryset = queryset.filter(is_code_public=True)
-                    print(f"[DEBUG] my_only=False, anonymous, count={queryset.count()}", file=sys.stderr)
 
-            # Get total count
+            # Get total count efficiently
             total_count = queryset.count()
 
             # Get paginated results
@@ -147,6 +146,7 @@ class SearchHistoryDetailView(APIView):
         try:
             from ..models import TestCase
 
+            # Optimize: Use select_related to join user in a single query
             history = SearchHistory.objects.select_related('user').get(id=history_id)
             serializer = SearchHistorySerializer(history)
             data = serializer.data
@@ -154,14 +154,17 @@ class SearchHistoryDetailView(APIView):
             # Enrich test_results with input and expected output from TestCase
             if data.get('test_results'):
                 test_case_ids = [tr['test_case_id'] for tr in data['test_results'] if 'test_case_id' in tr]
-                test_cases = {tc.id: tc for tc in TestCase.objects.filter(id__in=test_case_ids)}
 
-                for result in data['test_results']:
-                    tc_id = result.get('test_case_id')
-                    if tc_id and tc_id in test_cases:
-                        tc = test_cases[tc_id]
-                        result['input'] = tc.input
-                        result['expected'] = tc.output
+                # Optimize: Use only() to fetch only needed fields, use in_bulk for efficient lookup
+                if test_case_ids:
+                    test_cases = TestCase.objects.filter(id__in=test_case_ids).only('id', 'input', 'output').in_bulk()
+
+                    for result in data['test_results']:
+                        tc_id = result.get('test_case_id')
+                        if tc_id and tc_id in test_cases:
+                            tc = test_cases[tc_id]
+                            result['input'] = tc.input
+                            result['expected'] = tc.output
 
             return Response(data, status=status.HTTP_200_OK)
 

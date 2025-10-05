@@ -5,7 +5,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from django.db import transaction
-from ..models import Problem, SearchHistory
+from ..models import Problem, SearchHistory, TestCase
 from ..services.code_executor import CodeExecutor
 from ..serializers import ExecuteCodeSerializer
 
@@ -48,10 +48,12 @@ class ExecuteCodeView(APIView):
         is_code_public = serializer.validated_data.get('is_code_public', False)
 
         try:
-            # Verify problem exists
-            problem = Problem.objects.prefetch_related('test_cases').get(id=problem_id)
+            # Verify problem exists (optimized: check test case count without fetching all test cases)
+            # The task will fetch test cases with prefetch_related, so we don't need it here
+            problem = Problem.objects.only('id').get(id=problem_id)
 
-            if not problem.test_cases.exists():
+            # Check if problem has test cases using exists() for efficiency
+            if not TestCase.objects.filter(problem=problem).exists():
                 return Response(
                     {'error': 'No test cases found for this problem'},
                     status=status.HTTP_400_BAD_REQUEST

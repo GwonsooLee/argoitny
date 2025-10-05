@@ -24,8 +24,14 @@ from .views import (
     JobDetailView,
 )
 from .views.account import AccountStatsView
+from .views.health import health_check, readiness_check, liveness_check
 
 urlpatterns = [
+    # Health Checks
+    path('health/', health_check, name='health-check'),
+    path('health/ready/', readiness_check, name='readiness-check'),
+    path('health/live/', liveness_check, name='liveness-check'),
+
     # Authentication
     path('auth/google/', GoogleLoginView.as_view(), name='google-login'),
     path('auth/refresh/', TokenRefreshView.as_view(), name='token-refresh'),

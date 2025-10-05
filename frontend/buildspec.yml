@@ -1,0 +1,86 @@
+version: 0.2
+
+# AWS CodeBuild Buildspec for React + Vite Application
+# 이 파일은 AWS CodeBuild를 사용하여 자동 빌드 및 배포를 설정할 때 사용됩니다.
+#
+# 사용 방법:
+# 1. AWS CodeBuild 프로젝트 생성
+# 2. Source: GitHub 연결
+# 3. Buildspec: 이 파일 (buildspec.yml) 사용
+# 4. Artifacts: S3 버킷 지정
+# 5. Environment variables 설정:
+#    - VITE_API_URL
+#    - S3_BUCKET_NAME
+#    - CLOUDFRONT_DISTRIBUTION_ID
+
+env:
+  variables:
+    NODE_VERSION: "18"
+    VITE_API_URL: "https://api.testcase.run/api"
+    VITE_ENV: "production"
+  parameter-store:
+    # AWS Systems Manager Parameter Store에서 민감한 정보 가져오기 (선택사항)
+    # S3_BUCKET_NAME: /codebuild/s3-bucket-name
+    # CLOUDFRONT_DISTRIBUTION_ID: /codebuild/cloudfront-dist-id
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 18
+    commands:
+      - echo "Installing dependencies..."
+      - npm install -g npm@latest
+      - node --version
+      - npm --version
+
+  pre_build:
+    commands:
+      - echo "Pre-build phase started on `date`"
+      - echo "Installing application dependencies..."
+      - npm ci
+      - echo "Checking environment variables..."
+      - echo "VITE_API_URL = $VITE_API_URL"
+      - echo "VITE_ENV = $VITE_ENV"
+
+  build:
+    commands:
+      - echo "Build phase started on `date`"
+      - echo "Running production build..."
+      - npm run build
+      - echo "Build completed successfully"
+      - ls -la dist/
+
+  post_build:
+    commands:
+      - echo "Post-build phase started on `date`"
+      - echo "Build completed on `date`"
+      # S3 업로드 및 CloudFront 무효화는 CodePipeline에서 처리하거나
+      # 아래 명령어 주석 해제하여 여기서 직접 처리 가능
+      # - |
+      #   if [ -n "$S3_BUCKET_NAME" ]; then
+      #     echo "Uploading to S3..."
+      #     aws s3 sync dist/ s3://$S3_BUCKET_NAME \
+      #       --delete \
+      #       --cache-control "public, max-age=31536000" \
+      #       --exclude "index.html"
+      #     aws s3 cp dist/index.html s3://$S3_BUCKET_NAME/index.html \
+      #       --cache-control "public, max-age=0, must-revalidate"
+      #   fi
+      # - |
+      #   if [ -n "$CLOUDFRONT_DISTRIBUTION_ID" ]; then
+      #     echo "Invalidating CloudFront cache..."
+      #     aws cloudfront create-invalidation \
+      #       --distribution-id $CLOUDFRONT_DISTRIBUTION_ID \
+      #       --paths "/*"
+      #   fi
+
+artifacts:
+  files:
+    - '**/*'
+  base-directory: dist
+  name: build-output-$(date +%Y%m%d-%H%M%S)
+  discard-paths: no
+
+cache:
+  paths:
+    - 'node_modules/**/*'

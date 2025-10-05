@@ -33,7 +33,10 @@ class ProblemListView(APIView):
             ]
         """
         # Exclude drafts (problems with no test cases)
-        queryset = Problem.objects.annotate(
+        # Optimized: use only() to fetch minimal fields for list view
+        queryset = Problem.objects.only(
+            'id', 'platform', 'problem_id', 'title', 'created_at', 'tags', 'language'
+        ).annotate(
             test_case_count=Count('test_cases')
         ).filter(test_case_count__gt=0)
 
@@ -131,7 +134,10 @@ class ProblemDraftsView(APIView):
                 ]
             }
         """
-        queryset = Problem.objects.annotate(
+        # Optimized: use only() to fetch minimal fields
+        queryset = Problem.objects.only(
+            'id', 'platform', 'problem_id', 'title', 'created_at', 'tags', 'language'
+        ).annotate(
             test_case_count=Count('test_cases')
         ).filter(test_case_count=0).order_by('-created_at')
 
@@ -164,7 +170,10 @@ class ProblemRegisteredView(APIView):
                 ]
             }
         """
-        queryset = Problem.objects.annotate(
+        # Optimized: use only() to fetch minimal fields
+        queryset = Problem.objects.only(
+            'id', 'platform', 'problem_id', 'title', 'created_at', 'tags', 'language'
+        ).annotate(
             test_case_count=Count('test_cases')
         ).filter(test_case_count__gt=0).order_by('-created_at')
 

@@ -84,7 +84,12 @@ class SearchHistoryListSerializer(serializers.ModelSerializer):
         is_owner = False
 
         if request and request.user and request.user.is_authenticated:
-            is_owner = instance.user == request.user
+            # Check by user object
+            if instance.user:
+                is_owner = instance.user == request.user
+            # Also check by email in user_identifier
+            elif instance.user_identifier:
+                is_owner = instance.user_identifier == request.user.email
 
         # Hide code if not public and not owner
         if not instance.is_code_public and not is_owner:

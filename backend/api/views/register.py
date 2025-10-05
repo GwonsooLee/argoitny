@@ -70,9 +70,9 @@ class GenerateTestCasesView(APIView):
             # Enqueue the job to Celery
             task = generate_script_task.delay(job.id)
 
-            # Update job with task ID
+            # Update job with task ID (optimized: use update_fields)
             job.celery_task_id = task.id
-            job.save()
+            job.save(update_fields=['celery_task_id'])
 
             return Response({
                 'job_id': job.id,
@@ -145,8 +145,8 @@ class RegisterProblemView(APIView):
         language = serializer.validated_data['language']
 
         try:
-            # Check if problem already exists
-            if Problem.objects.filter(platform=platform, problem_id=problem_id).exists():
+            # Check if problem already exists (optimized: use only() to fetch minimal data)
+            if Problem.objects.filter(platform=platform, problem_id=problem_id).only('id').exists():
                 return Response(
                     {'error': 'Problem already exists'},
                     status=status.HTTP_400_BAD_REQUEST
@@ -513,8 +513,8 @@ class SaveTestCaseInputsView(APIView):
             )
 
         try:
-            # Get the problem
-            problem = Problem.objects.get(platform=platform, problem_id=problem_id)
+            # Get the problem (optimized: only fetch id for filter)
+            problem = Problem.objects.only('id').get(platform=platform, problem_id=problem_id)
 
             # Delete existing test cases
             with transaction.atomic():
@@ -697,9 +697,9 @@ class ToggleCompletionView(APIView):
             )
 
         try:
-            problem = Problem.objects.get(platform=platform, problem_id=problem_id)
+            problem = Problem.objects.only('id', 'is_completed').get(platform=platform, problem_id=problem_id)
             problem.is_completed = is_completed
-            problem.save()
+            problem.save(update_fields=['is_completed'])
 
             message = 'Problem marked as completed' if is_completed else 'Problem marked as draft'
             return Response({
@@ -781,21 +781,12 @@ class SaveProblemView(APIView):
             platform = serializer.validated_data['platform']
             problem_id = serializer.validated_data['problem_id']
 
-            # Check if problem already exists
-            existing_problem = Problem.objects.filter(
+            # Use update_or_create for atomic operation (optimized)
+            problem, created = Problem.objects.update_or_create(
                 platform=platform,
-                problem_id=problem_id
-            ).first()
-
-            if existing_problem:
-                # Update existing problem
-                for key, value in serializer.validated_data.items():
-                    setattr(existing_problem, key, value)
-                existing_problem.save()
-                problem = existing_problem
-            else:
-                # Create new problem
-                problem = Problem.objects.create(**serializer.validated_data)
+                problem_id=problem_id,
+                defaults=serializer.validated_data
+            )
 
         # Serialize response
         response_serializer = ProblemSaveSerializer(problem)

@@ -100,6 +100,10 @@ function SearchHistory({ onRequestLogin }) {
 
   const handleCodeClick = (item) => {
     if (item.is_code_public || isMyExecution(item)) {
+      if (!item.code) {
+        showSnackbar('Code not available', 'warning');
+        return;
+      }
       setSelectedCode({
         code: item.code,
         language: item.language,
@@ -107,6 +111,8 @@ function SearchHistory({ onRequestLogin }) {
         platform: item.platform,
         problemNumber: item.problem_number
       });
+    } else {
+      showSnackbar('Code is private', 'warning');
     }
   };
 
