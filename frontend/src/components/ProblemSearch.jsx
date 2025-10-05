@@ -69,8 +69,7 @@ function ProblemSearch({ onSelectProblem }) {
       flexDirection: 'column',
       alignItems: 'center',
       minHeight: '70vh',
-      pt: hasSearched ? 8 : 20,
-      transition: 'padding-top 0.3s ease'
+      pt: 12
     }}>
       {/* Search Box */}
       <Box sx={{ width: '100%', maxWidth: 700, px: 2 }}>
@@ -83,12 +82,13 @@ function ProblemSearch({ onSelectProblem }) {
             onKeyPress={handleKeyPress}
             sx={{
               '& .MuiOutlinedInput-root': {
+                backgroundColor: 'white',
                 borderRadius: 3,
                 '&:hover': {
-                  boxShadow: 1
+                  boxShadow: '0 1px 6px rgba(32, 33, 36, 0.28)'
                 },
                 '&.Mui-focused': {
-                  boxShadow: 2
+                  boxShadow: '0 1px 6px rgba(32, 33, 36, 0.28)'
                 }
               }
             }}
@@ -118,43 +118,63 @@ function ProblemSearch({ onSelectProblem }) {
 
       {/* Search Results */}
       {hasSearched && (
-        <Box sx={{ width: '100%', maxWidth: 600, mt: 4, px: 2 }}>
+        <Box sx={{ width: '100%', maxWidth: 700, mt: 3, px: 2 }}>
           {loading ? (
             <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
               <CircularProgress />
             </Box>
           ) : problems.length > 0 ? (
-            <List sx={{ bgcolor: 'background.paper', borderRadius: 1, boxShadow: 1 }}>
+            <Box>
               {problems.map((problem, index) => (
-                <ListItem
+                <Box
                   key={`${problem.platform}-${problem.problem_id}-${index}`}
-                  disablePadding
-                  divider={index < problems.length - 1}
+                  onClick={() => onSelectProblem(problem)}
+                  sx={{
+                    p: 2,
+                    mb: 2,
+                    backgroundColor: 'white',
+                    borderRadius: 1,
+                    cursor: 'pointer',
+                    transition: 'all 0.2s',
+                    '&:hover': {
+                      backgroundColor: '#f8f9fa'
+                    }
+                  }}
                 >
-                  <ListItemButton
-                    onClick={() => onSelectProblem(problem)}
-                    sx={{ py: 2 }}
-                  >
-                    <ListItemText
-                      primary={
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <Typography variant="body1" sx={{ fontWeight: 500 }}>
-                            {problem.title}
-                          </Typography>
-                          <Chip
-                            label={problem.platform === 'baekjoon' ? 'Baekjoon' : 'Codeforces'}
-                            size="small"
-                            color="primary"
-                            variant="outlined"
-                          />
-                        </Box>
-                      }
-                      secondary={`Problem ID: ${problem.problem_id}`}
-                    />
-                  </ListItemButton>
-                </ListItem>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+                    <Typography
+                      variant="h6"
+                      sx={{
+                        color: '#1a0dab',
+                        fontSize: '1.25rem',
+                        fontWeight: 400,
+                        '&:hover': {
+                          textDecoration: 'underline'
+                        }
+                      }}
+                    >
+                      {problem.title}
+                    </Typography>
+                  </Box>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+                    <Typography variant="body2" sx={{ color: '#202124', fontSize: '0.875rem' }}>
+                      {problem.platform === 'baekjoon' ? 'Baekjoon' : 'Codeforces'}
+                    </Typography>
+                    <Typography variant="body2" sx={{ color: '#70757a' }}>
+                      •
+                    </Typography>
+                    <Typography variant="body2" sx={{ color: '#70757a', fontSize: '0.875rem' }}>
+                      Problem ID: {problem.problem_id}
+                    </Typography>
+                  </Box>
+                  {problem.problem_url && (
+                    <Typography variant="body2" sx={{ color: '#006621', fontSize: '0.875rem' }}>
+                      {problem.problem_url}
+                    </Typography>
+                  )}
+                </Box>
               ))}
-            </List>
+            </Box>
           ) : (
             <Box sx={{ textAlign: 'center', py: 4 }}>
               <Typography variant="body1" color="text.secondary">

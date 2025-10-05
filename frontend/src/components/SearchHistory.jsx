@@ -1,32 +1,73 @@
 import { useState, useEffect } from 'react';
+import {
+  Box,
+  Typography,
+  Paper,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Button,
+  Chip,
+  CircularProgress,
+  FormControlLabel,
+  Switch,
+  IconButton,
+  Snackbar,
+  Alert,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions
+} from '@mui/material';
+import { Visibility as VisibilityIcon, NavigateBefore, NavigateNext, Download as DownloadIcon } from '@mui/icons-material';
 import { apiGet } from '../utils/api-client';
 import { API_ENDPOINTS } from '../config/api';
+import { getUser } from '../utils/auth';
 import CodeModal from './CodeModal';
-import './SearchHistory.css';
 
 const ITEMS_PER_PAGE = 20;
 
-function SearchHistory() {
+function SearchHistory({ onRequestLogin }) {
   const [history, setHistory] = useState([]);
   const [offset, setOffset] = useState(0);
   const [totalItems, setTotalItems] = useState(0);
   const [loading, setLoading] = useState(false);
   const [selectedCode, setSelectedCode] = useState(null);
+  const [selectedExecution, setSelectedExecution] = useState(null);
   const [hasMore, setHasMore] = useState(true);
+  const [myOnly, setMyOnly] = useState(true); // Default to my history only
+  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
 
   useEffect(() => {
+    // Check if user is authenticated
+    const user = getUser();
+    if (!user) {
+      if (onRequestLogin) {
+        onRequestLogin();
+      }
+      return;
+    }
     fetchHistory(0);
-  }, []);
+  }, [myOnly]);
+
+  const showSnackbar = (message, severity = 'info') => {
+    setSnackbar({ open: true, message, severity });
+  };
 
   const fetchHistory = async (currentOffset) => {
     setLoading(true);
     try {
+      const user = getUser();
       const params = new URLSearchParams({
         offset: currentOffset,
         limit: ITEMS_PER_PAGE,
+        my_only: myOnly.toString()
       });
 
-      const response = await apiGet(`${API_ENDPOINTS.history}?${params.toString()}`);
+      const response = await apiGet(`${API_ENDPOINTS.history}?${params.toString()}`, { requireAuth: true });
 
       if (!response.ok) {
         throw new Error('Failed to fetch history');
@@ -39,6 +80,7 @@ function SearchHistory() {
       setOffset(currentOffset);
     } catch (error) {
       console.error('Error fetching history:', error);
+      showSnackbar('Failed to fetch history', 'error');
     } finally {
       setLoading(false);
     }
@@ -57,7 +99,7 @@ function SearchHistory() {
   };
 
   const handleCodeClick = (item) => {
-    if (item.is_code_public) {
+    if (item.is_code_public || isMyExecution(item)) {
       setSelectedCode({
         code: item.code,
         language: item.language,
@@ -66,6 +108,26 @@ function SearchHistory() {
         problemNumber: item.problem_number
       });
     }
+  };
+
+  const handleExecutionClick = async (item) => {
+    // Fetch full execution details
+    try {
+      const response = await apiGet(`/history/${item.id}/`, { requireAuth: true });
+      if (!response.ok) {
+        throw new Error('Failed to fetch execution details');
+      }
+      const data = await response.json();
+      setSelectedExecution(data);
+    } catch (error) {
+      console.error('Error fetching execution details:', error);
+      showSnackbar('Failed to fetch execution details', 'error');
+    }
+  };
+
+  const isMyExecution = (item) => {
+    const user = getUser();
+    return user && item.user_email === user.email;
   };
 
   const formatDate = (dateString) => {
@@ -79,115 +141,164 @@ function SearchHistory() {
     });
   };
 
-  const getResultStatus = (item) => {
+  const getResultColor = (item) => {
     if (item.passed_count === item.total_count) {
       return 'success';
     } else if (item.passed_count === 0) {
-      return 'fail';
+      return 'error';
     } else {
-      return 'partial';
+      return 'warning';
     }
   };
 
   return (
-    <div className="search-history">
-      <h2>Recent Test Case Validation History</h2>
+    <Box sx={{ p: 3 }}>
+      <Paper sx={{ p: 3 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+          <Typography variant="h5" sx={{ color: 'text.primary', fontWeight: 600 }}>
+            Test Case Validation History
+          </Typography>
+          <FormControlLabel
+            control={
+              <Switch
+                checked={myOnly}
+                onChange={(e) => {
+                  setMyOnly(e.target.checked);
+                  setOffset(0);
+                }}
+              />
+            }
+            label="My History Only"
+          />
+        </Box>
 
-      {loading && history.length === 0 ? (
-        <div className="loading">Loading...</div>
-      ) : (
-        <>
-          <div className="history-table-container">
-            <table className="history-table">
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Platform</th>
-                  <th>Problem #</th>
-                  <th>Problem Title</th>
-                  <th>Language</th>
-                  <th>User</th>
-                  <th>Result</th>
-                  <th>Code</th>
-                </tr>
-              </thead>
-              <tbody>
-                {history.length === 0 ? (
-                  <tr>
-                    <td colSpan="8" className="no-data">
-                      No search history available
-                    </td>
-                  </tr>
-                ) : (
-                  history.map((item) => (
-                    <tr key={item.id}>
-                      <td className="date-cell">{formatDate(item.created_at)}</td>
-                      <td className="platform-cell">
-                        <span className={`platform-badge ${item.platform}`}>
-                          {item.platform === 'baekjoon' ? 'Baekjoon' : 'Codeforces'}
-                        </span>
-                      </td>
-                      <td className="problem-number-cell">{item.problem_number}</td>
-                      <td className="problem-title-cell">{item.problem_title}</td>
-                      <td className="language-cell">
-                        <span className="language-badge">{item.language}</span>
-                      </td>
-                      <td className="user-cell">{item.user_identifier || item.user_email || 'Anonymous'}</td>
-                      <td className={`result-cell ${getResultStatus(item)}`}>
-                        <div className="result-info">
-                          <span className="passed">{item.passed_count}</span>
-                          <span className="separator">/</span>
-                          <span className="total">{item.total_count}</span>
-                        </div>
-                      </td>
-                      <td className="code-cell">
-                        {item.is_code_public ? (
-                          <button
-                            className="view-code-btn"
-                            onClick={() => handleCodeClick(item)}
+        {loading && history.length === 0 ? (
+          <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', py: 8 }}>
+            <CircularProgress />
+          </Box>
+        ) : (
+          <>
+            <TableContainer>
+              <Table>
+                <TableHead>
+                  <TableRow>
+                    <TableCell sx={{ fontWeight: 600 }}>Time</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>Platform</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>Problem #</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>Problem Title</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>Language</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>User</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>Result</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>Code</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>Details</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {history.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={9} align="center" sx={{ py: 8 }}>
+                        <Typography variant="body1" color="text.secondary">
+                          No search history available
+                        </Typography>
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    history.map((item) => (
+                      <TableRow
+                        key={item.id}
+                        sx={{
+                          '&:hover': { backgroundColor: 'action.hover' },
+                          cursor: 'pointer'
+                        }}
+                        onClick={() => handleExecutionClick(item)}
+                      >
+                        <TableCell>
+                          <Typography variant="body2" sx={{ fontSize: '0.875rem' }}>
+                            {formatDate(item.created_at)}
+                          </Typography>
+                        </TableCell>
+                        <TableCell>
+                          <Chip
+                            label={item.platform === 'baekjoon' ? 'Baekjoon' : 'Codeforces'}
+                            size="small"
+                            color="primary"
+                            variant="outlined"
+                          />
+                        </TableCell>
+                        <TableCell>{item.problem_number}</TableCell>
+                        <TableCell>{item.problem_title}</TableCell>
+                        <TableCell>
+                          <Chip label={item.language} size="small" />
+                        </TableCell>
+                        <TableCell>
+                          {item.user_email || item.user_identifier || 'Anonymous'}
+                        </TableCell>
+                        <TableCell>
+                          <Chip
+                            label={`${item.passed_count}/${item.total_count}`}
+                            size="small"
+                            color={getResultColor(item)}
+                          />
+                        </TableCell>
+                        <TableCell onClick={(e) => e.stopPropagation()}>
+                          {item.is_code_public || isMyExecution(item) ? (
+                            <IconButton
+                              size="small"
+                              onClick={() => handleCodeClick(item)}
+                              color="primary"
+                            >
+                              <VisibilityIcon fontSize="small" />
+                            </IconButton>
+                          ) : (
+                            <Typography variant="caption" color="text.secondary">
+                              Private
+                            </Typography>
+                          )}
+                        </TableCell>
+                        <TableCell onClick={(e) => e.stopPropagation()}>
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            onClick={() => handleExecutionClick(item)}
                           >
                             View
-                          </button>
-                        ) : (
-                          <span className="private-code">Private</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </TableContainer>
 
-          {history.length > 0 && (
-            <div className="pagination">
-              <button
-                onClick={handlePrevPage}
-                disabled={offset === 0 || loading}
-                className="pagination-btn"
-              >
-                ← Previous
-              </button>
+            {history.length > 0 && (
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 3 }}>
+                <Button
+                  onClick={handlePrevPage}
+                  disabled={offset === 0 || loading}
+                  startIcon={<NavigateBefore />}
+                  variant="outlined"
+                >
+                  Previous
+                </Button>
 
-              <div className="page-info">
-                <span className="current-range">
-                  {offset + 1} - {Math.min(offset + ITEMS_PER_PAGE, totalItems)}
-                </span>
-                <span className="page-separator">/</span>
-                <span className="total-items">{totalItems}</span>
-              </div>
+                <Typography variant="body2" color="text.secondary">
+                  {offset + 1} - {Math.min(offset + ITEMS_PER_PAGE, totalItems)} of {totalItems}
+                </Typography>
 
-              <button
-                onClick={handleNextPage}
-                disabled={!hasMore || loading}
-                className="pagination-btn"
-              >
-                Next →
-              </button>
-            </div>
-          )}
-        </>
-      )}
+                <Button
+                  onClick={handleNextPage}
+                  disabled={!hasMore || loading}
+                  endIcon={<NavigateNext />}
+                  variant="outlined"
+                >
+                  Next
+                </Button>
+              </Box>
+            )}
+          </>
+        )}
+      </Paper>
 
       {selectedCode && (
         <CodeModal
@@ -195,7 +306,317 @@ function SearchHistory() {
           onClose={() => setSelectedCode(null)}
         />
       )}
-    </div>
+
+      {selectedExecution && (
+        <ExecutionDetailModal
+          execution={selectedExecution}
+          onClose={() => setSelectedExecution(null)}
+        />
+      )}
+
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={4000}
+        onClose={() => setSnackbar({ ...snackbar, open: false })}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert
+          onClose={() => setSnackbar({ ...snackbar, open: false })}
+          severity={snackbar.severity}
+          sx={{ width: '100%' }}
+        >
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
+    </Box>
+  );
+}
+
+// Execution Detail Modal Component
+function ExecutionDetailModal({ execution, onClose }) {
+  const [selectedTestCase, setSelectedTestCase] = useState(null);
+
+  const truncateText = (text, maxLines = 30) => {
+    if (!text) return { text: '', isTruncated: false };
+    const lines = text.split('\n');
+    if (lines.length <= maxLines) {
+      return { text, isTruncated: false };
+    }
+    return {
+      text: lines.slice(0, maxLines).join('\n') + '\n...',
+      isTruncated: true
+    };
+  };
+
+  const downloadText = (text, filename) => {
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <>
+      <Box
+        sx={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1300,
+          p: 2
+        }}
+        onClick={onClose}
+      >
+        <Paper
+          sx={{
+            maxWidth: '90vw',
+            maxHeight: '90vh',
+            overflow: 'auto',
+            p: 4,
+            width: '100%'
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+            <Typography variant="h5" sx={{ fontWeight: 600 }}>
+              Execution Details
+            </Typography>
+            <Button onClick={onClose} variant="outlined">
+              Close
+            </Button>
+          </Box>
+
+          <Box sx={{ mb: 3 }}>
+            <Typography variant="body1" sx={{ mb: 1 }}>
+              <strong>Problem:</strong> {execution.platform} #{execution.problem_number} - {execution.problem_title}
+            </Typography>
+            <Typography variant="body1" sx={{ mb: 1 }}>
+              <strong>Language:</strong> {execution.language}
+            </Typography>
+            <Typography variant="body1" sx={{ mb: 1 }}>
+              <strong>User:</strong> {execution.user_email || execution.user_identifier}
+            </Typography>
+            <Typography variant="body1" sx={{ mb: 1 }}>
+              <strong>Time:</strong> {new Date(execution.created_at).toLocaleString('ko-KR')}
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 1, mt: 2 }}>
+              <Chip
+                label={`Passed: ${execution.passed_count}`}
+                color="success"
+                size="small"
+              />
+              <Chip
+                label={`Failed: ${execution.failed_count}`}
+                color="error"
+                size="small"
+              />
+              <Chip
+                label={`Total: ${execution.total_count}`}
+                size="small"
+              />
+            </Box>
+          </Box>
+
+          <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
+            Test Case Results
+          </Typography>
+
+          {execution.test_results && execution.test_results.length > 0 ? (
+            <TableContainer>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell sx={{ fontWeight: 600 }}>Test #</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>Status</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>Error</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {execution.test_results.map((result, index) => (
+                    <TableRow
+                      key={index}
+                      sx={{
+                        backgroundColor: result.passed
+                          ? 'rgba(76, 175, 80, 0.08)'
+                          : 'rgba(244, 67, 54, 0.08)'
+                      }}
+                    >
+                      <TableCell>
+                        <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                          #{index + 1}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Chip
+                          label={result.passed ? 'PASS' : 'FAIL'}
+                          color={result.passed ? 'success' : 'error'}
+                          size="small"
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Typography
+                          variant="body2"
+                          sx={{
+                            fontFamily: 'monospace',
+                            color: 'error.main',
+                            fontSize: '0.8rem'
+                          }}
+                        >
+                          {result.error ? (result.error.length > 50 ? result.error.substring(0, 50) + '...' : result.error) : '-'}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={() => setSelectedTestCase({ ...result, index })}
+                        >
+                          View I/O
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          ) : (
+            <Typography variant="body2" color="text.secondary">
+              No test case results available
+            </Typography>
+          )}
+        </Paper>
+      </Box>
+
+      {/* Test Case I/O Dialog */}
+      {selectedTestCase && (
+        <Dialog
+          open={true}
+          onClose={() => setSelectedTestCase(null)}
+          maxWidth="lg"
+          fullWidth
+        >
+          <DialogTitle>
+            Test Case #{selectedTestCase.index + 1} - {selectedTestCase.passed ? 'PASSED' : 'FAILED'}
+          </DialogTitle>
+          <DialogContent>
+            <Box sx={{ display: 'flex', gap: 2, mt: 2 }}>
+              {/* Input */}
+              <Box sx={{ flex: '1 1 33.33%', minWidth: 0 }}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                    Input
+                  </Typography>
+                  <IconButton
+                    size="small"
+                    onClick={() => downloadText(selectedTestCase.input, `test_${selectedTestCase.index + 1}_input.txt`)}
+                    title="Download Input"
+                  >
+                    <DownloadIcon fontSize="small" />
+                  </IconButton>
+                </Box>
+                <Paper elevation={0} sx={{ p: 1.5, backgroundColor: '#f5f5f5', border: '1px solid', borderColor: 'divider' }}>
+                  <pre style={{ margin: 0, fontSize: '0.8rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'monospace', maxHeight: 400, overflow: 'auto' }}>
+                    {truncateText(selectedTestCase.input).text}
+                  </pre>
+                  {truncateText(selectedTestCase.input).isTruncated && (
+                    <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                      (Truncated - download to see full content)
+                    </Typography>
+                  )}
+                </Paper>
+              </Box>
+
+              {/* Expected Output */}
+              <Box sx={{ flex: '1 1 33.33%', minWidth: 0 }}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                    Expected Output
+                  </Typography>
+                  <IconButton
+                    size="small"
+                    onClick={() => downloadText(selectedTestCase.expected, `test_${selectedTestCase.index + 1}_expected.txt`)}
+                    title="Download Expected Output"
+                  >
+                    <DownloadIcon fontSize="small" />
+                  </IconButton>
+                </Box>
+                <Paper elevation={0} sx={{ p: 1.5, backgroundColor: '#f5f5f5', border: '1px solid', borderColor: 'divider' }}>
+                  <pre style={{ margin: 0, fontSize: '0.8rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'monospace', maxHeight: 400, overflow: 'auto' }}>
+                    {truncateText(selectedTestCase.expected).text}
+                  </pre>
+                  {truncateText(selectedTestCase.expected).isTruncated && (
+                    <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                      (Truncated - download to see full content)
+                    </Typography>
+                  )}
+                </Paper>
+              </Box>
+
+              {/* Actual Output */}
+              <Box sx={{ flex: '1 1 33.33%', minWidth: 0 }}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                    Actual Output
+                  </Typography>
+                  <IconButton
+                    size="small"
+                    onClick={() => downloadText(selectedTestCase.output || '(No output)', `test_${selectedTestCase.index + 1}_actual.txt`)}
+                    title="Download Actual Output"
+                  >
+                    <DownloadIcon fontSize="small" />
+                  </IconButton>
+                </Box>
+                <Paper elevation={0} sx={{
+                  p: 1.5,
+                  backgroundColor: '#f5f5f5',
+                  border: '1px solid',
+                  borderColor: selectedTestCase.passed ? 'divider' : '#ef9a9a'
+                }}>
+                  <pre style={{ margin: 0, fontSize: '0.8rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'monospace', maxHeight: 400, overflow: 'auto', color: selectedTestCase.passed ? '#333' : '#c62828' }}>
+                    {truncateText(selectedTestCase.output || '(No output)').text}
+                  </pre>
+                  {truncateText(selectedTestCase.output).isTruncated && (
+                    <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                      (Truncated - download to see full content)
+                    </Typography>
+                  )}
+                </Paper>
+              </Box>
+            </Box>
+
+            {selectedTestCase.error && (
+              <Box sx={{ mt: 2 }}>
+                <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1 }}>
+                  Error Message
+                </Typography>
+                <Paper elevation={0} sx={{ p: 1.5, backgroundColor: '#ffebee', border: '1px solid', borderColor: '#ef9a9a' }}>
+                  <pre style={{ margin: 0, fontSize: '0.8rem', whiteSpace: 'pre-wrap', fontFamily: 'monospace', color: '#c62828' }}>
+                    {selectedTestCase.error}
+                  </pre>
+                </Paper>
+              </Box>
+            )}
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setSelectedTestCase(null)} variant="outlined">
+              Close
+            </Button>
+          </DialogActions>
+        </Dialog>
+      )}
+    </>
   );
 }
 

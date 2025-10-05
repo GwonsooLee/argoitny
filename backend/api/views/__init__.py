@@ -3,7 +3,19 @@ from .auth import GoogleLoginView, TokenRefreshView, LogoutView
 from .problems import ProblemListView, ProblemDetailView, ProblemDraftsView, ProblemRegisteredView
 from .execute import ExecuteCodeView
 from .history import SearchHistoryListView, SearchHistoryDetailView
-from .register import RegisterProblemView, GenerateTestCasesView, ExecuteTestCasesView, DraftProblemsView, SaveProblemView, JobListView, JobDetailView
+from .register import (
+    RegisterProblemView,
+    GenerateTestCasesView,
+    ExecuteTestCasesView,
+    DraftProblemsView,
+    SaveProblemView,
+    SaveTestCaseInputsView,
+    GenerateOutputsView,
+    CheckTaskStatusView,
+    ToggleCompletionView,
+    JobListView,
+    JobDetailView
+)
 
 __all__ = [
     'GoogleLoginView',
@@ -21,6 +33,10 @@ __all__ = [
     'ExecuteTestCasesView',
     'DraftProblemsView',
     'SaveProblemView',
+    'SaveTestCaseInputsView',
+    'GenerateOutputsView',
+    'CheckTaskStatusView',
+    'ToggleCompletionView',
     'JobListView',
     'JobDetailView',
 ]

@@ -16,9 +16,14 @@ from .views import (
     ExecuteTestCasesView,
     DraftProblemsView,
     SaveProblemView,
+    SaveTestCaseInputsView,
+    GenerateOutputsView,
+    CheckTaskStatusView,
+    ToggleCompletionView,
     JobListView,
     JobDetailView,
 )
+from .views.account import AccountStatsView
 
 urlpatterns = [
     # Authentication
@@ -46,8 +51,19 @@ urlpatterns = [
     path('register/execute-test-cases/', ExecuteTestCasesView.as_view(), name='execute-test-cases'),
     path('register/drafts/', DraftProblemsView.as_view(), name='draft-problems'),
     path('register/save/', SaveProblemView.as_view(), name='save-problem'),
+    path('register/save-test-inputs/', SaveTestCaseInputsView.as_view(), name='save-test-inputs'),
+    path('register/generate-outputs/', GenerateOutputsView.as_view(), name='generate-outputs'),
 
     # Script Generation Jobs
     path('jobs/', JobListView.as_view(), name='job-list'),
     path('jobs/<int:job_id>/', JobDetailView.as_view(), name='job-detail'),
+
+    # Task Status
+    path('tasks/<str:task_id>/', CheckTaskStatusView.as_view(), name='task-status'),
+
+    # Toggle Completion
+    path('problems/toggle-completion/', ToggleCompletionView.as_view(), name='toggle-completion'),
+
+    # Account
+    path('account/stats/', AccountStatsView.as_view(), name='account-stats'),
 ]

@@ -31,6 +31,9 @@ INSTALLED_APPS = [
     'api',
 ]
 
+# Custom user model
+AUTH_USER_MODEL = 'api.User'
+
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'corsheaders.middleware.CorsMiddleware',

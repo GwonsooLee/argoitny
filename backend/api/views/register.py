@@ -2,7 +2,7 @@
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from django.db import transaction
 from ..models import Problem, TestCase, ScriptGenerationJob
 from ..services.gemini_service import GeminiService
@@ -369,6 +369,8 @@ class JobListView(APIView):
 
         Query params:
             status: Filter by status (PENDING, PROCESSING, COMPLETED, FAILED)
+            platform: Filter by platform
+            problem_id: Filter by problem_id
 
         Returns:
             {
@@ -394,6 +396,16 @@ class JobListView(APIView):
             status_filter = request.query_params.get('status')
             if status_filter:
                 jobs = jobs.filter(status=status_filter.upper())
+
+            # Filter by platform if provided
+            platform = request.query_params.get('platform')
+            if platform:
+                jobs = jobs.filter(platform=platform)
+
+            # Filter by problem_id if provided
+            problem_id = request.query_params.get('problem_id')
+            if problem_id:
+                jobs = jobs.filter(problem_id=problem_id)
 
             serializer = ScriptGenerationJobSerializer(jobs, many=True)
 
@@ -459,6 +471,250 @@ class JobDetailView(APIView):
         except Exception as e:
             return Response(
                 {'error': f'Failed to fetch job: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class SaveTestCaseInputsView(APIView):
+    """Save test case inputs to problem (without outputs)"""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        """
+        Save test case inputs to a problem
+
+        Request body:
+            {
+                "platform": "baekjoon",
+                "problem_id": "1000",
+                "test_inputs": ["1 2", "3 4", ...]
+            }
+
+        Returns:
+            {
+                "message": "Test cases saved successfully",
+                "count": 10
+            }
+        """
+        platform = request.data.get('platform')
+        problem_id = request.data.get('problem_id')
+        test_inputs = request.data.get('test_inputs', [])
+
+        if not platform or not problem_id:
+            return Response(
+                {'error': 'platform and problem_id are required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not test_inputs:
+            return Response(
+                {'error': 'test_inputs is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            # Get the problem
+            problem = Problem.objects.get(platform=platform, problem_id=problem_id)
+
+            # Delete existing test cases
+            with transaction.atomic():
+                TestCase.objects.filter(problem=problem).delete()
+
+                # Create new test cases with empty outputs
+                test_case_objects = [
+                    TestCase(
+                        problem=problem,
+                        input=inp,
+                        output=''  # Empty output for now
+                    )
+                    for inp in test_inputs
+                ]
+                TestCase.objects.bulk_create(test_case_objects)
+
+            return Response({
+                'message': 'Test cases saved successfully',
+                'count': len(test_inputs)
+            }, status=status.HTTP_200_OK)
+
+        except Problem.DoesNotExist:
+            return Response(
+                {'error': 'Problem not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to save test cases: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class GenerateOutputsView(APIView):
+    """Generate outputs for existing test case inputs (async)"""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        """
+        Generate outputs for test cases using solution code (async task)
+
+        Request body:
+            {
+                "platform": "baekjoon",
+                "problem_id": "1000"
+            }
+
+        Returns:
+            {
+                "message": "Output generation task started",
+                "task_id": "abc123..."
+            }
+        """
+        platform = request.data.get('platform')
+        problem_id = request.data.get('problem_id')
+
+        if not platform or not problem_id:
+            return Response(
+                {'error': 'platform and problem_id are required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            # Verify problem exists and has solution code
+            problem = Problem.objects.prefetch_related('test_cases').get(
+                platform=platform,
+                problem_id=problem_id
+            )
+
+            if not problem.solution_code:
+                return Response(
+                    {'error': 'Problem has no solution code'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            test_cases = problem.test_cases.all()
+            if not test_cases:
+                return Response(
+                    {'error': 'Problem has no test cases'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Start async task
+            from api.tasks import generate_outputs_task
+            task = generate_outputs_task.delay(platform, problem_id)
+
+            return Response({
+                'message': 'Output generation task started',
+                'task_id': task.id
+            }, status=status.HTTP_202_ACCEPTED)
+
+        except Problem.DoesNotExist:
+            return Response(
+                {'error': 'Problem not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to start output generation: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class CheckTaskStatusView(APIView):
+    """Check the status of an async task"""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, task_id):
+        """
+        Check the status of a Celery task
+
+        Returns:
+            {
+                "status": "PENDING|PROCESSING|COMPLETED|FAILED",
+                "result": {...} or "error": "..."
+            }
+        """
+        from celery.result import AsyncResult
+
+        task = AsyncResult(task_id)
+
+        if task.state == 'PENDING':
+            response = {
+                'status': 'PENDING',
+                'message': 'Task is waiting to be executed'
+            }
+        elif task.state == 'PROCESSING':
+            response = {
+                'status': 'PROCESSING',
+                'message': 'Task is being processed'
+            }
+        elif task.state == 'SUCCESS':
+            response = {
+                'status': 'COMPLETED',
+                'result': task.result
+            }
+        elif task.state == 'FAILURE':
+            response = {
+                'status': 'FAILED',
+                'error': str(task.info)
+            }
+        else:
+            response = {
+                'status': task.state,
+                'message': str(task.info)
+            }
+
+        return Response(response, status=status.HTTP_200_OK)
+
+
+class ToggleCompletionView(APIView):
+    """Toggle problem completion status"""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        """
+        Toggle problem completion status
+
+        Request body:
+            {
+                "platform": "baekjoon",
+                "problem_id": "1000",
+                "is_completed": true/false
+            }
+
+        Returns:
+            {
+                "message": "Problem marked as completed/draft",
+                "is_completed": true/false
+            }
+        """
+        platform = request.data.get('platform')
+        problem_id = request.data.get('problem_id')
+        is_completed = request.data.get('is_completed')
+
+        if not platform or not problem_id or is_completed is None:
+            return Response(
+                {'error': 'platform, problem_id, and is_completed are required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            problem = Problem.objects.get(platform=platform, problem_id=problem_id)
+            problem.is_completed = is_completed
+            problem.save()
+
+            message = 'Problem marked as completed' if is_completed else 'Problem marked as draft'
+            return Response({
+                'message': message,
+                'is_completed': problem.is_completed
+            }, status=status.HTTP_200_OK)
+
+        except Problem.DoesNotExist:
+            return Response(
+                {'error': 'Problem not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to update completion status: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 

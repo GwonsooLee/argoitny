@@ -32,7 +32,10 @@ class ProblemListView(APIView):
                 ...
             ]
         """
-        queryset = Problem.objects.all()
+        # Exclude drafts (problems with no test cases)
+        queryset = Problem.objects.annotate(
+            test_case_count=Count('test_cases')
+        ).filter(test_case_count__gt=0)
 
         # Filter by platform
         platform = request.query_params.get('platform')

@@ -15,6 +15,7 @@ import {
   Chip,
   Alert,
   CircularProgress,
+  Snackbar,
 } from '@mui/material';
 import { apiPost, apiGet } from '../utils/api-client';
 import { API_ENDPOINTS } from '../config/api';
@@ -94,6 +95,11 @@ function ProblemRegister({ onBack }) {
   const [drafts, setDrafts] = useState([]);
   const [showDrafts, setShowDrafts] = useState(false);
   const [loadedDraftId, setLoadedDraftId] = useState(null);
+  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
+
+  const showSnackbar = (message, severity = 'info') => {
+    setSnackbar({ open: true, message, severity });
+  };
 
   // Fetch drafts on component mount
   useEffect(() => {

@@ -22,10 +22,18 @@ class TestCaseSerializer(serializers.ModelSerializer):
 class ProblemSerializer(serializers.ModelSerializer):
     """Problem serializer"""
     test_cases = TestCaseSerializer(many=True, read_only=True)
+    test_case_count = serializers.SerializerMethodField()
+    execution_count = serializers.SerializerMethodField()
+
+    def get_test_case_count(self, obj):
+        return obj.test_cases.count()
+
+    def get_execution_count(self, obj):
+        return obj.metadata.get('execution_count', 0) if obj.metadata else 0
 
     class Meta:
         model = Problem
-        fields = ['id', 'platform', 'problem_id', 'title', 'problem_url', 'tags', 'solution_code', 'language', 'constraints', 'created_at', 'test_cases']
+        fields = ['id', 'platform', 'problem_id', 'title', 'problem_url', 'tags', 'solution_code', 'language', 'constraints', 'is_completed', 'created_at', 'test_cases', 'test_case_count', 'execution_count']
         read_only_fields = ['id', 'created_at']
 
 
@@ -35,7 +43,7 @@ class ProblemListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Problem
-        fields = ['id', 'platform', 'problem_id', 'title', 'problem_url', 'tags', 'language', 'created_at', 'test_case_count']
+        fields = ['id', 'platform', 'problem_id', 'title', 'problem_url', 'tags', 'language', 'is_completed', 'created_at', 'test_case_count']
         read_only_fields = ['id', 'created_at', 'test_case_count']
 
 
@@ -49,13 +57,13 @@ class SearchHistorySerializer(serializers.ModelSerializer):
             'id', 'user', 'user_email', 'user_identifier', 'problem',
             'platform', 'problem_number', 'problem_title', 'language',
             'code', 'result_summary', 'passed_count', 'failed_count',
-            'total_count', 'is_code_public', 'created_at'
+            'total_count', 'is_code_public', 'test_results', 'created_at'
         ]
         read_only_fields = ['id', 'created_at', 'user_email']
 
 
 class SearchHistoryListSerializer(serializers.ModelSerializer):
-    """SearchHistory list serializer (code only if public)"""
+    """SearchHistory list serializer (code only if public or owned by user)"""
     user_email = serializers.EmailField(source='user.email', read_only=True, allow_null=True)
 
     class Meta:
@@ -70,9 +78,18 @@ class SearchHistoryListSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        # Hide code if not public
-        if not instance.is_code_public:
+
+        # Show code if public OR if user is the owner
+        request = self.context.get('request')
+        is_owner = False
+
+        if request and request.user and request.user.is_authenticated:
+            is_owner = instance.user == request.user
+
+        # Hide code if not public and not owner
+        if not instance.is_code_public and not is_owner:
             data['code'] = None
+
         return data
 
 
@@ -149,7 +166,7 @@ class ProblemSaveSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Problem
-        fields = ['id', 'platform', 'problem_id', 'title', 'problem_url', 'tags', 'solution_code', 'language', 'constraints']
+        fields = ['id', 'platform', 'problem_id', 'title', 'problem_url', 'tags', 'solution_code', 'language', 'constraints', 'is_completed']
         read_only_fields = ['id']
 
     def to_representation(self, instance):

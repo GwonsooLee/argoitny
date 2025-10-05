@@ -60,8 +60,10 @@ const GoogleLogin = ({ onLoginSuccess }) => {
       const data = await res.json();
 
       // Save tokens and user info
+      console.log('[GoogleLogin] Saving tokens and user info');
       saveTokens(data.access, data.refresh);
       saveUser(data.user);
+      console.log('[GoogleLogin] Tokens and user saved successfully');
 
       // Notify parent component
       if (onLoginSuccess) {
@@ -80,12 +82,12 @@ const GoogleLogin = ({ onLoginSuccess }) => {
       <div id="google-signin-button"></div>
       {isLoading && (
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', mt: 2, gap: 1 }}>
-          <CircularProgress size={20} sx={{ color: 'white' }} />
-          <Typography sx={{ color: 'white' }}>Signing in...</Typography>
+          <CircularProgress size={20} />
+          <Typography sx={{ color: 'text.secondary' }}>Signing in...</Typography>
         </Box>
       )}
       {error && (
-        <Typography sx={{ color: 'error.light', mt: 2 }}>
+        <Typography sx={{ color: 'error.main', mt: 2 }}>
           {error}
         </Typography>
       )}

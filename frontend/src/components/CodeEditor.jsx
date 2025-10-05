@@ -11,12 +11,14 @@ import {
   Checkbox,
   FormControlLabel,
   Paper,
-  CircularProgress
+  CircularProgress,
+  Snackbar,
+  Alert
 } from '@mui/material';
 import { PlayArrow as PlayArrowIcon } from '@mui/icons-material';
-import { apiPost } from '../utils/api-client';
+import { apiPost, apiGet } from '../utils/api-client';
 import { API_ENDPOINTS } from '../config/api';
-import { getUser } from '../utils/auth';
+import { getUser, isAuthenticated } from '../utils/auth';
 
 // Language detection patterns
 const languagePatterns = {
@@ -52,8 +54,8 @@ function CodeEditor({ problemId, onTestResults }) {
   const [code, setCode] = useState('');
   const [language, setLanguage] = useState('python');
   const [loading, setLoading] = useState(false);
-  const [userId, setUserId] = useState('');
   const [isCodePublic, setIsCodePublic] = useState(false);
+  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
 
   useEffect(() => {
     if (code.trim()) {
@@ -62,17 +64,22 @@ function CodeEditor({ problemId, onTestResults }) {
     }
   }, [code]);
 
+  const showSnackbar = (message, severity = 'info') => {
+    setSnackbar({ open: true, message, severity });
+  };
+
   const handleExecute = async () => {
     if (!code.trim()) {
-      alert('Please enter your code');
+      showSnackbar('Please enter your code', 'warning');
       return;
     }
 
     setLoading(true);
     try {
       const user = getUser();
-      const userIdentifier = userId.trim() || (user ? user.email : 'anonymous');
+      const userIdentifier = user ? user.email : 'anonymous';
 
+      // Start async execution
       const response = await apiPost(
         API_ENDPOINTS.execute,
         {
@@ -82,7 +89,7 @@ function CodeEditor({ problemId, onTestResults }) {
           user_identifier: userIdentifier,
           is_code_public: isCodePublic,
         },
-        { requireAuth: !!user }
+        { requireAuth: true }
       );
 
       if (!response.ok) {
@@ -91,11 +98,42 @@ function CodeEditor({ problemId, onTestResults }) {
       }
 
       const data = await response.json();
-      onTestResults(data);
+      const taskId = data.task_id;
+
+      showSnackbar('Code execution started...', 'info');
+
+      // Poll for task completion
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusResponse = await apiGet(`/tasks/${taskId}/`, { requireAuth: true });
+          if (!statusResponse.ok) {
+            clearInterval(pollInterval);
+            setLoading(false);
+            return;
+          }
+
+          const statusData = await statusResponse.json();
+
+          if (statusData.status === 'COMPLETED') {
+            clearInterval(pollInterval);
+            setLoading(false);
+            onTestResults(statusData.result);
+            showSnackbar('Code executed successfully', 'success');
+          } else if (statusData.status === 'FAILED') {
+            clearInterval(pollInterval);
+            setLoading(false);
+            showSnackbar(`Execution failed: ${statusData.result?.error || 'Unknown error'}`, 'error');
+          }
+        } catch (pollError) {
+          clearInterval(pollInterval);
+          setLoading(false);
+          showSnackbar('Error checking execution status', 'error');
+        }
+      }, 2000); // Poll every 2 seconds
+
     } catch (error) {
       console.error('Error executing code:', error);
-      alert('An error occurred while executing your code');
-    } finally {
+      showSnackbar(error.message || 'An error occurred while executing your code', 'error');
       setLoading(false);
     }
   };
@@ -103,28 +141,16 @@ function CodeEditor({ problemId, onTestResults }) {
   return (
     <Paper sx={{ p: 3, mb: 3 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-        <Typography variant="h6" sx={{ color: 'white', fontWeight: 600 }}>
+        <Typography variant="h6" sx={{ color: 'text.primary', fontWeight: 600 }}>
           Code Editor
         </Typography>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <FormControl size="small" sx={{ minWidth: 150 }}>
-            <InputLabel sx={{ color: 'rgba(255, 255, 255, 0.7)' }}>Language</InputLabel>
+            <InputLabel>Language</InputLabel>
             <Select
               value={language}
               onChange={(e) => setLanguage(e.target.value)}
               label="Language"
-              sx={{
-                color: 'white',
-                '.MuiOutlinedInput-notchedOutline': {
-                  borderColor: 'rgba(255, 255, 255, 0.2)',
-                },
-                '&:hover .MuiOutlinedInput-notchedOutline': {
-                  borderColor: 'rgba(255, 255, 255, 0.3)',
-                },
-                '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
-                  borderColor: 'primary.main',
-                },
-              }}
             >
               <MenuItem value="python">Python</MenuItem>
               <MenuItem value="javascript">JavaScript</MenuItem>
@@ -132,7 +158,7 @@ function CodeEditor({ problemId, onTestResults }) {
               <MenuItem value="java">Java</MenuItem>
             </Select>
           </FormControl>
-          <Typography variant="caption" sx={{ color: 'rgba(255, 255, 255, 0.5)' }}>
+          <Typography variant="caption" sx={{ color: 'text.secondary' }}>
             (Auto-detected)
           </Typography>
         </Box>
@@ -150,17 +176,7 @@ function CodeEditor({ problemId, onTestResults }) {
           '& .MuiOutlinedInput-root': {
             fontFamily: 'monospace',
             fontSize: '0.9rem',
-            color: 'white',
-            backgroundColor: 'rgba(0, 0, 0, 0.3)',
-            '& fieldset': {
-              borderColor: 'rgba(255, 255, 255, 0.2)',
-            },
-            '&:hover fieldset': {
-              borderColor: 'rgba(255, 255, 255, 0.3)',
-            },
-            '&.Mui-focused fieldset': {
-              borderColor: 'primary.main',
-            }
+            backgroundColor: '#f5f5f5',
           }
         }}
         inputProps={{
@@ -169,47 +185,15 @@ function CodeEditor({ problemId, onTestResults }) {
         }}
       />
 
-      <Box sx={{ display: 'flex', gap: 2, mb: 2, alignItems: 'center' }}>
-        <TextField
-          label="User ID (Optional)"
-          placeholder="Anonymous"
-          value={userId}
-          onChange={(e) => setUserId(e.target.value)}
-          size="small"
-          sx={{
-            flexGrow: 1,
-            '& .MuiOutlinedInput-root': {
-              color: 'white',
-              '& fieldset': {
-                borderColor: 'rgba(255, 255, 255, 0.2)',
-              },
-              '&:hover fieldset': {
-                borderColor: 'rgba(255, 255, 255, 0.3)',
-              },
-              '&.Mui-focused fieldset': {
-                borderColor: 'primary.main',
-              }
-            },
-            '& .MuiInputLabel-root': {
-              color: 'rgba(255, 255, 255, 0.7)',
-            }
-          }}
-        />
+      <Box sx={{ display: 'flex', gap: 2, mb: 2, alignItems: 'center', justifyContent: 'flex-end' }}>
         <FormControlLabel
           control={
             <Checkbox
               checked={isCodePublic}
               onChange={(e) => setIsCodePublic(e.target.checked)}
-              sx={{
-                color: 'white',
-                '&.Mui-checked': {
-                  color: 'primary.main',
-                }
-              }}
             />
           }
           label="Make code public"
-          sx={{ color: 'white' }}
         />
       </Box>
 
@@ -227,6 +211,21 @@ function CodeEditor({ problemId, onTestResults }) {
       >
         {loading ? 'Executing...' : 'Validate Test Cases'}
       </Button>
+
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={4000}
+        onClose={() => setSnackbar({ ...snackbar, open: false })}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert
+          onClose={() => setSnackbar({ ...snackbar, open: false })}
+          severity={snackbar.severity}
+          sx={{ width: '100%' }}
+        >
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
     </Paper>
   );
 }

@@ -1,49 +1,97 @@
-import './CodeModal.css';
+import {
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Button,
+  Box,
+  Typography,
+  Paper,
+  IconButton,
+  Chip
+} from '@mui/material';
+import { Close as CloseIcon } from '@mui/icons-material';
 
 function CodeModal({ code, onClose }) {
-  const handleBackdropClick = (e) => {
-    if (e.target === e.currentTarget) {
-      onClose();
-    }
-  };
+  if (!code) return null;
 
   return (
-    <div className="modal-backdrop" onClick={handleBackdropClick}>
-      <div className="modal-content">
-        <div className="modal-header">
-          <h3>View Code</h3>
-          <button className="modal-close" onClick={onClose}>
-            ✕
-          </button>
-        </div>
+    <Dialog
+      open={true}
+      onClose={onClose}
+      maxWidth="md"
+      fullWidth
+      PaperProps={{
+        sx: {
+          maxHeight: '90vh'
+        }
+      }}
+    >
+      <DialogTitle>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Typography variant="h6" sx={{ fontWeight: 600 }}>
+            View Code
+          </Typography>
+          <IconButton onClick={onClose} size="small">
+            <CloseIcon />
+          </IconButton>
+        </Box>
+      </DialogTitle>
 
-        <div className="modal-body">
-          <div className="code-info">
-            <span className="info-label">Problem:</span>
-            <span className="info-value">
-              {code.platform === 'baekjoon' ? 'Baekjoon' : 'Codeforces'} - {code.problemNumber} ({code.problemTitle})
-            </span>
-          </div>
+      <DialogContent dividers>
+        <Box sx={{ mb: 3 }}>
+          <Box sx={{ display: 'flex', gap: 1, mb: 2, flexWrap: 'wrap', alignItems: 'center' }}>
+            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+              Problem:
+            </Typography>
+            <Chip
+              label={code.platform === 'baekjoon' ? 'Baekjoon' : 'Codeforces'}
+              size="small"
+              color="primary"
+            />
+            <Typography variant="body2">
+              #{code.problemNumber} - {code.problemTitle}
+            </Typography>
+          </Box>
 
-          <div className="code-info">
-            <span className="info-label">Language:</span>
-            <span className="info-value">{code.language}</span>
-          </div>
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+              Language:
+            </Typography>
+            <Chip label={code.language} size="small" />
+          </Box>
+        </Box>
 
-          <div className="code-container">
-            <pre className="code-display">
-              <code>{code.code}</code>
-            </pre>
-          </div>
-        </div>
+        <Paper
+          elevation={0}
+          sx={{
+            p: 2,
+            backgroundColor: '#f5f5f5',
+            border: '1px solid',
+            borderColor: 'divider',
+            maxHeight: '60vh',
+            overflow: 'auto'
+          }}
+        >
+          <pre style={{
+            margin: 0,
+            fontFamily: 'monospace',
+            fontSize: '0.875rem',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            color: '#333'
+          }}>
+            {code.code}
+          </pre>
+        </Paper>
+      </DialogContent>
 
-        <div className="modal-footer">
-          <button className="modal-close-btn" onClick={onClose}>
-            Close
-          </button>
-        </div>
-      </div>
-    </div>
+      <DialogActions>
+        <Button onClick={onClose} variant="outlined">
+          Close
+        </Button>
+      </DialogActions>
+    </Dialog>
   );
 }
 

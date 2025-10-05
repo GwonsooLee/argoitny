@@ -71,6 +71,12 @@ class Problem(models.Model):
     solution_code = models.TextField(blank=True, null=True, help_text='Solution code for the problem')
     language = models.CharField(max_length=50, blank=True, null=True, help_text='Programming language of solution')
     constraints = models.TextField(blank=True, null=True, help_text='Input constraints for the problem')
+    is_completed = models.BooleanField(default=False, help_text='Whether the problem is completed/registered')
+    metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='Extensible metadata field for storing additional information (e.g., execution_count, difficulty, etc.)'
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -116,6 +122,12 @@ class SearchHistory(models.Model):
     failed_count = models.IntegerField()
     total_count = models.IntegerField()
     is_code_public = models.BooleanField(default=False)
+    test_results = models.JSONField(null=True, blank=True, help_text='Detailed test case results')
+    metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='Extensible metadata field for storing additional information (e.g., execution time, memory usage, etc.)'
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

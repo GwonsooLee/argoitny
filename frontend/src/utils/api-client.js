@@ -48,6 +48,9 @@ export const apiClient = async (endpoint, options = {}) => {
     const token = getAccessToken();
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
+      console.log(`[API] Request to ${endpoint} with auth token`);
+    } else {
+      console.log(`[API] Request to ${endpoint} - no token found!`);
     }
   }
 
@@ -65,13 +68,18 @@ export const apiClient = async (endpoint, options = {}) => {
 
     clearTimeout(timeoutId);
 
-    // If 401 and we have a refresh token, try to refresh
-    if (response.status === 401 && requireAuth && getRefreshToken()) {
-      try {
-        const newToken = await refreshAccessToken();
-        headers['Authorization'] = `Bearer ${newToken}`;
+    // If 401 and auth required, try to refresh token and retry once
+    if (response.status === 401 && requireAuth) {
+      console.log('401 Unauthorized - attempting token refresh');
 
-        // Retry request with new token
+      try {
+        // Try to refresh the access token
+        const newAccessToken = await refreshAccessToken();
+        console.log('Token refreshed successfully, retrying request');
+
+        // Retry the request with new token
+        headers['Authorization'] = `Bearer ${newAccessToken}`;
+
         const retryController = new AbortController();
         const retryTimeoutId = setTimeout(() => retryController.abort(), timeout);
 
@@ -82,10 +90,20 @@ export const apiClient = async (endpoint, options = {}) => {
         });
 
         clearTimeout(retryTimeoutId);
-      } catch (error) {
-        console.error('Failed to refresh token:', error);
+
+        // If still 401 after refresh, logout
+        if (response.status === 401) {
+          console.log('401 after token refresh - forcing logout');
+          removeTokens();
+          window.dispatchEvent(new CustomEvent('forceLogout'));
+          throw new Error('Session expired. Please login again.');
+        }
+
+      } catch (refreshError) {
+        console.log('Token refresh failed - forcing logout', refreshError);
         removeTokens();
-        throw error;
+        window.dispatchEvent(new CustomEvent('forceLogout'));
+        throw new Error('Session expired. Please login again.');
       }
     }
 

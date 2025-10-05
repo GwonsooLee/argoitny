@@ -67,3 +67,35 @@ export const isAuthenticated = () => {
 export const logout = () => {
   removeTokens();
 };
+
+/**
+ * Refresh access token using refresh token
+ */
+export const refreshToken = async () => {
+  const refreshToken = getRefreshToken();
+  if (!refreshToken) {
+    throw new Error('No refresh token available');
+  }
+
+  try {
+    const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/auth/refresh/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ refresh: refreshToken }),
+    });
+
+    if (!response.ok) {
+      removeTokens();
+      throw new Error('Failed to refresh token');
+    }
+
+    const data = await response.json();
+    saveTokens(data.access, data.refresh || refreshToken);
+    return data.access;
+  } catch (error) {
+    removeTokens();
+    throw error;
+  }
+};
