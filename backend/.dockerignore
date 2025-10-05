@@ -1,5 +1,5 @@
 # Python
-__pycache__
+__pycache__/
 *.py[cod]
 *$py.class
 *.so
@@ -23,6 +23,8 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+pip-log.txt
+pip-delete-this-directory.txt
 
 # Django
 *.log
@@ -58,6 +60,9 @@ coverage.xml
 *.cover
 .hypothesis/
 .pytest_cache/
+tests/
+test_*.py
+*_test.py
 
 # Documentation
 docs/_build/
