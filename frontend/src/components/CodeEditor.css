@@ -1,0 +1,142 @@
+.code-editor {
+  margin-bottom: 30px;
+}
+
+.editor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+}
+
+.editor-header h3 {
+  margin: 0;
+  color: #333;
+}
+
+.language-selector {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.language-selector label {
+  font-weight: 600;
+  color: #555;
+}
+
+.language-selector select {
+  padding: 6px 12px;
+  font-size: 14px;
+  border: 2px solid #ddd;
+  border-radius: 5px;
+  background: white;
+  cursor: pointer;
+  outline: none;
+}
+
+.language-selector select:focus {
+  border-color: #667eea;
+}
+
+.detected-language {
+  font-size: 12px;
+  color: #888;
+  font-style: italic;
+}
+
+.code-input {
+  width: 100%;
+  min-height: 400px;
+  padding: 15px;
+  font-family: 'Courier New', monospace;
+  font-size: 14px;
+  line-height: 1.5;
+  border: 2px solid #ddd;
+  border-radius: 8px;
+  resize: vertical;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.code-input:focus {
+  border-color: #667eea;
+}
+
+.user-settings {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 15px;
+  padding: 15px;
+  background: #f8f9fa;
+  border-radius: 8px;
+}
+
+.user-id-input {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.user-id-input label {
+  font-weight: 600;
+  color: #555;
+  font-size: 14px;
+}
+
+.user-id-input input {
+  padding: 8px 12px;
+  border: 2px solid #ddd;
+  border-radius: 5px;
+  font-size: 14px;
+  outline: none;
+  width: 200px;
+}
+
+.user-id-input input:focus {
+  border-color: #667eea;
+}
+
+.code-public-toggle {
+  display: flex;
+  align-items: center;
+}
+
+.code-public-toggle label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #555;
+  cursor: pointer;
+}
+
+.code-public-toggle input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+}
+
+.execute-button {
+  margin-top: 15px;
+  padding: 12px 30px;
+  background: #28a745;
+  color: white;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 600;
+  width: 100%;
+}
+
+.execute-button:hover {
+  background: #218838;
+}
+
+.execute-button:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}

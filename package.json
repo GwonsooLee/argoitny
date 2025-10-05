@@ -1,0 +1,17 @@
+{
+  "name": "algoitny",
+  "version": "1.0.0",
+  "description": "Counter-example testing platform for competitive programming",
+  "scripts": {
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "server": "cd backend && npm run dev",
+    "client": "cd frontend && npm run dev",
+    "install-all": "npm install && cd backend && npm install && cd ../frontend && npm install"
+  },
+  "keywords": ["algorithm", "testing", "counter-example"],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

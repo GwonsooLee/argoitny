@@ -1,0 +1,116 @@
+.test-results {
+  margin-top: 30px;
+  padding: 20px;
+  background: #f8f9fa;
+  border-radius: 8px;
+}
+
+.test-results h3 {
+  margin: 0 0 20px 0;
+  color: #333;
+}
+
+.summary {
+  display: flex;
+  justify-content: center;
+  gap: 30px;
+  margin-bottom: 30px;
+  padding: 15px;
+  background: white;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.summary .passed {
+  color: #28a745;
+}
+
+.summary .failed {
+  color: #dc3545;
+}
+
+.summary .total {
+  color: #6c757d;
+}
+
+.test-results h4 {
+  margin: 20px 0 15px 0;
+  color: #dc3545;
+}
+
+.test-case {
+  margin-bottom: 20px;
+  padding: 15px;
+  background: white;
+  border-radius: 8px;
+  border-left: 4px solid #dc3545;
+}
+
+.test-case-header {
+  margin-bottom: 15px;
+  padding-bottom: 10px;
+  border-bottom: 2px solid #f0f0f0;
+}
+
+.test-case-header strong {
+  color: #333;
+  font-size: 16px;
+}
+
+.test-case-content {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.io-section {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.io-section label {
+  font-weight: 600;
+  color: #555;
+  font-size: 14px;
+}
+
+.io-section pre {
+  margin: 0;
+  padding: 10px;
+  background: #f8f9fa;
+  border: 1px solid #e9ecef;
+  border-radius: 5px;
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.io-section.error {
+  background: #fff5f5;
+  padding: 10px;
+  border-radius: 5px;
+}
+
+.io-section.error pre {
+  background: white;
+  border-color: #dc3545;
+  color: #dc3545;
+}
+
+.actual-output {
+  color: #dc3545;
+}
+
+.all-passed {
+  text-align: center;
+  padding: 40px;
+  font-size: 20px;
+  color: #28a745;
+  font-weight: 600;
+  background: white;
+  border-radius: 8px;
+  border: 2px solid #28a745;
+}
