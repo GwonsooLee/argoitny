@@ -71,12 +71,21 @@ USER django
 # Collect static files as django user
 RUN python manage.py collectstatic --noinput --clear || true
 
+# Copy entrypoint script
+COPY --chown=django:django docker-entrypoint.sh /usr/local/bin/
+USER root
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+USER django
+
 # Expose port
 EXPOSE 8000
 
 # Health check using Python instead of curl
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health/').read()" || exit 1
+
+# Entrypoint
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 
 # Default command (can be overridden in Kubernetes)
 CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120"]

@@ -205,6 +205,15 @@ algoitny/
 │   │   └── utils/       # 유틸리티
 │   ├── Dockerfile
 │   └── package.json
+├── nest/                # Kubernetes Helm Charts
+│   ├── templates/       # K8s manifest 템플릿
+│   ├── values.yaml
+│   └── README.md
+├── docs/                # 📚 문서
+│   ├── DEPLOYMENT.md    # EKS 배포 가이드
+│   ├── RELEASE.md       # 릴리스 프로세스
+│   ├── DOCKER_OPTIMIZATION.md  # 이미지 최적화
+│   └── ...
 ├── docker-compose.yml
 ├── Makefile
 ├── .env                 # 환경 변수 (git에 포함 안 됨)
@@ -273,6 +282,39 @@ make rebuild
 
 ## 🚢 배포
 
+### 개발 환경
+Docker Compose를 사용한 로컬 개발 환경입니다.
+
+```bash
+make up
+```
+
+### 프로덕션 배포
+
+#### Backend (EKS)
+```bash
+# 1. 이미지 빌드 & ECR 푸시
+git tag v1.0.0
+make release
+
+# 2. EKS에 배포
+make deploy VERSION=v1.0.0
+
+# 3. 상태 확인
+make k8s-status
+```
+
+#### Frontend (CloudFront)
+```bash
+# 빌드 & CloudFront 배포
+make frontend-deploy
+```
+
+### 📚 상세 가이드
+- [릴리스 가이드](docs/RELEASE.md) - 릴리스 프로세스 및 버전 관리
+- [배포 가이드](docs/DEPLOYMENT.md) - EKS 배포 상세 설명
+- [최적화 가이드](docs/DOCKER_OPTIMIZATION.md) - Docker 이미지 최적화
+
 ### 프로덕션 환경 변수
 
 ```env
@@ -280,10 +322,6 @@ SECRET_KEY=<강력한-비밀키-생성>
 DEBUG=False
 ALLOWED_HOSTS=yourdomain.com
 ```
-
-### HTTPS 설정
-
-프로덕션 환경에서는 반드시 HTTPS를 사용하세요.
 
 ## 📄 라이센스
 

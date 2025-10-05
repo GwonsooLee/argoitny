@@ -451,8 +451,8 @@ kubectl exec -it POD_NAME -n default -- python manage.py shell
 
 ## 📚 참고 자료
 
-- [RELEASE.md](./RELEASE.md) - 릴리스 가이드
-- [nest/README.md](./nest/README.md) - Helm 차트 상세 가이드
-- [nest/QUICKSTART.md](./nest/QUICKSTART.md) - 빠른 시작 가이드
+- [RELEASE.md](RELEASE.md) - 릴리스 가이드
+- [nest/README.md](../nest/README.md) - Helm 차트 상세 가이드
+- [nest/QUICKSTART.md](../nest/QUICKSTART.md) - 빠른 시작 가이드
 - [Helm Documentation](https://helm.sh/docs/)
 - [Kubernetes Documentation](https://kubernetes.io/docs/)

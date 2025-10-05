@@ -30,6 +30,11 @@ help:
 	@echo "  make migrate      - Django 마이그레이션 실행"
 	@echo "  make makemigrations- Django 마이그레이션 파일 생성"
 	@echo ""
+	@echo "🧪 테스트:"
+	@echo "  make test         - 모든 테스트 실행"
+	@echo "  make test-cov     - 커버리지 리포트 포함"
+	@echo "  make test-help    - 테스트 명령어 도움말"
+	@echo ""
 	@echo "🚀 프로덕션 릴리스 (ECR):"
 	@echo "  make release      - 🌟 전체 릴리스 (git tag push + multi-arch build + ECR push)"
 	@echo "  make ecr-help     - ECR 명령어 도움말"
@@ -55,8 +60,9 @@ help:
 	@echo "  make k8s-undeploy - 배포 삭제"
 	@echo ""
 	@echo "💡 팁:"
-	@echo "  릴리스 가이드: cat RELEASE.md"
-	@echo "  EKS 배포 가이드: cat nest/README.md"
+	@echo "  릴리스 가이드: cat docs/RELEASE.md"
+	@echo "  배포 가이드: cat docs/DEPLOYMENT.md"
+	@echo "  최적화 가이드: cat docs/DOCKER_OPTIMIZATION.md"
 	@echo ""
 	@echo "📝 전체 워크플로우:"
 	@echo "  Backend:"
@@ -188,7 +194,80 @@ clean-volumes:
 # 개발 도구
 test:
 	@echo "🧪 백엔드 테스트를 실행합니다..."
-	docker-compose exec backend python manage.py test
+	docker-compose exec backend pytest
+
+test-cov:
+	@echo "🧪 테스트를 실행하고 커버리지를 생성합니다..."
+	docker-compose exec backend pytest --cov=api --cov-report=term-missing --cov-report=html
+
+test-fast:
+	@echo "🧪 빠른 테스트를 실행합니다 (외부 API 제외)..."
+	docker-compose exec backend pytest -m "not external_api" --maxfail=1
+
+test-watch:
+	@echo "🧪 파일 변경 감지 자동 테스트를 실행합니다..."
+	docker-compose exec backend pytest-watch
+
+test-parallel:
+	@echo "🧪 병렬 테스트를 실행합니다 (빠른 실행)..."
+	docker-compose exec backend pytest -n auto
+
+test-verbose:
+	@echo "🧪 상세 출력으로 테스트를 실행합니다..."
+	docker-compose exec backend pytest -vv
+
+test-specific:
+	@echo "🧪 특정 테스트 파일을 실행합니다..."
+	@read -p "테스트 파일명 (예: test_auth.py): " testfile; \
+	docker-compose exec backend pytest tests/$$testfile -v
+
+test-local:
+	@echo "🧪 로컬에서 테스트를 실행합니다 (Docker 없이)..."
+	cd backend && pytest
+
+test-local-cov:
+	@echo "🧪 로컬에서 테스트를 실행하고 커버리지를 생성합니다..."
+	cd backend && pytest --cov=api --cov-report=term-missing --cov-report=html
+
+test-clean:
+	@echo "🧹 테스트 캐시와 커버리지 데이터를 삭제합니다..."
+	docker-compose exec backend sh -c "find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true"
+	docker-compose exec backend sh -c "find . -type d -name .pytest_cache -exec rm -rf {} + 2>/dev/null || true"
+	docker-compose exec backend sh -c "rm -rf htmlcov .coverage coverage.xml"
+	@echo "✅ 테스트 캐시 삭제 완료"
+
+test-install:
+	@echo "📦 테스트 의존성을 설치합니다..."
+	docker-compose exec backend pip install pytest pytest-django pytest-cov pytest-mock pytest-asyncio pytest-xdist factory-boy faker freezegun
+
+test-help:
+	@echo "════════════════════════════════════════════════════════════════"
+	@echo "🧪 AlgoItny - 테스트 명령어"
+	@echo "════════════════════════════════════════════════════════════════"
+	@echo ""
+	@echo "📦 기본 테스트:"
+	@echo "  make test             - 모든 테스트 실행"
+	@echo "  make test-cov         - 커버리지 리포트 포함"
+	@echo "  make test-fast        - 빠른 테스트 (외부 API 제외)"
+	@echo "  make test-watch       - 파일 변경 감지 자동 테스트"
+	@echo "  make test-parallel    - 병렬 테스트 실행"
+	@echo "  make test-verbose     - 상세 출력"
+	@echo "  make test-specific    - 특정 테스트 파일 실행"
+	@echo ""
+	@echo "🏠 로컬 테스트 (Docker 없이):"
+	@echo "  make test-local       - 로컬 테스트 실행"
+	@echo "  make test-local-cov   - 로컬 테스트 + 커버리지"
+	@echo ""
+	@echo "🧹 정리:"
+	@echo "  make test-clean       - 테스트 캐시 삭제"
+	@echo ""
+	@echo "📦 설치:"
+	@echo "  make test-install     - 테스트 의존성 설치"
+	@echo ""
+	@echo "💡 팁:"
+	@echo "  특정 테스트만 실행: make test-specific"
+	@echo "  커버리지 리포트: backend/htmlcov/index.html"
+	@echo "════════════════════════════════════════════════════════════════"
 
 format:
 	@echo "🎨 코드 포맷팅을 실행합니다..."

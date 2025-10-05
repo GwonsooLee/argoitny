@@ -82,6 +82,8 @@ DATABASES = {
         },
         'CONN_MAX_AGE': 600,  # Connection pooling: keep connections alive for 10 minutes
         'CONN_HEALTH_CHECKS': True,  # Verify connections before using them
+        'ATOMIC_REQUESTS': False,  # Set to True to wrap each view in a transaction
+        'AUTOCOMMIT': True,
     }
 }
 

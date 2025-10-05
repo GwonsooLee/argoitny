@@ -59,8 +59,8 @@ class GenerateTestCasesView(APIView):
                 platform=serializer.validated_data['platform'],
                 problem_id=serializer.validated_data['problem_id'],
                 title=serializer.validated_data['title'],
-                problem_url=request.data.get('problem_url', ''),
-                tags=request.data.get('tags', []),
+                problem_url=serializer.validated_data.get('problem_url', ''),
+                tags=serializer.validated_data.get('tags', []),
                 solution_code=serializer.validated_data.get('solution_code', ''),
                 language=serializer.validated_data['language'],
                 constraints=serializer.validated_data['constraints'],
@@ -696,6 +696,12 @@ class ToggleCompletionView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # Convert to boolean if it's a string
+        if isinstance(is_completed, str):
+            is_completed = is_completed.lower() in ('true', '1', 'yes')
+        else:
+            is_completed = bool(is_completed)
+
         try:
             problem = Problem.objects.only('id', 'is_completed').get(platform=platform, problem_id=problem_id)
             problem.is_completed = is_completed
@@ -704,7 +710,7 @@ class ToggleCompletionView(APIView):
             message = 'Problem marked as completed' if is_completed else 'Problem marked as draft'
             return Response({
                 'message': message,
-                'is_completed': problem.is_completed
+                'is_completed': bool(problem.is_completed)
             }, status=status.HTTP_200_OK)
 
         except Problem.DoesNotExist:
@@ -771,22 +777,36 @@ class SaveProblemView(APIView):
                 )
         else:
             # Create new or update by platform + problem_id
-            serializer = ProblemSaveSerializer(data=request.data)
-            if not serializer.is_valid():
+            platform = request.data.get('platform')
+            problem_id = request.data.get('problem_id')
+
+            if not platform or not problem_id:
                 return Response(
-                    {'error': serializer.errors},
+                    {'error': 'platform and problem_id are required'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            platform = serializer.validated_data['platform']
-            problem_id = serializer.validated_data['problem_id']
-
-            # Use update_or_create for atomic operation (optimized)
-            problem, created = Problem.objects.update_or_create(
-                platform=platform,
-                problem_id=problem_id,
-                defaults=serializer.validated_data
-            )
+            # Check if problem already exists
+            try:
+                existing_problem = Problem.objects.get(platform=platform, problem_id=problem_id)
+                # Update existing problem (partial update)
+                serializer = ProblemSaveSerializer(existing_problem, data=request.data, partial=True)
+                if not serializer.is_valid():
+                    return Response(
+                        {'error': serializer.errors},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                serializer.save()
+                problem = existing_problem
+            except Problem.DoesNotExist:
+                # Create new problem
+                serializer = ProblemSaveSerializer(data=request.data)
+                if not serializer.is_valid():
+                    return Response(
+                        {'error': serializer.errors},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                problem = serializer.save()
 
         # Serialize response
         response_serializer = ProblemSaveSerializer(problem)

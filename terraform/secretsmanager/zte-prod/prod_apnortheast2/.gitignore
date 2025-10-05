@@ -1,0 +1,3 @@
+# Unencrypted secrets
+*.dec.yaml
+secret.yaml

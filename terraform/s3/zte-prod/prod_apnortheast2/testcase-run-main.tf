@@ -98,7 +98,6 @@ resource "aws_cloudfront_distribution" "testcase_run_cdn_distribution" {
       # Set origin id created above
       origin_access_identity = aws_cloudfront_origin_access_identity.testcase_run_cdn_distribution_origin_access_identity.cloudfront_access_identity_path
     }
-
   }
 
   enabled         = true
@@ -106,6 +105,7 @@ resource "aws_cloudfront_distribution" "testcase_run_cdn_distribution" {
 
   comment             = "Cloudfront configuration for *.testcase.run"
   default_root_object = "index.html"
+
 
   # Alias of cloudfront distribution
   aliases = ["testcase.run", "www.testcase.run"]
@@ -186,28 +186,20 @@ resource "aws_cloudfront_distribution" "testcase_run_cdn_distribution" {
     ssl_support_method       = "sni-only"
   }
 
-  # Cloudfront Logging Settings
-
-  # You can set custom error response 
+  # Custom error response for SPA
+  # Redirect all paths to root for client-side routing
   custom_error_response {
-    error_caching_min_ttl = 5
+    error_caching_min_ttl = 0
+    error_code            = 403
+    response_code         = 200
+    response_page_path    = "/"
+  }
+
+  custom_error_response {
+    error_caching_min_ttl = 0
     error_code            = 404
-    response_code         = 404
-    response_page_path    = "/404.html"
-  }
-
-  custom_error_response {
-    error_caching_min_ttl = 5
-    error_code            = 500
-    response_code         = 500
-    response_page_path    = "/500.html"
-  }
-
-  custom_error_response {
-    error_caching_min_ttl = 5
-    error_code            = 502
-    response_code         = 502
-    response_page_path    = "/500.html"
+    response_code         = 200
+    response_page_path    = "/"
   }
 
   # Tags of cloudfront

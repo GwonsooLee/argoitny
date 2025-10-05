@@ -1,0 +1,4 @@
+creation_rules:
+  - path_regex: \.yaml$
+    kms: 'arn:aws:kms:ap-northeast-2:442863828268:key/d1948521-af1f-4e5e-9422-ac98e7fbb9bf'
+    aws_profile: ''

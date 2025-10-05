@@ -147,6 +147,12 @@ class GenerateTestCasesSerializer(serializers.Serializer):
     platform = serializers.CharField(max_length=50)
     problem_id = serializers.CharField(max_length=50)
     title = serializers.CharField(max_length=255)
+    problem_url = serializers.URLField(required=False, allow_blank=True)
+    tags = serializers.ListField(
+        child=serializers.CharField(max_length=50),
+        required=False,
+        default=list
+    )
     solution_code = serializers.CharField(required=False, allow_blank=True)
     language = serializers.CharField(max_length=50)
     constraints = serializers.CharField()

@@ -52,6 +52,7 @@ urlpatterns = [
     path('history/<int:history_id>/', SearchHistoryDetailView.as_view(), name='history-detail'),
 
     # Problem Registration
+    path('register/', RegisterProblemView.as_view(), name='register-problem-short'),  # Alias for tests
     path('register/problem/', RegisterProblemView.as_view(), name='register-problem'),
     path('register/generate-test-cases/', GenerateTestCasesView.as_view(), name='generate-test-cases'),
     path('register/execute-test-cases/', ExecuteTestCasesView.as_view(), name='execute-test-cases'),
@@ -59,13 +60,14 @@ urlpatterns = [
     path('register/save/', SaveProblemView.as_view(), name='save-problem'),
     path('register/save-test-inputs/', SaveTestCaseInputsView.as_view(), name='save-test-inputs'),
     path('register/generate-outputs/', GenerateOutputsView.as_view(), name='generate-outputs'),
+    path('register/toggle-completion/', ToggleCompletionView.as_view(), name='register-toggle-completion'),
 
     # Script Generation Jobs
-    path('jobs/', JobListView.as_view(), name='job-list'),
-    path('jobs/<int:job_id>/', JobDetailView.as_view(), name='job-detail'),
+    path('register/jobs/', JobListView.as_view(), name='register-job-list'),
+    path('register/jobs/<int:job_id>/', JobDetailView.as_view(), name='register-job-detail'),
 
     # Task Status
-    path('tasks/<str:task_id>/', CheckTaskStatusView.as_view(), name='task-status'),
+    path('register/task-status/<str:task_id>/', CheckTaskStatusView.as_view(), name='register-task-status'),
 
     # Toggle Completion
     path('problems/toggle-completion/', ToggleCompletionView.as_view(), name='toggle-completion'),
