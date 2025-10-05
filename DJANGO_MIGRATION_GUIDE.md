@@ -19,7 +19,7 @@ The Django migration requires replacing the entire Node.js backend with Django. 
    - `api/views/auth.py` - Google OAuth, JWT tokens
    - `api/views/problems.py` - Problem CRUD
    - `api/views/execute.py` - Code execution
-   - `api/views/history.py` - Search history
+   - `api/views/history.py` - History
    - `api/views/register.py` - Problem registration
 
 2. **Serializers** (10+ files)

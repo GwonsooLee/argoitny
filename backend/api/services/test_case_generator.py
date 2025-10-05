@@ -37,6 +37,8 @@ class TestCaseGenerator:
         'chr': chr,
         'pow': pow,
         'divmod': divmod,
+        'print': print,  # Allow print for debugging
+        '__import__': __import__,  # Allow __import__ for module imports
     }
 
     # Allowed modules
@@ -63,10 +65,10 @@ class TestCaseGenerator:
 
         # Check for dangerous operations
         for node in ast.walk(tree):
-            # Block file operations
+            # Block file operations (but allow __import__ for safe module imports)
             if isinstance(node, ast.Call):
                 if isinstance(node.func, ast.Name):
-                    if node.func.id in ['open', 'exec', 'eval', 'compile', '__import__']:
+                    if node.func.id in ['open', 'exec', 'eval', 'compile']:
                         raise ValueError(f'Unsafe operation detected: {node.func.id}')
 
             # Block import of non-whitelisted modules

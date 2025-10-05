@@ -27,6 +27,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt',
     'corsheaders',
+    'django_celery_results',
     'api',
 ]
 
@@ -42,6 +43,8 @@ MIDDLEWARE = [
 ]
 
 ROOT_URLCONF = 'config.urls'
+
+ASGI_APPLICATION = 'config.asgi.application'
 
 TEMPLATES = [
     {
@@ -73,7 +76,9 @@ DATABASES = {
         'OPTIONS': {
             'charset': 'utf8mb4',
             'init_command': "SET sql_mode='STRICT_TRANS_TABLES'",
-        }
+        },
+        'CONN_MAX_AGE': 600,  # Connection pooling: keep connections alive for 10 minutes
+        'CONN_HEALTH_CHECKS': True,  # Verify connections before using them
     }
 }
 
@@ -144,3 +149,23 @@ GEMINI_API_KEY = GEMINI_API_KEY
 
 # Code execution timeout
 CODE_EXECUTION_TIMEOUT = 5  # seconds
+
+# Redis Configuration
+REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
+REDIS_PORT = os.getenv('REDIS_PORT', '6379')
+
+# Celery Configuration with Redis
+CELERY_BROKER_URL = f'redis://{REDIS_HOST}:{REDIS_PORT}/0'
+CELERY_RESULT_BACKEND = 'django-db'
+CELERY_CACHE_BACKEND = 'django-cache'
+CELERY_ACCEPT_CONTENT = ['application/json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 minutes
+
+# Judge0 API Configuration
+USE_JUDGE0 = os.getenv('USE_JUDGE0', 'false').lower() == 'true'
+JUDGE0_API_URL = os.getenv('JUDGE0_API_URL', 'https://judge0-ce.p.rapidapi.com')
+JUDGE0_API_KEY = os.getenv('JUDGE0_API_KEY', '')

@@ -15,6 +15,9 @@ export const API_ENDPOINTS = {
   // Problems
   problems: '/problems/',
   problemDetail: (id) => `/problems/${id}/`,
+  problemDetailByPlatform: (platform, problemId) => `/problems/${platform}/${problemId}/`,
+  problemDrafts: '/problems/drafts/',
+  problemRegistered: '/problems/registered/',
 
   // Code Execution
   execute: '/execute/',
@@ -29,6 +32,10 @@ export const API_ENDPOINTS = {
   executeTestCases: '/register/execute-test-cases/',
   drafts: '/register/drafts/',
   saveDraft: '/register/save/',
+
+  // Script Generation Jobs
+  jobs: '/jobs/',
+  jobDetail: (id) => `/jobs/${id}/`,
 };
 
 /**

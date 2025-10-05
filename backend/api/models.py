@@ -129,3 +129,45 @@ class SearchHistory(models.Model):
 
     def __str__(self):
         return f"{self.user_identifier} - {self.problem_number}"
+
+
+class ScriptGenerationJob(models.Model):
+    """Script generation job model for tracking async script generation"""
+    STATUS_CHOICES = [
+        ('PENDING', 'Pending'),
+        ('PROCESSING', 'Processing'),
+        ('COMPLETED', 'Completed'),
+        ('FAILED', 'Failed'),
+    ]
+
+    platform = models.CharField(max_length=50)
+    problem_id = models.CharField(max_length=50)
+    title = models.CharField(max_length=255)
+    problem_url = models.URLField(blank=True, null=True)
+    tags = models.JSONField(default=list, blank=True)
+    solution_code = models.TextField(blank=True, null=True)
+    language = models.CharField(max_length=50)
+    constraints = models.TextField()
+
+    # Job status
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
+    celery_task_id = models.CharField(max_length=255, blank=True, null=True)
+
+    # Result
+    generator_code = models.TextField(blank=True, null=True)
+    error_message = models.TextField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'script_generation_jobs'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['-created_at']),
+            models.Index(fields=['status']),
+            models.Index(fields=['celery_task_id']),
+        ]
+
+    def __str__(self):
+        return f"{self.platform} - {self.problem_id}: {self.status}"

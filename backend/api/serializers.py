@@ -1,6 +1,6 @@
 """Serializers for API"""
 from rest_framework import serializers
-from .models import User, Problem, TestCase, SearchHistory
+from .models import User, Problem, TestCase, SearchHistory, ScriptGenerationJob
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -25,16 +25,18 @@ class ProblemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Problem
-        fields = ['id', 'platform', 'problem_id', 'title', 'problem_url', 'tags', 'created_at', 'test_cases']
+        fields = ['id', 'platform', 'problem_id', 'title', 'problem_url', 'tags', 'solution_code', 'language', 'constraints', 'created_at', 'test_cases']
         read_only_fields = ['id', 'created_at']
 
 
 class ProblemListSerializer(serializers.ModelSerializer):
     """Problem list serializer (without test cases)"""
+    test_case_count = serializers.IntegerField(read_only=True)
+
     class Meta:
         model = Problem
-        fields = ['id', 'platform', 'problem_id', 'title', 'problem_url', 'tags', 'created_at']
-        read_only_fields = ['id', 'created_at']
+        fields = ['id', 'platform', 'problem_id', 'title', 'problem_url', 'tags', 'language', 'created_at', 'test_case_count']
+        read_only_fields = ['id', 'created_at', 'test_case_count']
 
 
 class SearchHistorySerializer(serializers.ModelSerializer):
@@ -199,3 +201,16 @@ class ProblemSaveSerializer(serializers.ModelSerializer):
                 )
 
         return data
+
+
+class ScriptGenerationJobSerializer(serializers.ModelSerializer):
+    """ScriptGenerationJob serializer"""
+    class Meta:
+        model = ScriptGenerationJob
+        fields = [
+            'id', 'platform', 'problem_id', 'title', 'problem_url', 'tags',
+            'solution_code', 'language', 'constraints', 'status',
+            'celery_task_id', 'generator_code', 'error_message',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'status', 'celery_task_id', 'generator_code', 'error_message', 'created_at', 'updated_at']

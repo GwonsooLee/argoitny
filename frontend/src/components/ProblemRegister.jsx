@@ -1,7 +1,23 @@
 import { useState, useEffect } from 'react';
+import {
+  Box,
+  Paper,
+  Typography,
+  TextField,
+  Button,
+  Radio,
+  RadioGroup,
+  FormControlLabel,
+  FormControl,
+  FormLabel,
+  Select,
+  MenuItem,
+  Chip,
+  Alert,
+  CircularProgress,
+} from '@mui/material';
 import { apiPost, apiGet } from '../utils/api-client';
 import { API_ENDPOINTS } from '../config/api';
-import './ProblemRegister.css';
 
 // Language detection patterns
 const languagePatterns = {
@@ -82,6 +98,46 @@ function ProblemRegister({ onBack }) {
   // Fetch drafts on component mount
   useEffect(() => {
     fetchDrafts();
+  }, []);
+
+  // Load draft from URL params
+  useEffect(() => {
+    const loadDraftFromUrl = async () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const draftId = urlParams.get('draft_id');
+
+      if (draftId) {
+        // Fetch draft data from server
+        try {
+          const response = await apiGet(API_ENDPOINTS.drafts);
+          if (response.ok) {
+            const data = await response.json();
+            const draft = data.drafts.find(d => d.id === parseInt(draftId));
+
+            if (draft) {
+              // Load data from draft
+              setPlatform(draft.platform);
+              setProblemId(draft.problem_id);
+              setTitle(draft.title);
+              setProblemUrl(draft.problem_url || '');
+              setTags(draft.tags || []);
+              setSolutionCode(draft.solution_code || '');
+              setLanguage(draft.language || 'python');
+              setConstraints(draft.constraints || '');
+              setLoadedDraftId(draftId);
+            } else {
+              console.error('Draft not found:', draftId);
+              alert('Draft not found');
+            }
+          }
+        } catch (error) {
+          console.error('Error loading draft:', error);
+          alert('Failed to load draft: ' + error.message);
+        }
+      }
+    };
+
+    loadDraftFromUrl();
   }, []);
 
   const fetchDrafts = async () => {
@@ -183,33 +239,39 @@ function ProblemRegister({ onBack }) {
     }
 
     setLoading(true);
-    setProgress('Generating test case generator script via Gemini API...');
+    setProgress('Creating script generation job...');
 
     try {
-      const response = await apiPost(API_ENDPOINTS.generateTestCases, {
-        platform,
-        problem_id: problemId,
-        title,
-        solution_code: solutionCode,
-        language,
-        constraints,
-        tags,
-      });
+      const response = await apiPost(
+        API_ENDPOINTS.generateTestCases,
+        {
+          platform,
+          problem_id: problemId,
+          title,
+          problem_url: problemUrl,
+          tags,
+          solution_code: solutionCode,
+          language,
+          constraints,
+        }
+      );
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to generate script');
+        throw new Error(errorData.error || 'Failed to create job');
       }
 
       const data = await response.json();
-      setGeneratorCode(data.generator_code);
-      setProgress('Script generated successfully!');
-      setTimeout(() => setProgress(''), 3000);
+      setProgress('Job created! Redirecting to job detail page...');
+
+      // Redirect to job detail page after a short delay
+      setTimeout(() => {
+        window.location.href = `/jobs?job_id=${data.job_id}`;
+      }, 1500);
     } catch (error) {
-      console.error('Error generating script:', error);
-      alert('An error occurred while generating script: ' + error.message);
+      console.error('Error creating job:', error);
+      alert('An error occurred while creating job: ' + error.message);
       setProgress('');
-    } finally {
       setLoading(false);
     }
   };
@@ -349,294 +411,381 @@ function ProblemRegister({ onBack }) {
   };
 
   return (
-    <div className="problem-register">
-      <div className="register-header">
-        <h2>Register New Problem</h2>
-        <div className="header-actions">
-          {loadedDraftId && (
-            <button
-              onClick={handleNewDraft}
-              className="new-draft-button"
-            >
-              New Draft
-            </button>
-          )}
-          <button
-            onClick={() => setShowDrafts(!showDrafts)}
-            className="load-draft-button"
-          >
-            Load Draft {drafts.length > 0 && `(${drafts.length})`}
-          </button>
-          <button onClick={onBack} className="back-button">← Back</button>
-        </div>
-      </div>
+    <Box sx={{ maxWidth: 1100, margin: '0 auto' }}>
+      {/* Header */}
+      <Box sx={{ mb: 4 }}>
+        <Typography variant="h4" sx={{ fontWeight: 700, color: 'primary.main' }}>
+          Register New Problem
+        </Typography>
+      </Box>
 
-      {showDrafts && drafts.length > 0 && (
-        <div className="drafts-section">
-          <h3>Saved Drafts</h3>
-          <div className="drafts-list">
-            {drafts.map((draft) => (
-              <div key={draft.id} className="draft-item">
-                <div className="draft-info">
-                  <div className="draft-title">
-                    {draft.title}
-                  </div>
-                  <div className="draft-meta">
-                    {draft.platform.charAt(0).toUpperCase() + draft.platform.slice(1)} - {draft.problem_id}
-                    {draft.tags && draft.tags.length > 0 && (
-                      <span className="draft-tags">
-                        {draft.tags.map((tag, idx) => (
-                          <span key={idx} className="draft-tag">{tag}</span>
-                        ))}
-                      </span>
-                    )}
-                  </div>
-                  <div className="draft-date">
-                    {new Date(draft.created_at).toLocaleDateString()}
-                  </div>
-                </div>
-                <button
-                  onClick={() => handleLoadDraft(draft)}
-                  className="load-button"
-                >
-                  Load
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* Main Form */}
+      <Paper sx={{ p: 4, border: 1, borderColor: 'divider' }}>
+        {/* Problem Information Section */}
+        <Box sx={{ mb: 4, pb: 4, borderBottom: 2, borderColor: 'divider' }}>
+          <Typography variant="h6" sx={{ mb: 3, fontWeight: 700, color: 'primary.main' }}>
+            Problem Information
+          </Typography>
 
-      <div className="register-form">
-        <div className="form-section">
-          <h3>Problem Information</h3>
-
-          <div className="form-group">
-            <label>Problem URL</label>
-            <input
-              type="text"
+          {/* Problem URL */}
+          <Box sx={{ mb: 3 }}>
+            <TextField
+              fullWidth
+              label="Problem URL"
               placeholder="e.g., https://www.acmicpc.net/problem/1000"
               value={problemUrl}
               onChange={(e) => handleUrlChange(e.target.value)}
-              className={urlError ? 'input-error' : problemUrl && !urlError ? 'input-success' : ''}
+              error={!!urlError}
+              color={problemUrl && !urlError && problemId ? 'success' : 'primary'}
             />
-            {urlError && <div className="error-message">{urlError}</div>}
-            {problemUrl && !urlError && problemId && (
-              <div className="success-message">
-                Extracted: {platform.charAt(0).toUpperCase() + platform.slice(1)} - Problem {problemId}
-              </div>
+            {urlError && (
+              <Alert severity="error" sx={{ mt: 1 }}>
+                {urlError}
+              </Alert>
             )}
-          </div>
+            {problemUrl && !urlError && problemId && (
+              <Alert severity="success" sx={{ mt: 1 }}>
+                Extracted: {platform.charAt(0).toUpperCase() + platform.slice(1)} - Problem {problemId}
+              </Alert>
+            )}
+          </Box>
 
-          <div className="form-group">
-            <label>Platform</label>
-            <div className="platform-selector">
-              <label>
-                <input
-                  type="radio"
+          {/* Platform */}
+          <Box sx={{ mb: 3 }}>
+            <FormControl component="fieldset">
+              <FormLabel component="legend" sx={{ mb: 1, fontWeight: 600 }}>
+                Platform
+              </FormLabel>
+              <RadioGroup
+                row
+                value={platform}
+                onChange={(e) => setPlatform(e.target.value)}
+              >
+                <FormControlLabel
                   value="baekjoon"
-                  checked={platform === 'baekjoon'}
-                  onChange={(e) => setPlatform(e.target.value)}
+                  control={<Radio />}
+                  label="Baekjoon"
+                  sx={{
+                    border: 1,
+                    borderColor: platform === 'baekjoon' ? 'primary.main' : 'divider',
+                    borderRadius: 1,
+                    px: 2,
+                    py: 0.5,
+                    mr: 2,
+                  }}
                 />
-                Baekjoon
-              </label>
-              <label>
-                <input
-                  type="radio"
+                <FormControlLabel
                   value="codeforces"
-                  checked={platform === 'codeforces'}
-                  onChange={(e) => setPlatform(e.target.value)}
+                  control={<Radio />}
+                  label="Codeforces"
+                  sx={{
+                    border: 1,
+                    borderColor: platform === 'codeforces' ? 'primary.main' : 'divider',
+                    borderRadius: 1,
+                    px: 2,
+                    py: 0.5,
+                  }}
                 />
-                Codeforces
-              </label>
-            </div>
-          </div>
+              </RadioGroup>
+            </FormControl>
+          </Box>
 
-          <div className="form-group">
-            <label>Problem Number</label>
-            <input
-              type="text"
+          {/* Problem Number */}
+          <Box sx={{ mb: 3 }}>
+            <TextField
+              fullWidth
+              label="Problem Number"
               placeholder="e.g., 1000 or 1A"
               value={problemId}
               onChange={(e) => setProblemId(e.target.value)}
             />
-          </div>
+          </Box>
 
-          <div className="form-group">
-            <label>Problem Title</label>
-            <input
-              type="text"
+          {/* Problem Title */}
+          <Box sx={{ mb: 3 }}>
+            <TextField
+              fullWidth
+              label="Problem Title"
               placeholder="e.g., A+B"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
             />
-          </div>
+          </Box>
 
-          <div className="form-group">
-            <label>Tags</label>
-            <div className="tags-container">
-              <div className="tags-list">
-                {tags.map((tag, index) => (
-                  <span key={index} className="tag-chip">
-                    {tag}
-                    <button
-                      type="button"
-                      className="tag-remove"
-                      onClick={() => handleRemoveTag(tag)}
-                      aria-label={`Remove ${tag} tag`}
-                    >
-                      ×
-                    </button>
-                  </span>
-                ))}
-              </div>
-              <div className="tag-input-group">
-                <input
-                  type="text"
-                  placeholder="Add tags (e.g., graph, dp, greedy)..."
-                  value={tagInput}
-                  onChange={(e) => setTagInput(e.target.value)}
-                  onKeyPress={handleTagKeyPress}
-                  className="tag-input"
-                />
-                <button
-                  type="button"
-                  onClick={handleAddTag}
-                  className="tag-add-button"
-                  disabled={!tagInput.trim()}
-                >
-                  Add
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+          {/* Tags */}
+          <Box sx={{ mb: 3 }}>
+            <Typography variant="body2" sx={{ mb: 1, fontWeight: 600, color: 'text.secondary' }}>
+              Tags
+            </Typography>
+            <Paper
+              variant="outlined"
+              sx={{
+                p: 2,
+                mb: 2,
+                minHeight: 60,
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 1,
+                alignItems: 'center',
+              }}
+            >
+              {tags.length === 0 ? (
+                <Typography variant="body2" sx={{ color: 'text.secondary', fontStyle: 'italic' }}>
+                  No tags added yet
+                </Typography>
+              ) : (
+                tags.map((tag, index) => (
+                  <Chip
+                    key={index}
+                    label={tag}
+                    onDelete={() => handleRemoveTag(tag)}
+                    color="primary"
+                    sx={{ fontWeight: 600 }}
+                  />
+                ))
+              )}
+            </Paper>
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              <TextField
+                fullWidth
+                placeholder="Add tags (e.g., graph, dp, greedy)..."
+                value={tagInput}
+                onChange={(e) => setTagInput(e.target.value)}
+                onKeyPress={handleTagKeyPress}
+                size="small"
+              />
+              <Button
+                variant="outlined"
+                onClick={handleAddTag}
+                disabled={!tagInput.trim()}
+                sx={{ minWidth: 80 }}
+              >
+                Add
+              </Button>
+            </Box>
+          </Box>
+        </Box>
 
-        <div className="form-section">
-          <h3>Solution Code</h3>
+        {/* Solution Code Section */}
+        <Box sx={{ mb: 4, pb: 4, borderBottom: 2, borderColor: 'divider' }}>
+          <Typography variant="h6" sx={{ mb: 3, fontWeight: 700, color: 'primary.main' }}>
+            Solution Code
+          </Typography>
 
-          <div className="form-group">
-            <div className="code-header">
-              <label>Language: </label>
-              <select value={language} onChange={(e) => setLanguage(e.target.value)}>
-                <option value="python">Python</option>
-                <option value="javascript">JavaScript</option>
-                <option value="cpp">C++</option>
-                <option value="java">Java</option>
-              </select>
-              <span className="detected-info">(Auto-detected)</span>
-            </div>
+          <Box sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+              Language:
+            </Typography>
+            <Select
+              value={language}
+              onChange={(e) => setLanguage(e.target.value)}
+              size="small"
+              sx={{ minWidth: 120 }}
+            >
+              <MenuItem value="python">Python</MenuItem>
+              <MenuItem value="javascript">JavaScript</MenuItem>
+              <MenuItem value="cpp">C++</MenuItem>
+              <MenuItem value="java">Java</MenuItem>
+            </Select>
+            <Typography variant="caption" sx={{ color: 'text.secondary', fontStyle: 'italic' }}>
+              (Auto-detected)
+            </Typography>
+          </Box>
 
-            <textarea
-              className="code-textarea"
-              placeholder="Enter your solution code..."
-              value={solutionCode}
-              onChange={(e) => handleCodeChange(e.target.value)}
-              spellCheck="false"
-            />
-          </div>
-        </div>
+          <TextField
+            fullWidth
+            multiline
+            rows={15}
+            placeholder="Enter your solution code..."
+            value={solutionCode}
+            onChange={(e) => handleCodeChange(e.target.value)}
+            InputProps={{
+              sx: {
+                fontFamily: "'JetBrains Mono', 'Fira Code', 'Courier New', monospace",
+                fontSize: '0.9rem',
+              },
+            }}
+            inputProps={{
+              spellCheck: false,
+            }}
+          />
+        </Box>
 
-        <div className="form-section">
-          <h3>Input Constraints</h3>
+        {/* Input Constraints Section */}
+        <Box sx={{ mb: 4, pb: 4, borderBottom: 2, borderColor: 'divider' }}>
+          <Typography variant="h6" sx={{ mb: 3, fontWeight: 700, color: 'primary.main' }}>
+            Input Constraints
+          </Typography>
 
-          <div className="form-group">
-            <label>Constraint Description</label>
-            <textarea
-              className="constraints-textarea"
-              placeholder="e.g.,&#10;- Two integers A and B are given in the first line (0 ≤ A, B ≤ 10,000)&#10;- A and B are separated by a space&#10;- Multiple test cases may exist"
-              value={constraints}
-              onChange={(e) => setConstraints(e.target.value)}
-            />
-          </div>
-        </div>
+          <TextField
+            fullWidth
+            multiline
+            rows={8}
+            label="Constraint Description"
+            placeholder="e.g.,&#10;- Two integers A and B are given in the first line (0 ≤ A, B ≤ 10,000)&#10;- A and B are separated by a space&#10;- Multiple test cases may exist"
+            value={constraints}
+            onChange={(e) => setConstraints(e.target.value)}
+          />
+        </Box>
 
-        <div className="action-buttons">
-          <button
+        {/* Action Buttons */}
+        <Box sx={{ display: 'flex', gap: 2, mt: 4 }}>
+          <Button
+            variant="contained"
             onClick={handleSaveDraft}
             disabled={loading || executing || registering || saving}
-            className="save-draft-button"
+            sx={{
+              flex: 1,
+              py: 1.5,
+              fontWeight: 700,
+              textTransform: 'uppercase',
+              bgcolor: 'grey.700',
+              '&:hover': {
+                bgcolor: 'grey.800',
+              },
+            }}
           >
-            {saving ? 'Saving...' : 'Save Draft'}
-          </button>
+            {saving ? 'Saving...' : 'Save'}
+          </Button>
+        </Box>
 
-          <button
-            onClick={handleGenerateScript}
-            disabled={loading || executing || registering || saving}
-            className="generate-button"
-          >
-            {loading ? 'Generating...' : 'Generate Script'}
-          </button>
-        </div>
-
+        {/* Progress Message */}
         {progress && (
-          <div className="progress-message">
+          <Alert severity="info" sx={{ mt: 2 }}>
             {progress}
-          </div>
+          </Alert>
         )}
 
+        {/* Generator Code Section */}
         {generatorCode && (
-          <div className="generator-code-section">
-            <h3>Generated Test Case Generator Script</h3>
-            <pre className="generator-code">{generatorCode}</pre>
+          <Box sx={{ mt: 4, pt: 4, borderTop: 1, borderColor: 'divider' }}>
+            <Typography variant="h6" sx={{ mb: 2, fontWeight: 700, color: 'primary.main' }}>
+              Generated Test Case Generator Script
+            </Typography>
+            <Paper
+              variant="outlined"
+              sx={{
+                p: 2,
+                maxHeight: 400,
+                overflow: 'auto',
+                bgcolor: 'grey.50',
+              }}
+            >
+              <Box
+                component="pre"
+                sx={{
+                  fontFamily: "'JetBrains Mono', 'Fira Code', 'Courier New', monospace",
+                  fontSize: '0.85rem',
+                  margin: 0,
+                  whiteSpace: 'pre-wrap',
+                  wordWrap: 'break-word',
+                }}
+              >
+                {generatorCode}
+              </Box>
+            </Paper>
 
-            <div className="execute-section">
-              <div className="execute-controls">
-                <label htmlFor="numTestCases">Number of test cases to generate:</label>
-                <input
-                  id="numTestCases"
+            <Box sx={{ mt: 3, pt: 2, borderTop: 1, borderColor: 'divider' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
+                <Typography variant="body2" sx={{ fontWeight: 600, whiteSpace: 'nowrap' }}>
+                  Number of test cases to generate:
+                </Typography>
+                <TextField
                   type="number"
-                  min="1"
-                  max="1000"
                   value={numTestCases}
                   onChange={(e) => setNumTestCases(parseInt(e.target.value) || 1)}
-                  className="num-cases-input"
+                  inputProps={{ min: 1, max: 1000 }}
+                  size="small"
+                  sx={{ width: 120 }}
                 />
-                <button
+                <Button
+                  variant="contained"
+                  color="success"
                   onClick={handleExecuteScript}
                   disabled={loading || executing || registering || saving}
-                  className="execute-button"
+                  sx={{ fontWeight: 700, textTransform: 'uppercase' }}
                 >
                   {executing ? 'Executing...' : 'Execute Script'}
-                </button>
-              </div>
-              <div className="distribution-info">
+                </Button>
+              </Box>
+              <Alert severity="info" icon={false}>
                 Distribution: 50% small ({Math.floor(numTestCases * 0.5)}),
                 30% medium ({Math.floor(numTestCases * 0.3)}),
                 20% large ({numTestCases - Math.floor(numTestCases * 0.5) - Math.floor(numTestCases * 0.3)})
-              </div>
-            </div>
-          </div>
+              </Alert>
+            </Box>
+          </Box>
         )}
 
+        {/* Test Cases Preview */}
         {testCases && (
-          <div className="test-cases-preview">
-            <h3>Test Cases Preview ({testCases.length} cases)</h3>
-            <div className="preview-list">
+          <Box sx={{ mt: 4, pt: 4, borderTop: 1, borderColor: 'divider' }}>
+            <Typography variant="h6" sx={{ mb: 2, fontWeight: 700 }}>
+              Test Cases Preview ({testCases.length} cases)
+            </Typography>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mb: 3 }}>
               {testCases.slice(0, 10).map((tc, index) => (
-                <div key={index} className="preview-item">
-                  <span className="preview-index">#{index + 1}</span>
-                  <pre className="preview-input">{tc.input}</pre>
-                </div>
+                <Paper
+                  key={index}
+                  variant="outlined"
+                  sx={{
+                    p: 2,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 2,
+                    '&:hover': {
+                      bgcolor: 'action.hover',
+                      borderColor: 'primary.main',
+                    },
+                  }}
+                >
+                  <Chip
+                    label={`#${index + 1}`}
+                    color="primary"
+                    variant="outlined"
+                    sx={{ minWidth: 60, fontWeight: 700 }}
+                  />
+                  <Box
+                    component="pre"
+                    sx={{
+                      flex: 1,
+                      margin: 0,
+                      p: 1,
+                      bgcolor: 'grey.50',
+                      border: 1,
+                      borderColor: 'divider',
+                      borderRadius: 1,
+                      fontFamily: "'JetBrains Mono', 'Fira Code', 'Courier New', monospace",
+                      fontSize: '0.8rem',
+                      whiteSpace: 'pre-wrap',
+                      wordWrap: 'break-word',
+                    }}
+                  >
+                    {tc.input}
+                  </Box>
+                </Paper>
               ))}
               {testCases.length > 10 && (
-                <div className="preview-more">
+                <Typography variant="body2" sx={{ textAlign: 'center', color: 'text.secondary', fontStyle: 'italic', py: 1 }}>
                   ... and {testCases.length - 10} more
-                </div>
+                </Typography>
               )}
-            </div>
+            </Box>
 
-            <button
+            <Button
+              fullWidth
+              variant="contained"
+              color="success"
               onClick={handleRegister}
               disabled={loading || executing || registering || saving}
-              className="register-button"
+              sx={{ py: 1.5, fontWeight: 700, textTransform: 'uppercase' }}
             >
               {registering ? 'Registering...' : 'Register Problem'}
-            </button>
-          </div>
+            </Button>
+          </Box>
         )}
-      </div>
-    </div>
+      </Paper>
+    </Box>
   );
 }
 

@@ -74,9 +74,9 @@
 .drafts-section {
   margin-bottom: var(--spacing-xl);
   padding: var(--spacing-xl);
-  background: var(--bg-elevated);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-lg);
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
   border: 1px solid var(--border-color);
   animation: slideIn var(--transition-base);
 }
@@ -103,16 +103,18 @@
   justify-content: space-between;
   align-items: center;
   padding: var(--spacing-lg);
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border-color);
+  border-radius: 0;
   transition: all var(--transition-base);
 }
 
 .draft-item:hover {
   border-color: var(--primary-purple);
   transform: translateX(4px);
-  box-shadow: var(--shadow-sm);
+  box-shadow: none;
+  background: rgba(102, 126, 234, 0.05);
 }
 
 .draft-info {
@@ -176,10 +178,10 @@
 }
 
 .register-form {
-  background: var(--bg-elevated);
+  background: transparent;
   padding: var(--spacing-2xl);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-lg);
+  border-radius: 0;
+  box-shadow: none;
   border: 1px solid var(--border-color);
 }
 
@@ -227,7 +229,7 @@
   width: 100%;
   padding: var(--spacing-md) var(--spacing-lg);
   font-size: 1rem;
-  background: var(--bg-card);
+  background: transparent;
   color: var(--text-primary);
   border: 2px solid var(--border-color);
   border-radius: var(--radius-md);
@@ -242,8 +244,8 @@
 
 .form-group input[type="text"]:focus {
   border-color: var(--primary-purple);
-  box-shadow: var(--glow-purple);
-  background: var(--bg-elevated);
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+  background: transparent;
 }
 
 .form-group input.input-error {
@@ -292,16 +294,16 @@
   font-weight: 500;
   cursor: pointer;
   padding: var(--spacing-sm) var(--spacing-lg);
-  background: var(--bg-card);
+  background: transparent;
   border-radius: var(--radius-md);
-  border: 2px solid transparent;
+  border: 2px solid var(--border-color);
   transition: all var(--transition-base);
   color: var(--text-secondary);
 }
 
 .platform-selector label:hover {
   border-color: var(--primary-purple);
-  background: var(--bg-elevated);
+  background: rgba(102, 126, 234, 0.05);
   color: var(--text-primary);
 }
 
@@ -331,7 +333,7 @@
   font-size: 0.9rem;
   border: 2px solid var(--border-color);
   border-radius: var(--radius-md);
-  background: var(--bg-card);
+  background: transparent;
   color: var(--text-primary);
   cursor: pointer;
   outline: none;
@@ -340,7 +342,7 @@
 
 .code-header select:focus {
   border-color: var(--primary-purple);
-  box-shadow: var(--glow-purple);
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
 }
 
 .detected-info {
@@ -356,7 +358,7 @@
   font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
   font-size: 0.9rem;
   line-height: 1.6;
-  background: var(--bg-card);
+  background: transparent;
   color: var(--text-primary);
   border: 2px solid var(--border-color);
   border-radius: var(--radius-lg);
@@ -383,8 +385,8 @@
 .code-textarea:focus,
 .constraints-textarea:focus {
   border-color: var(--primary-purple);
-  box-shadow: var(--glow-purple);
-  background: var(--bg-elevated);
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+  background: transparent;
 }
 
 .tags-container {
@@ -399,7 +401,7 @@
   gap: var(--spacing-sm);
   min-height: 40px;
   padding: var(--spacing-md);
-  background: var(--bg-card);
+  background: transparent;
   border: 2px solid var(--border-color);
   border-radius: var(--radius-md);
   transition: all var(--transition-base);
@@ -468,7 +470,7 @@
   flex: 1;
   padding: var(--spacing-md) var(--spacing-lg);
   font-size: 0.9rem;
-  background: var(--bg-card);
+  background: transparent;
   color: var(--text-primary);
   border: 2px solid var(--border-color);
   border-radius: var(--radius-md);
@@ -482,13 +484,13 @@
 
 .tag-input:focus {
   border-color: var(--primary-purple);
-  box-shadow: var(--glow-purple);
-  background: var(--bg-elevated);
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+  background: transparent;
 }
 
 .tag-add-button {
   padding: var(--spacing-md) var(--spacing-xl);
-  background: var(--bg-card);
+  background: transparent;
   color: var(--text-primary);
   border: 2px solid var(--border-color);
   border-radius: var(--radius-md);
@@ -502,11 +504,11 @@
   color: white;
   border-color: var(--primary-purple);
   transform: translateY(-1px);
-  box-shadow: var(--shadow-sm);
+  box-shadow: none;
 }
 
 .tag-add-button:disabled {
-  background: var(--bg-card);
+  background: transparent;
   color: var(--text-muted);
   cursor: not-allowed;
   opacity: 0.5;
@@ -614,10 +616,10 @@
 .test-cases-preview {
   margin-top: var(--spacing-xl);
   padding: var(--spacing-xl);
-  background: var(--bg-card);
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--border-color);
-  box-shadow: var(--shadow-sm);
+  background: transparent;
+  border-radius: 0;
+  border-top: 1px solid var(--border-color);
+  box-shadow: none;
 }
 
 .test-cases-preview h3 {
@@ -638,14 +640,14 @@
   align-items: center;
   gap: var(--spacing-md);
   padding: var(--spacing-md);
-  background: var(--bg-elevated);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-color);
+  background: transparent;
+  border-radius: 0;
+  border-bottom: 1px solid var(--border-color);
   transition: all var(--transition-base);
 }
 
 .preview-item:hover {
-  background: var(--bg-card);
+  background: rgba(102, 126, 234, 0.05);
   border-color: var(--primary-purple);
   transform: translateX(4px);
 }
@@ -656,7 +658,7 @@
   min-width: 50px;
   text-align: center;
   padding: var(--spacing-xs) var(--spacing-sm);
-  background: var(--bg-card);
+  background: transparent;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-color);
 }
@@ -665,7 +667,7 @@
   flex: 1;
   margin: 0;
   padding: var(--spacing-sm);
-  background: var(--bg-main);
+  background: rgba(255, 255, 255, 0.02);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
@@ -688,10 +690,10 @@
 .generator-code-section {
   margin-top: var(--spacing-xl);
   padding: var(--spacing-xl);
-  background: var(--bg-card);
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--border-color);
-  box-shadow: var(--shadow-md);
+  background: transparent;
+  border-radius: 0;
+  border-top: 1px solid var(--border-color);
+  box-shadow: none;
 }
 
 .generator-code-section h3 {
@@ -710,7 +712,7 @@
   max-height: 400px;
   overflow: auto;
   padding: var(--spacing-lg);
-  background: var(--bg-main);
+  background: rgba(255, 255, 255, 0.02);
   border: 2px solid var(--border-color);
   border-radius: var(--radius-md);
   font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
@@ -719,7 +721,7 @@
   color: var(--text-primary);
   white-space: pre-wrap;
   word-wrap: break-word;
-  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.3);
+  box-shadow: none;
 }
 
 .generator-code::-webkit-scrollbar {
@@ -744,9 +746,9 @@
 .execute-section {
   margin-top: var(--spacing-xl);
   padding: var(--spacing-lg);
-  background: var(--bg-elevated);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-color);
+  background: transparent;
+  border-radius: 0;
+  border-top: 1px solid var(--border-color);
 }
 
 .execute-controls {
@@ -767,7 +769,7 @@
   padding: var(--spacing-sm) var(--spacing-md);
   font-size: 1rem;
   font-weight: 600;
-  background: var(--bg-card);
+  background: transparent;
   color: var(--text-primary);
   border: 2px solid var(--border-color);
   border-radius: var(--radius-md);
@@ -777,8 +779,8 @@
 
 .num-cases-input:focus {
   border-color: var(--primary-purple);
-  box-shadow: var(--glow-purple);
-  background: var(--bg-elevated);
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+  background: transparent;
 }
 
 .execute-button {

@@ -2,16 +2,31 @@ services:
   mysql:
     image: mysql:8.0
     container_name: algoitny-mysql
+    env_file:
+      - ./backend/.env
     environment:
-      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-rootpassword}
-      MYSQL_DATABASE: ${DB_NAME:-algoitny}
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME}
     ports:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
       - ./mysql-init:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_PASSWORD:-rootpassword}"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - algoitny-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: algoitny-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -23,22 +38,12 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: algoitny-migration-init
-    environment:
-      SECRET_KEY: ${SECRET_KEY:-django-insecure-dev-key-change-in-production}
-      DEBUG: ${DEBUG:-True}
-      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,backend}
-      DB_HOST: mysql
-      DB_PORT: 3306
-      DB_USER: ${DB_USER:-root}
-      DB_PASSWORD: ${DB_PASSWORD:-rootpassword}
-      DB_NAME: ${DB_NAME:-algoitny}
-      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-your-google-client-id}
-      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-your-google-client-secret}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-your-gemini-api-key}
-      CODE_EXECUTION_TIMEOUT: ${CODE_EXECUTION_TIMEOUT:-5}
-      USE_SECRETS_MANAGER: ${USE_SECRETS_MANAGER:-false}
+    env_file:
+      - ./backend/.env
     depends_on:
       mysql:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     volumes:
       - ./backend:/app
@@ -53,24 +58,14 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: algoitny-backend
-    environment:
-      SECRET_KEY: ${SECRET_KEY:-django-insecure-dev-key-change-in-production}
-      DEBUG: ${DEBUG:-True}
-      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,backend}
-      DB_HOST: mysql
-      DB_PORT: 3306
-      DB_USER: ${DB_USER:-root}
-      DB_PASSWORD: ${DB_PASSWORD:-rootpassword}
-      DB_NAME: ${DB_NAME:-algoitny}
-      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-your-google-client-id}
-      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-your-google-client-secret}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-your-gemini-api-key}
-      CODE_EXECUTION_TIMEOUT: ${CODE_EXECUTION_TIMEOUT:-5}
-      USE_SECRETS_MANAGER: ${USE_SECRETS_MANAGER:-false}
+    env_file:
+      - ./backend/.env
     ports:
       - "8000:8000"
     depends_on:
       mysql:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       migration-init:
         condition: service_completed_successfully
@@ -79,15 +74,35 @@ services:
       - /app/.venv
     networks:
       - algoitny-network
-    command: sh -c "python manage.py runserver 0.0.0.0:8000"
+    command: sh -c "gunicorn config.asgi:application -c gunicorn.conf.py"
+
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: algoitny-celery-worker
+    env_file:
+      - ./backend/.env
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migration-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./backend:/app
+      - /app/.venv
+    networks:
+      - algoitny-network
+    command: sh -c "celery -A config worker -l info"
 
   frontend:
     image: node:20-alpine
     container_name: algoitny-frontend
     working_dir: /app
-    environment:
-      - VITE_API_URL=http://localhost:8000/api
-      - VITE_GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-your-google-client-id}
+    env_file:
+      - ./frontend/.env
     ports:
       - "5173:5173"
     depends_on:

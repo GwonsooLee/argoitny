@@ -35,7 +35,7 @@ const refreshAccessToken = async () => {
  * API Client with automatic token refresh
  */
 export const apiClient = async (endpoint, options = {}) => {
-  const { requireAuth = false, ...fetchOptions } = options;
+  const { requireAuth = false, timeout = 30000, ...fetchOptions } = options;
 
   // Build headers
   const headers = {
@@ -51,31 +51,52 @@ export const apiClient = async (endpoint, options = {}) => {
     }
   }
 
-  // Make request
-  let response = await fetch(buildApiUrl(endpoint), {
-    ...fetchOptions,
-    headers,
-  });
+  // Create AbortController for timeout
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
 
-  // If 401 and we have a refresh token, try to refresh
-  if (response.status === 401 && requireAuth && getRefreshToken()) {
-    try {
-      const newToken = await refreshAccessToken();
-      headers['Authorization'] = `Bearer ${newToken}`;
+  try {
+    // Make request
+    let response = await fetch(buildApiUrl(endpoint), {
+      ...fetchOptions,
+      headers,
+      signal: controller.signal,
+    });
 
-      // Retry request with new token
-      response = await fetch(buildApiUrl(endpoint), {
-        ...fetchOptions,
-        headers,
-      });
-    } catch (error) {
-      console.error('Failed to refresh token:', error);
-      removeTokens();
-      throw error;
+    clearTimeout(timeoutId);
+
+    // If 401 and we have a refresh token, try to refresh
+    if (response.status === 401 && requireAuth && getRefreshToken()) {
+      try {
+        const newToken = await refreshAccessToken();
+        headers['Authorization'] = `Bearer ${newToken}`;
+
+        // Retry request with new token
+        const retryController = new AbortController();
+        const retryTimeoutId = setTimeout(() => retryController.abort(), timeout);
+
+        response = await fetch(buildApiUrl(endpoint), {
+          ...fetchOptions,
+          headers,
+          signal: retryController.signal,
+        });
+
+        clearTimeout(retryTimeoutId);
+      } catch (error) {
+        console.error('Failed to refresh token:', error);
+        removeTokens();
+        throw error;
+      }
     }
-  }
 
-  return response;
+    return response;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      throw new Error('Request timeout');
+    }
+    throw error;
+  }
 };
 
 /**

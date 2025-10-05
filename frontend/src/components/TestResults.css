@@ -1,10 +1,10 @@
 .test-results {
   margin-top: var(--spacing-xl);
   padding: var(--spacing-xl);
-  background: var(--bg-elevated);
-  border-radius: var(--radius-xl);
-  border: 1px solid var(--border-color);
-  box-shadow: var(--shadow-md);
+  background: transparent;
+  border-radius: 0;
+  border-top: 2px solid var(--border-color);
+  box-shadow: none;
 }
 
 .test-results h3 {
@@ -25,12 +25,12 @@
   gap: var(--spacing-2xl);
   margin-bottom: var(--spacing-xl);
   padding: var(--spacing-xl);
-  background: var(--bg-card);
-  border-radius: var(--radius-lg);
+  background: transparent;
+  border-radius: 0;
   font-size: 1.1rem;
   font-weight: 700;
-  box-shadow: var(--shadow-sm);
-  border: 1px solid var(--border-color);
+  box-shadow: none;
+  border-bottom: 1px solid var(--border-color);
 }
 
 .summary > span {
@@ -64,16 +64,17 @@
 .test-case {
   margin-bottom: var(--spacing-lg);
   padding: var(--spacing-lg);
-  background: var(--bg-card);
-  border-radius: var(--radius-lg);
+  background: transparent;
+  border-radius: 0;
   border-left: 4px solid var(--error-red);
-  box-shadow: var(--shadow-sm);
+  box-shadow: none;
   transition: all var(--transition-base);
 }
 
 .test-case:hover {
-  box-shadow: var(--shadow-md);
+  box-shadow: none;
   transform: translateX(4px);
+  background: rgba(250, 112, 154, 0.05);
 }
 
 .test-case-header {
@@ -111,7 +112,7 @@
 .io-section pre {
   margin: 0;
   padding: var(--spacing-md);
-  background: var(--bg-elevated);
+  background: rgba(255, 255, 255, 0.02);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
@@ -130,7 +131,7 @@
 }
 
 .io-section.error pre {
-  background: var(--bg-card);
+  background: rgba(250, 112, 154, 0.05);
   border-color: var(--error-red);
   color: var(--error-red);
 }
@@ -146,10 +147,10 @@
   font-size: 1.5rem;
   color: var(--success-green);
   font-weight: 700;
-  background: var(--bg-card);
+  background: rgba(67, 233, 123, 0.05);
   border-radius: var(--radius-xl);
   border: 2px solid var(--success-green);
-  box-shadow: var(--shadow-md), 0 0 30px rgba(67, 233, 123, 0.2);
+  box-shadow: none;
   position: relative;
   overflow: hidden;
 }

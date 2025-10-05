@@ -4,16 +4,19 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from django.db import transaction
-from ..models import Problem, TestCase
+from ..models import Problem, TestCase, ScriptGenerationJob
 from ..services.gemini_service import GeminiService
 from ..services.code_executor import CodeExecutor
 from ..services.test_case_generator import TestCaseGenerator
+from ..services.code_execution_service import CodeExecutionService
 from ..serializers import (
     ProblemRegisterSerializer,
     GenerateTestCasesSerializer,
     ProblemSerializer,
-    ProblemSaveSerializer
+    ProblemSaveSerializer,
+    ScriptGenerationJobSerializer
 )
+from ..tasks import generate_script_task
 
 
 class GenerateTestCasesView(APIView):
@@ -22,20 +25,25 @@ class GenerateTestCasesView(APIView):
 
     def post(self, request):
         """
-        Generate Python code that will generate test cases using Gemini AI
+        Enqueue a job to generate Python code that will generate test cases using Gemini AI
 
         Request body:
             {
                 "platform": "baekjoon",
                 "problem_id": "1000",
                 "title": "A+B",
+                "problem_url": "https://www.acmicpc.net/problem/1000",  # Optional
+                "tags": ["math", "implementation"],  # Optional
+                "solution_code": "a, b = map(int, input().split())\nprint(a + b)",  # Optional
                 "language": "python",
                 "constraints": "1 <= a, b <= 10"
             }
 
         Returns:
             {
-                "generator_code": "def generate_test_cases():\n    ..."
+                "job_id": 1,
+                "status": "PENDING",
+                "message": "Job created and queued for processing"
             }
         """
         serializer = GenerateTestCasesSerializer(data=request.data)
@@ -46,26 +54,35 @@ class GenerateTestCasesView(APIView):
             )
 
         try:
-            gemini_service = GeminiService()
-            generator_code = gemini_service.generate_test_case_generator_code(
-                serializer.validated_data
+            # Create a job record
+            job = ScriptGenerationJob.objects.create(
+                platform=serializer.validated_data['platform'],
+                problem_id=serializer.validated_data['problem_id'],
+                title=serializer.validated_data['title'],
+                problem_url=request.data.get('problem_url', ''),
+                tags=request.data.get('tags', []),
+                solution_code=serializer.validated_data.get('solution_code', ''),
+                language=serializer.validated_data['language'],
+                constraints=serializer.validated_data['constraints'],
+                status='PENDING'
             )
 
-            # Validate the generated code
-            TestCaseGenerator.validate_code(generator_code)
+            # Enqueue the job to Celery
+            task = generate_script_task.delay(job.id)
+
+            # Update job with task ID
+            job.celery_task_id = task.id
+            job.save()
 
             return Response({
-                'generator_code': generator_code
-            }, status=status.HTTP_200_OK)
+                'job_id': job.id,
+                'status': job.status,
+                'message': 'Job created and queued for processing'
+            }, status=status.HTTP_202_ACCEPTED)
 
-        except ValueError as e:
-            return Response(
-                {'error': str(e)},
-                status=status.HTTP_400_BAD_REQUEST
-            )
         except Exception as e:
             return Response(
-                {'error': f'Failed to generate test case generator: {str(e)}'},
+                {'error': f'Failed to create job: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
@@ -135,20 +152,37 @@ class RegisterProblemView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            # Step 1: Generate test case generator code using Gemini
-            gemini_service = GeminiService()
-            generator_code = gemini_service.generate_test_case_generator_code(
-                serializer.validated_data
+            # Get test case inputs from request (generated from job)
+            test_case_inputs = request.data.get('test_case_inputs', [])
+            if not test_case_inputs:
+                return Response(
+                    {'error': 'test_case_inputs is required'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Use CodeExecutionService (Judge0 or local based on config)
+            test_results = CodeExecutionService.execute_with_test_cases(
+                code=solution_code,
+                language=language,
+                test_inputs=test_case_inputs
             )
 
-            # Step 2: Execute the generator code locally to get test inputs
-            # and then run solution to get outputs
-            test_cases_with_outputs = TestCaseGenerator.generate_test_cases_with_outputs(
-                generator_code=generator_code,
-                solution_code=solution_code,
-                language=language,
-                code_executor=CodeExecutor
-            )
+            # Check if all test cases executed successfully
+            failed_tests = [r for r in test_results if r['status'] == 'error']
+            if failed_tests:
+                return Response(
+                    {
+                        'error': 'Some test cases failed to execute',
+                        'failed_tests': failed_tests
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Prepare test cases with outputs
+            test_cases_with_outputs = [
+                {'input': r['input'], 'output': r['output']}
+                for r in test_results
+            ]
 
             # Save problem and test cases
             with transaction.atomic():
@@ -321,6 +355,110 @@ class DraftProblemsView(APIView):
         except Exception as e:
             return Response(
                 {'error': f'Failed to fetch drafts: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class JobListView(APIView):
+    """List all script generation jobs"""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        """
+        Get all script generation jobs, ordered by creation date (newest first)
+
+        Query params:
+            status: Filter by status (PENDING, PROCESSING, COMPLETED, FAILED)
+
+        Returns:
+            {
+                "jobs": [
+                    {
+                        "id": 1,
+                        "platform": "baekjoon",
+                        "problem_id": "1000",
+                        "title": "A+B",
+                        "status": "COMPLETED",
+                        "generator_code": "...",
+                        "created_at": "...",
+                        ...
+                    },
+                    ...
+                ]
+            }
+        """
+        try:
+            jobs = ScriptGenerationJob.objects.all()
+
+            # Filter by status if provided
+            status_filter = request.query_params.get('status')
+            if status_filter:
+                jobs = jobs.filter(status=status_filter.upper())
+
+            serializer = ScriptGenerationJobSerializer(jobs, many=True)
+
+            return Response({
+                'jobs': serializer.data
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to fetch jobs: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class JobDetailView(APIView):
+    """Get details of a specific job"""
+    permission_classes = [AllowAny]
+
+    def get(self, request, job_id):
+        """
+        Get details of a specific job with generated test cases
+
+        Returns:
+            {
+                "id": 1,
+                "platform": "baekjoon",
+                "problem_id": "1000",
+                "title": "A+B",
+                "status": "COMPLETED",
+                "generator_code": "...",
+                "test_cases": ["1 2", "3 4", ...],
+                "error_message": null,
+                "created_at": "...",
+                "updated_at": "..."
+            }
+        """
+        try:
+            job = ScriptGenerationJob.objects.get(id=job_id)
+            serializer = ScriptGenerationJobSerializer(job)
+            response_data = serializer.data
+
+            # If job is completed and has generator code, execute it to get test cases
+            if job.status == 'COMPLETED' and job.generator_code:
+                try:
+                    test_cases = TestCaseGenerator.execute_generator_code(
+                        code=job.generator_code,
+                        num_cases=20
+                    )
+                    response_data['test_cases'] = test_cases
+                except Exception as e:
+                    response_data['test_cases'] = []
+                    response_data['test_case_error'] = str(e)
+            else:
+                response_data['test_cases'] = []
+
+            return Response(response_data, status=status.HTTP_200_OK)
+
+        except ScriptGenerationJob.DoesNotExist:
+            return Response(
+                {'error': 'Job not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to fetch job: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Box, Typography, CircularProgress } from '@mui/material';
 import { saveTokens, saveUser } from '../utils/auth';
 import { apiPost } from '../utils/api-client';
 import { API_ENDPOINTS } from '../config/api';
@@ -35,7 +36,9 @@ const GoogleLogin = ({ onLoginSuccess }) => {
     };
 
     return () => {
-      document.body.removeChild(script);
+      if (document.body.contains(script)) {
+        document.body.removeChild(script);
+      }
     };
   }, []);
 
@@ -73,11 +76,20 @@ const GoogleLogin = ({ onLoginSuccess }) => {
   };
 
   return (
-    <div className="google-login-container">
+    <Box sx={{ textAlign: 'center', py: 2 }}>
       <div id="google-signin-button"></div>
-      {isLoading && <p className="loading-text">Signing in...</p>}
-      {error && <p className="error-text">{error}</p>}
-    </div>
+      {isLoading && (
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', mt: 2, gap: 1 }}>
+          <CircularProgress size={20} sx={{ color: 'white' }} />
+          <Typography sx={{ color: 'white' }}>Signing in...</Typography>
+        </Box>
+      )}
+      {error && (
+        <Typography sx={{ color: 'error.light', mt: 2 }}>
+          {error}
+        </Typography>
+      )}
+    </Box>
   );
 };
 

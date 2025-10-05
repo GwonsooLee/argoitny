@@ -1,8 +1,22 @@
 import { useState, useEffect } from 'react';
+import {
+  Box,
+  Typography,
+  TextField,
+  Button,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel,
+  Checkbox,
+  FormControlLabel,
+  Paper,
+  CircularProgress
+} from '@mui/material';
+import { PlayArrow as PlayArrowIcon } from '@mui/icons-material';
 import { apiPost } from '../utils/api-client';
 import { API_ENDPOINTS } from '../config/api';
 import { getUser } from '../utils/auth';
-import './CodeEditor.css';
 
 // Language detection patterns
 const languagePatterns = {
@@ -87,62 +101,133 @@ function CodeEditor({ problemId, onTestResults }) {
   };
 
   return (
-    <div className="code-editor">
-      <div className="editor-header">
-        <h3>Code Editor</h3>
-        <div className="language-selector">
-          <label>Language: </label>
-          <select value={language} onChange={(e) => setLanguage(e.target.value)}>
-            <option value="python">Python</option>
-            <option value="javascript">JavaScript</option>
-            <option value="cpp">C++</option>
-            <option value="java">Java</option>
-          </select>
-          <span className="detected-language">
+    <Paper sx={{ p: 3, mb: 3 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+        <Typography variant="h6" sx={{ color: 'white', fontWeight: 600 }}>
+          Code Editor
+        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <FormControl size="small" sx={{ minWidth: 150 }}>
+            <InputLabel sx={{ color: 'rgba(255, 255, 255, 0.7)' }}>Language</InputLabel>
+            <Select
+              value={language}
+              onChange={(e) => setLanguage(e.target.value)}
+              label="Language"
+              sx={{
+                color: 'white',
+                '.MuiOutlinedInput-notchedOutline': {
+                  borderColor: 'rgba(255, 255, 255, 0.2)',
+                },
+                '&:hover .MuiOutlinedInput-notchedOutline': {
+                  borderColor: 'rgba(255, 255, 255, 0.3)',
+                },
+                '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
+                  borderColor: 'primary.main',
+                },
+              }}
+            >
+              <MenuItem value="python">Python</MenuItem>
+              <MenuItem value="javascript">JavaScript</MenuItem>
+              <MenuItem value="cpp">C++</MenuItem>
+              <MenuItem value="java">Java</MenuItem>
+            </Select>
+          </FormControl>
+          <Typography variant="caption" sx={{ color: 'rgba(255, 255, 255, 0.5)' }}>
             (Auto-detected)
-          </span>
-        </div>
-      </div>
+          </Typography>
+        </Box>
+      </Box>
 
-      <textarea
-        className="code-input"
+      <TextField
+        fullWidth
+        multiline
+        rows={15}
         value={code}
         onChange={(e) => setCode(e.target.value)}
         placeholder="Enter your code here..."
-        spellCheck="false"
+        sx={{
+          mb: 2,
+          '& .MuiOutlinedInput-root': {
+            fontFamily: 'monospace',
+            fontSize: '0.9rem',
+            color: 'white',
+            backgroundColor: 'rgba(0, 0, 0, 0.3)',
+            '& fieldset': {
+              borderColor: 'rgba(255, 255, 255, 0.2)',
+            },
+            '&:hover fieldset': {
+              borderColor: 'rgba(255, 255, 255, 0.3)',
+            },
+            '&.Mui-focused fieldset': {
+              borderColor: 'primary.main',
+            }
+          }
+        }}
+        inputProps={{
+          spellCheck: false,
+          style: { fontFamily: 'monospace' }
+        }}
       />
 
-      <div className="user-settings">
-        <div className="user-id-input">
-          <label>User ID (Optional):</label>
-          <input
-            type="text"
-            placeholder="Anonymous"
-            value={userId}
-            onChange={(e) => setUserId(e.target.value)}
-          />
-        </div>
-
-        <div className="code-public-toggle">
-          <label>
-            <input
-              type="checkbox"
+      <Box sx={{ display: 'flex', gap: 2, mb: 2, alignItems: 'center' }}>
+        <TextField
+          label="User ID (Optional)"
+          placeholder="Anonymous"
+          value={userId}
+          onChange={(e) => setUserId(e.target.value)}
+          size="small"
+          sx={{
+            flexGrow: 1,
+            '& .MuiOutlinedInput-root': {
+              color: 'white',
+              '& fieldset': {
+                borderColor: 'rgba(255, 255, 255, 0.2)',
+              },
+              '&:hover fieldset': {
+                borderColor: 'rgba(255, 255, 255, 0.3)',
+              },
+              '&.Mui-focused fieldset': {
+                borderColor: 'primary.main',
+              }
+            },
+            '& .MuiInputLabel-root': {
+              color: 'rgba(255, 255, 255, 0.7)',
+            }
+          }}
+        />
+        <FormControlLabel
+          control={
+            <Checkbox
               checked={isCodePublic}
               onChange={(e) => setIsCodePublic(e.target.checked)}
+              sx={{
+                color: 'white',
+                '&.Mui-checked': {
+                  color: 'primary.main',
+                }
+              }}
             />
-            Make code public
-          </label>
-        </div>
-      </div>
+          }
+          label="Make code public"
+          sx={{ color: 'white' }}
+        />
+      </Box>
 
-      <button
-        className="execute-button"
+      <Button
+        fullWidth
+        variant="contained"
+        size="large"
         onClick={handleExecute}
         disabled={loading}
+        startIcon={loading ? <CircularProgress size={20} /> : <PlayArrowIcon />}
+        sx={{
+          backgroundColor: 'primary.main',
+          '&:hover': { backgroundColor: 'primary.dark' }
+        }}
       >
         {loading ? 'Executing...' : 'Validate Test Cases'}
-      </button>
-    </div>
+      </Button>
+    </Paper>
   );
 }
 
