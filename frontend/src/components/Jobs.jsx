@@ -1,7 +1,25 @@
 import { useState, useEffect } from 'react';
+import {
+  Box,
+  Typography,
+  Button,
+  Tabs,
+  Tab,
+  Card,
+  CardContent,
+  Chip,
+  CircularProgress,
+  IconButton,
+  Paper
+} from '@mui/material';
+import {
+  ArrowBack as ArrowBackIcon,
+  PlayArrow as PlayArrowIcon,
+  Edit as EditIcon,
+  Visibility as VisibilityIcon
+} from '@mui/icons-material';
 import { apiGet, apiPost } from '../utils/api-client';
 import { API_ENDPOINTS } from '../config/api';
-import './Jobs.css';
 
 function Jobs({ onBack }) {
   const [jobs, setJobs] = useState([]);
@@ -126,172 +144,299 @@ function Jobs({ onBack }) {
     }
   };
 
-  const getStatusBadge = (status) => {
-    const statusClasses = {
-      PENDING: 'status-pending',
-      PROCESSING: 'status-processing',
-      COMPLETED: 'status-completed',
-      FAILED: 'status-failed'
-    };
-
-    return <span className={`status-badge ${statusClasses[status]}`}>{status}</span>;
-  };
-
   if (loading) {
     return (
-      <div className="jobs-container">
-        <div className="jobs-header">
-          <h2>Jobs & Drafts</h2>
-          <button onClick={onBack} className="back-button">← Back</button>
-        </div>
-        <div className="loading">Loading...</div>
-      </div>
+      <Box sx={{ px: { xs: 2, sm: 3 } }}>
+        <Box sx={{
+          display: 'flex',
+          flexDirection: { xs: 'column', sm: 'row' },
+          justifyContent: 'space-between',
+          alignItems: { xs: 'flex-start', sm: 'center' },
+          mb: 3,
+          gap: 2
+        }}>
+          <Typography variant="h4" sx={{
+            fontWeight: 600,
+            fontSize: { xs: '1.5rem', sm: '1.75rem', md: '2.125rem' }
+          }}>
+            Jobs & Drafts
+          </Typography>
+          <Button
+            variant="outlined"
+            startIcon={<ArrowBackIcon />}
+            onClick={onBack}
+            sx={{ fontSize: { xs: '0.813rem', sm: '0.875rem' } }}
+          >
+            Back
+          </Button>
+        </Box>
+        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', py: 8 }}>
+          <CircularProgress />
+        </Box>
+      </Box>
     );
   }
 
   return (
-    <div className="jobs-container">
-      <div className="jobs-header">
-        <h2>Jobs & Drafts</h2>
-        <button onClick={onBack} className="back-button">← Back</button>
-      </div>
+    <Box sx={{ px: { xs: 2, sm: 3 } }}>
+      <Box sx={{
+        display: 'flex',
+        flexDirection: { xs: 'column', sm: 'row' },
+        justifyContent: 'space-between',
+        alignItems: { xs: 'flex-start', sm: 'center' },
+        mb: 3,
+        gap: 2
+      }}>
+        <Typography variant="h4" sx={{
+          fontWeight: 600,
+          fontSize: { xs: '1.5rem', sm: '1.75rem', md: '2.125rem' }
+        }}>
+          Jobs & Drafts
+        </Typography>
+        <Button
+          variant="outlined"
+          startIcon={<ArrowBackIcon />}
+          onClick={onBack}
+          sx={{ fontSize: { xs: '0.813rem', sm: '0.875rem' } }}
+        >
+          Back
+        </Button>
+      </Box>
 
-      <div className="tabs">
-        <button
-          className={`tab ${activeTab === 'jobs' ? 'active' : ''}`}
-          onClick={() => setActiveTab('jobs')}
+      <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
+        <Tabs
+          value={activeTab === 'jobs' ? 0 : 1}
+          onChange={(e, newValue) => setActiveTab(newValue === 0 ? 'jobs' : 'drafts')}
+          variant="fullWidth"
+          sx={{
+            '& .MuiTab-root': {
+              fontSize: { xs: '0.813rem', sm: '0.875rem', md: '1rem' }
+            }
+          }}
         >
-          Script Generation Jobs ({jobs.length})
-        </button>
-        <button
-          className={`tab ${activeTab === 'drafts' ? 'active' : ''}`}
-          onClick={() => setActiveTab('drafts')}
-        >
-          Drafts ({drafts.length})
-        </button>
-      </div>
+          <Tab label={`Script Generation Jobs (${jobs.length})`} />
+          <Tab label={`Drafts (${drafts.length})`} />
+        </Tabs>
+      </Box>
 
       {activeTab === 'jobs' && (
-        <div className="jobs-list">
+        <Box>
           {jobs.length === 0 ? (
-            <div className="empty-state">No jobs found</div>
+            <Paper sx={{ p: { xs: 3, sm: 4 }, textAlign: 'center' }}>
+              <Typography variant="body1" color="text.secondary">
+                No jobs found
+              </Typography>
+            </Paper>
           ) : (
             jobs.map((job) => (
-              <div key={job.id} className="job-card">
-                <div className="job-header">
-                  <div className="job-title">
-                    <h3>{job.title}</h3>
-                    <span className="job-meta">
-                      {job.platform} - {job.problem_id}
-                    </span>
-                  </div>
-                  {getStatusBadge(job.status)}
-                </div>
+              <Card key={job.id} sx={{ mb: 2 }}>
+                <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
+                  <Box sx={{
+                    display: 'flex',
+                    flexDirection: { xs: 'column', sm: 'row' },
+                    justifyContent: 'space-between',
+                    alignItems: { xs: 'flex-start', sm: 'center' },
+                    mb: 2,
+                    gap: 1
+                  }}>
+                    <Box>
+                      <Typography variant="h6" sx={{
+                        fontWeight: 600,
+                        fontSize: { xs: '1rem', sm: '1.125rem', md: '1.25rem' }
+                      }}>
+                        {job.title}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" sx={{
+                        fontSize: { xs: '0.813rem', sm: '0.875rem' }
+                      }}>
+                        {job.platform} - {job.problem_id}
+                      </Typography>
+                    </Box>
+                    <Chip
+                      label={job.status}
+                      color={
+                        job.status === 'COMPLETED' ? 'success' :
+                        job.status === 'FAILED' ? 'error' :
+                        job.status === 'PROCESSING' ? 'info' : 'warning'
+                      }
+                      size="small"
+                      sx={{ fontSize: { xs: '0.75rem', sm: '0.813rem' } }}
+                    />
+                  </Box>
 
-                {job.tags && job.tags.length > 0 && (
-                  <div className="job-tags">
-                    {job.tags.map((tag, idx) => (
-                      <span key={idx} className="tag">{tag}</span>
-                    ))}
-                  </div>
-                )}
+                  {job.tags && job.tags.length > 0 && (
+                    <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mb: 2 }}>
+                      {job.tags.map((tag, idx) => (
+                        <Chip
+                          key={idx}
+                          label={tag}
+                          size="small"
+                          variant="outlined"
+                          sx={{ fontSize: { xs: '0.688rem', sm: '0.75rem' } }}
+                        />
+                      ))}
+                    </Box>
+                  )}
 
-                <div className="job-info">
-                  <div className="info-item">
-                    <span className="label">Language:</span>
-                    <span className="value">{job.language}</span>
-                  </div>
-                  <div className="info-item">
-                    <span className="label">Created:</span>
-                    <span className="value">{new Date(job.created_at).toLocaleString()}</span>
-                  </div>
-                </div>
+                  <Box sx={{
+                    display: 'flex',
+                    flexDirection: { xs: 'column', sm: 'row' },
+                    gap: { xs: 0.5, sm: 2 },
+                    mb: 2
+                  }}>
+                    <Typography variant="caption" color="text.secondary" sx={{
+                      fontSize: { xs: '0.75rem', sm: '0.813rem' }
+                    }}>
+                      <strong>Language:</strong> {job.language}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary" sx={{
+                      fontSize: { xs: '0.75rem', sm: '0.813rem' }
+                    }}>
+                      <strong>Created:</strong> {new Date(job.created_at).toLocaleString()}
+                    </Typography>
+                  </Box>
 
-                {job.status === 'COMPLETED' && (
-                  <div className="job-actions">
-                    <button
+                  {job.status === 'COMPLETED' && (
+                    <Button
+                      variant="outlined"
+                      size="small"
                       onClick={() => window.location.href = `/jobs?job_id=${job.id}`}
-                      className="view-detail-button"
+                      sx={{
+                        fontSize: { xs: '0.75rem', sm: '0.813rem' }
+                      }}
                     >
                       View Details
-                    </button>
-                  </div>
-                )}
+                    </Button>
+                  )}
 
-                {job.status === 'FAILED' && job.error_message && (
-                  <div className="error-message">
-                    <strong>Error:</strong> {job.error_message}
-                  </div>
-                )}
+                  {job.status === 'FAILED' && job.error_message && (
+                    <Paper sx={{
+                      p: { xs: 1, sm: 1.5 },
+                      backgroundColor: 'error.lighter',
+                      border: '1px solid',
+                      borderColor: 'error.light'
+                    }}>
+                      <Typography variant="caption" color="error" sx={{
+                        fontSize: { xs: '0.75rem', sm: '0.813rem' }
+                      }}>
+                        <strong>Error:</strong> {job.error_message}
+                      </Typography>
+                    </Paper>
+                  )}
 
-                {job.status === 'PROCESSING' && (
-                  <div className="processing-indicator">
-                    <div className="spinner"></div>
-                    <span>Processing... (This may take up to 60 seconds)</span>
-                  </div>
-                )}
-              </div>
+                  {job.status === 'PROCESSING' && (
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <CircularProgress size={16} />
+                      <Typography variant="caption" sx={{
+                        fontSize: { xs: '0.75rem', sm: '0.813rem' }
+                      }}>
+                        Processing... (This may take up to 60 seconds)
+                      </Typography>
+                    </Box>
+                  )}
+                </CardContent>
+              </Card>
             ))
           )}
-        </div>
+        </Box>
       )}
 
       {activeTab === 'drafts' && (
-        <div className="drafts-list">
+        <Box>
           {drafts.length === 0 ? (
-            <div className="empty-state">No drafts found</div>
+            <Paper sx={{ p: { xs: 3, sm: 4 }, textAlign: 'center' }}>
+              <Typography variant="body1" color="text.secondary">
+                No drafts found
+              </Typography>
+            </Paper>
           ) : (
             drafts.map((draft) => (
-              <div key={draft.id} className="draft-card">
-                <div className="draft-header">
-                  <div className="draft-title">
-                    <h3>{draft.title}</h3>
-                    <span className="draft-meta">
+              <Card key={draft.id} sx={{ mb: 2 }}>
+                <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
+                  <Box sx={{ mb: 2 }}>
+                    <Typography variant="h6" sx={{
+                      fontWeight: 600,
+                      fontSize: { xs: '1rem', sm: '1.125rem', md: '1.25rem' }
+                    }}>
+                      {draft.title}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{
+                      fontSize: { xs: '0.813rem', sm: '0.875rem' }
+                    }}>
                       {draft.platform} - {draft.problem_id}
-                    </span>
-                  </div>
-                </div>
+                    </Typography>
+                  </Box>
 
-                {draft.tags && draft.tags.length > 0 && (
-                  <div className="draft-tags">
-                    {draft.tags.map((tag, idx) => (
-                      <span key={idx} className="tag">{tag}</span>
-                    ))}
-                  </div>
-                )}
+                  {draft.tags && draft.tags.length > 0 && (
+                    <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mb: 2 }}>
+                      {draft.tags.map((tag, idx) => (
+                        <Chip
+                          key={idx}
+                          label={tag}
+                          size="small"
+                          variant="outlined"
+                          sx={{ fontSize: { xs: '0.688rem', sm: '0.75rem' } }}
+                        />
+                      ))}
+                    </Box>
+                  )}
 
-                <div className="draft-info">
-                  <div className="info-item">
-                    <span className="label">Language:</span>
-                    <span className="value">{draft.language || 'N/A'}</span>
-                  </div>
-                  <div className="info-item">
-                    <span className="label">Created:</span>
-                    <span className="value">{new Date(draft.created_at).toLocaleString()}</span>
-                  </div>
-                </div>
+                  <Box sx={{
+                    display: 'flex',
+                    flexDirection: { xs: 'column', sm: 'row' },
+                    gap: { xs: 0.5, sm: 2 },
+                    mb: 2
+                  }}>
+                    <Typography variant="caption" color="text.secondary" sx={{
+                      fontSize: { xs: '0.75rem', sm: '0.813rem' }
+                    }}>
+                      <strong>Language:</strong> {draft.language || 'N/A'}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary" sx={{
+                      fontSize: { xs: '0.75rem', sm: '0.813rem' }
+                    }}>
+                      <strong>Created:</strong> {new Date(draft.created_at).toLocaleString()}
+                    </Typography>
+                  </Box>
 
-                <div className="draft-actions">
-                  <button
-                    onClick={() => handleLoadDraft(draft)}
-                    className="load-button"
-                  >
-                    Continue Editing
-                  </button>
-                  <button
-                    onClick={() => handleGenerateScript(draft)}
-                    className="generate-button"
-                    disabled={executingJobs[`draft-${draft.id}`] || !draft.solution_code || !draft.constraints}
-                  >
-                    {executingJobs[`draft-${draft.id}`] ? 'Generating...' : 'Generate Script'}
-                  </button>
-                </div>
-              </div>
+                  <Box sx={{
+                    display: 'flex',
+                    flexDirection: { xs: 'column', sm: 'row' },
+                    gap: 1
+                  }}>
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      startIcon={<EditIcon sx={{ fontSize: { xs: '1rem', sm: '1.125rem' } }} />}
+                      onClick={() => handleLoadDraft(draft)}
+                      sx={{
+                        fontSize: { xs: '0.75rem', sm: '0.813rem' },
+                        flex: { xs: 1, sm: 'auto' }
+                      }}
+                    >
+                      Continue Editing
+                    </Button>
+                    <Button
+                      variant="contained"
+                      size="small"
+                      startIcon={<PlayArrowIcon sx={{ fontSize: { xs: '1rem', sm: '1.125rem' } }} />}
+                      onClick={() => handleGenerateScript(draft)}
+                      disabled={executingJobs[`draft-${draft.id}`] || !draft.solution_code || !draft.constraints}
+                      sx={{
+                        fontSize: { xs: '0.75rem', sm: '0.813rem' },
+                        flex: { xs: 1, sm: 'auto' }
+                      }}
+                    >
+                      {executingJobs[`draft-${draft.id}`] ? 'Generating...' : 'Generate Script'}
+                    </Button>
+                  </Box>
+                </CardContent>
+              </Card>
             ))
           )}
-        </div>
+        </Box>
       )}
-    </div>
+    </Box>
   );
 }
 

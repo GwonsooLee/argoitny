@@ -13,11 +13,14 @@ def api_client():
 
 
 @pytest.fixture
-def authenticated_client(api_client, sample_user):
-    """Return authenticated API client with JWT token"""
-    refresh = RefreshToken.for_user(sample_user)
-    api_client.credentials(HTTP_AUTHORIZATION=f'Bearer {str(refresh.access_token)}')
-    return api_client
+def authenticated_client():
+    """Return a factory function that creates an authenticated API client for any user"""
+    def _make_authenticated_client(user):
+        client = APIClient()
+        refresh = RefreshToken.for_user(user)
+        client.credentials(HTTP_AUTHORIZATION=f'Bearer {str(refresh.access_token)}')
+        return client
+    return _make_authenticated_client
 
 
 @pytest.fixture

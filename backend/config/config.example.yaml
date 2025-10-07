@@ -1,0 +1,295 @@
+# AlgoItny Configuration File
+# This file contains NON-SENSITIVE configuration options for the AlgoItny backend
+# Copy this file to config.yaml and modify as needed
+# For Kubernetes: This can be loaded as a ConfigMap
+#
+# IMPORTANT: Sensitive data (passwords, API keys, secrets) should NEVER be in this file.
+# Use AWS Secrets Manager or environment variables for sensitive data.
+
+# ============================================
+# Django Core Settings
+# ============================================
+django:
+  # Debug mode (true/false)
+  # IMPORTANT: Set to false in production
+  debug: false
+
+  # List of allowed hosts
+  allowed_hosts:
+    - "api.testcase.run"
+    - "localhost"
+    - "127.0.0.1"
+
+  # Time zone
+  timezone: "UTC"
+
+  # Language code
+  language_code: "en-us"
+
+# ============================================
+# Database Configuration
+# ============================================
+database:
+  # Database engine
+  engine: "django.db.backends.mysql"
+
+  # Database name
+  name: "algoitny"
+
+  # Database user
+  user: "algoitny"
+
+  # Database password - MANAGED BY AWS SECRETS MANAGER (key: DB_PASSWORD)
+  # Never put actual password in this file
+
+  # Database host
+  host: "localhost"
+
+  # Database port
+  port: 3306
+
+  # Connection options
+  options:
+    charset: "utf8mb4"
+    init_command: "SET sql_mode='STRICT_TRANS_TABLES'"
+
+  # Connection pooling settings
+  conn_max_age: 600  # Keep connections alive for 10 minutes
+  conn_health_checks: true
+  atomic_requests: false
+  autocommit: true
+
+# ============================================
+# Cache Configuration
+# ============================================
+cache:
+  # Enable Redis cache (true/false)
+  # When false: uses local memory cache (LocMemCache)
+  # When true: uses Redis cache (requires django-redis)
+  enable_redis: false
+
+  # Redis connection settings (only used when enable_redis=true)
+  redis:
+    host: "localhost"
+    port: 6379
+    db: 0
+    # Password - MANAGED BY AWS SECRETS MANAGER (key: REDIS_PASSWORD)
+    # Never put actual password in this file
+
+    # Connection pool settings
+    max_connections: 50
+    retry_on_timeout: true
+    socket_connect_timeout: 5
+    socket_timeout: 5
+
+  # Cache key prefix
+  key_prefix: "algoitny"
+
+  # Default cache timeout (seconds)
+  default_timeout: 300
+
+  # Cache TTL settings (seconds)
+  ttl:
+    problem_list: 300      # 5 minutes
+    problem_detail: 600    # 10 minutes
+    user_stats: 180        # 3 minutes
+    search_history: 120    # 2 minutes
+    test_cases: 900        # 15 minutes
+    short: 60              # 1 minute
+    medium: 300            # 5 minutes
+    long: 1800             # 30 minutes
+
+# ============================================
+# Celery Configuration
+# ============================================
+celery:
+  # Broker URL (Redis)
+  broker_url: "redis://localhost:6379/0"
+
+  # Result backend
+  result_backend: "django-db"
+
+  # Task execution settings
+  task_time_limit: 1800        # 30 minutes hard limit
+  task_soft_time_limit: 1680   # 28 minutes soft limit
+  task_acks_late: true
+  task_reject_on_worker_lost: true
+
+  # Worker optimization
+  worker_prefetch_multiplier: 4
+  worker_max_tasks_per_child: 1000
+  worker_concurrency: 4
+
+  # Broker settings
+  broker_connection_retry: true
+  broker_connection_retry_on_startup: true
+  broker_connection_max_retries: 10
+  broker_pool_limit: 10
+
+  # Result settings
+  result_expires: 86400  # 24 hours
+  result_compression: "gzip"
+
+  # Task priority settings
+  task_queue_max_priority: 10
+  task_default_priority: 5
+
+# ============================================
+# Google OAuth Configuration
+# ============================================
+google_oauth:
+  # Client ID and Secret - MANAGED BY AWS SECRETS MANAGER
+  # Keys: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
+  # Never put actual credentials in this file
+
+  redirect_uri: "https://api.testcase.run/auth/callback"
+
+# ============================================
+# API Keys
+# ============================================
+api_keys:
+  # Google Gemini API Key - MANAGED BY AWS SECRETS MANAGER (key: GEMINI_API_KEY)
+  # Never put actual API key in this file
+
+  # Judge0 API (optional)
+  judge0:
+    enabled: false
+    url: "https://judge0-ce.p.rapidapi.com"
+    # API Key - MANAGED BY AWS SECRETS MANAGER (key: JUDGE0_API_KEY)
+
+# ============================================
+# AWS Configuration
+# ============================================
+aws:
+  # AWS credentials - MANAGED BY AWS SECRETS MANAGER OR IAM ROLES
+  # Keys: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+  # For EC2/ECS/EKS, use IAM roles instead of access keys
+  # Never put actual credentials in this file
+
+  # AWS region
+  region: "us-east-1"
+
+  # S3 storage
+  s3:
+    enabled: false
+    bucket_name: "algoitny-static"
+    region: "us-east-1"
+
+  # Secrets Manager
+  secrets_manager:
+    enabled: false
+    secret_name: "algoitny-secrets"
+
+# ============================================
+# CORS Configuration
+# ============================================
+cors:
+  allowed_origins:
+    - "https://testcase.run"
+    - "https://www.testcase.run"
+    - "http://localhost:3000"
+
+  allow_credentials: true
+
+# ============================================
+# Security Settings
+# ============================================
+security:
+  # CSRF trusted origins
+  csrf_trusted_origins:
+    - "https://api.testcase.run"
+    - "https://testcase.run"
+
+  # SSL/HTTPS
+  secure_ssl_redirect: true
+  secure_hsts_seconds: 31536000  # 1 year
+
+  # Admin emails (for error notifications)
+  admin_emails:
+    - "admin@testcase.run"
+
+# ============================================
+# Application Settings
+# ============================================
+application:
+  # Code execution timeout (seconds)
+  code_execution_timeout: 5
+
+  # Admin URL path
+  admin_url: "admin/"
+
+  # Admin user emails (list of email addresses)
+  # Users with these emails will have admin privileges
+  admin_emails:
+    - "gwonsoo.lee@gmail.com"
+    - "admin@example.com"
+
+# ============================================
+# Email Configuration
+# ============================================
+email:
+  backend: "django.core.mail.backends.smtp.EmailBackend"
+
+  # SMTP settings
+  smtp:
+    host: "smtp.gmail.com"
+    port: 587
+    use_tls: true
+    # Username and Password - MANAGED BY AWS SECRETS MANAGER
+    # Keys: EMAIL_HOST_USER, EMAIL_HOST_PASSWORD
+    # Never put actual credentials in this file
+
+  # Email addresses
+  default_from: "noreply@testcase.run"
+  server_email: "server@testcase.run"
+  admin_email: "admin@testcase.run"
+
+# ============================================
+# Monitoring & Logging
+# ============================================
+monitoring:
+  # Sentry DSN - MANAGED BY AWS SECRETS MANAGER (key: SENTRY_DSN)
+  # Never put actual DSN in this file
+
+  # Environment name
+  environment: "production"
+
+  # Debug toolbar
+  enable_debug_toolbar: false
+
+# ============================================
+# Performance Settings
+# ============================================
+performance:
+  # Gunicorn settings
+  gunicorn:
+    workers: 4
+    log_level: "info"
+
+# ============================================
+# JWT Configuration
+# ============================================
+jwt:
+  # Token lifetimes (minutes)
+  access_token_lifetime: 60       # 1 hour
+  refresh_token_lifetime: 43200   # 30 days
+
+  # Rotation settings
+  rotate_refresh_tokens: true
+  blacklist_after_rotation: false
+  update_last_login: true
+
+# ============================================
+# REST Framework Settings
+# ============================================
+rest_framework:
+  # Pagination
+  page_size: 20
+
+# ============================================
+# Optional Integrations
+# ============================================
+integrations:
+  # Webhook URLs and License Keys - MANAGED BY AWS SECRETS MANAGER
+  # Keys: SLACK_WEBHOOK_URL, DISCORD_WEBHOOK_URL, NEW_RELIC_LICENSE_KEY
+  # Never put actual webhook URLs or license keys in this file

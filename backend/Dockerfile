@@ -24,10 +24,11 @@ WORKDIR /app
 # Copy dependency files
 COPY pyproject.toml ./
 
-# Install Python dependencies and remove unnecessary files
-RUN uv pip install --system -e . && \
-    find /usr/local/lib/python3.12/site-packages -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true && \
-    find /usr/local/lib/python3.12/site-packages -type d -name "test" -exec rm -rf {} + 2>/dev/null || true && \
+# Install Python dependencies from pyproject.toml without editable install
+# Using . without -e flag to avoid creating = files
+RUN uv pip install --system . && \
+    find /usr/local/lib/python3.12/site-packages -type d -name "tests" ! -path "*/django/*" -exec rm -rf {} + 2>/dev/null || true && \
+    find /usr/local/lib/python3.12/site-packages -type d -name "test" ! -path "*/django/*" -exec rm -rf {} + 2>/dev/null || true && \
     find /usr/local/lib/python3.12/site-packages -name "*.pyc" -delete && \
     find /usr/local/lib/python3.12/site-packages -name "*.pyo" -delete && \
     find /usr/local/lib/python3.12/site-packages -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true

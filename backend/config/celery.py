@@ -11,7 +11,7 @@ app = Celery('algoitny')
 app.config_from_object('django.conf:settings', namespace='CELERY')
 
 # Auto-discover tasks from all registered apps
-app.autodiscover_tasks()
+app.autodiscover_tasks(['api'])
 
 
 @app.task(bind=True, ignore_result=True)

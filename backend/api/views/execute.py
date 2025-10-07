@@ -8,6 +8,7 @@ from django.db import transaction
 from ..models import Problem, SearchHistory, TestCase
 from ..services.code_executor import CodeExecutor
 from ..serializers import ExecuteCodeSerializer
+from ..utils.rate_limit import check_rate_limit, log_usage
 
 
 class ExecuteCodeView(APIView):
@@ -34,6 +35,18 @@ class ExecuteCodeView(APIView):
                 "task_id": "abc123..."
             }
         """
+        # Check rate limit
+        allowed, current_count, limit, message = check_rate_limit(request.user, 'execution')
+        if not allowed:
+            return Response(
+                {
+                    'error': message,
+                    'current_count': current_count,
+                    'limit': limit
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS
+            )
+
         serializer = ExecuteCodeSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(
@@ -71,9 +84,21 @@ class ExecuteCodeView(APIView):
                 is_code_public=is_code_public
             )
 
+            # Log usage
+            log_usage(
+                user=request.user,
+                action='execution',
+                problem=problem,
+                metadata={'task_id': task.id, 'language': language}
+            )
+
             return Response({
                 'message': 'Code execution task started',
-                'task_id': task.id
+                'task_id': task.id,
+                'usage': {
+                    'current_count': current_count + 1,
+                    'limit': limit
+                }
             }, status=status.HTTP_202_ACCEPTED)
 
         except Problem.DoesNotExist:

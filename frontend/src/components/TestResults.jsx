@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import {
   Box,
   Typography,
@@ -8,16 +9,23 @@ import {
   Chip,
   Grid,
   Alert,
-  IconButton
+  IconButton,
+  Button,
+  Snackbar,
+  CircularProgress
 } from '@mui/material';
 import {
   ExpandMore as ExpandMoreIcon,
   CheckCircle as CheckCircleIcon,
   Error as ErrorIcon,
-  Download as DownloadIcon
+  Download as DownloadIcon,
+  Lightbulb as LightbulbIcon
 } from '@mui/icons-material';
+import { apiPost, apiGet } from '../utils/api-client';
+import { API_ENDPOINTS } from '../config/api';
+import HintsDisplay from './HintsDisplay';
 
-function TestResults({ results }) {
+function TestResults({ results, executionId }) {
   // Handle both old format (array) and new format (object with results and summary)
   const testResults = Array.isArray(results) ? results : (results?.results || []);
   const summary = results?.summary || {
@@ -26,12 +34,139 @@ function TestResults({ results }) {
     total: testResults.length,
   };
 
-  const truncateText = (text, maxLines = 30) => {
+  // Debug logging
+  console.log('[TestResults] Props:', { results, executionId });
+  console.log('[TestResults] Parsed:', { testResults, summary, hasFailedTests: summary.failed > 0 });
+
+  // Hints state
+  const [hints, setHints] = useState(null);
+  const [hintsLoading, setHintsLoading] = useState(false);
+  const [hintsError, setHintsError] = useState(null);
+  const [hintsRequested, setHintsRequested] = useState(false);
+  const [pollingInterval, setPollingInterval] = useState(null);
+  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
+
+  // Check if test cases have failed (to show "Get Hints" button)
+  const hasFailedTests = summary.failed > 0;
+
+  // Clean up polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollingInterval) {
+        clearInterval(pollingInterval);
+      }
+    };
+  }, [pollingInterval]);
+
+  const showSnackbar = (message, severity = 'info') => {
+    setSnackbar({ open: true, message, severity });
+  };
+
+  const requestHints = async () => {
+    if (!executionId) {
+      showSnackbar('Cannot request hints: No execution ID available', 'error');
+      return;
+    }
+
+    setHintsLoading(true);
+    setHintsError(null);
+    setHintsRequested(true);
+
+    try {
+      // Request hints generation
+      const response = await apiPost(
+        API_ENDPOINTS.requestHints(executionId),
+        {},
+        { requireAuth: true }
+      );
+
+      if (!response.ok) {
+        throw new Error('Failed to request hints');
+      }
+
+      const data = await response.json();
+
+      // If hints are immediately available
+      if (data.hints && data.hints.length > 0) {
+        setHints(data.hints);
+        setHintsLoading(false);
+        showSnackbar('Hints loaded successfully!', 'success');
+      } else {
+        // Start polling for hints
+        showSnackbar('Generating hints... This may take a moment', 'info');
+        startPollingForHints();
+      }
+    } catch (error) {
+      console.error('Error requesting hints:', error);
+      setHintsError(error.message || 'Failed to request hints');
+      setHintsLoading(false);
+      showSnackbar('Failed to request hints', 'error');
+    }
+  };
+
+  const startPollingForHints = () => {
+    let pollCount = 0;
+    const maxPolls = 30; // Poll for up to 60 seconds (30 * 2s)
+
+    const interval = setInterval(async () => {
+      pollCount++;
+
+      try {
+        const response = await apiGet(
+          API_ENDPOINTS.getHints(executionId),
+          { requireAuth: true }
+        );
+
+        if (!response.ok) {
+          throw new Error('Failed to fetch hints');
+        }
+
+        const data = await response.json();
+
+        if (data.hints && data.hints.length > 0) {
+          setHints(data.hints);
+          setHintsLoading(false);
+          clearInterval(interval);
+          setPollingInterval(null);
+          showSnackbar('Hints loaded successfully!', 'success');
+        } else if (pollCount >= maxPolls) {
+          // Stop polling after max attempts
+          clearInterval(interval);
+          setPollingInterval(null);
+          setHintsLoading(false);
+          setHintsError('Hint generation timed out. Please try again later.');
+          showSnackbar('Hint generation timed out', 'warning');
+        }
+      } catch (error) {
+        console.error('Error polling for hints:', error);
+        clearInterval(interval);
+        setPollingInterval(null);
+        setHintsLoading(false);
+        setHintsError(error.message || 'Failed to fetch hints');
+        showSnackbar('Failed to fetch hints', 'error');
+      }
+    }, 2000); // Poll every 2 seconds
+
+    setPollingInterval(interval);
+  };
+
+  const truncateText = (text, maxLines = 10, maxChars = 1000) => {
     if (!text) return { text: '', isTruncated: false };
+
+    // First check character limit
+    if (text.length > maxChars) {
+      return {
+        text: text.substring(0, maxChars) + '\n...',
+        isTruncated: true
+      };
+    }
+
+    // Then check line limit
     const lines = text.split('\n');
     if (lines.length <= maxLines) {
       return { text, isTruncated: false };
     }
+
     return {
       text: lines.slice(0, maxLines).join('\n') + '\n...',
       isTruncated: true
@@ -51,16 +186,26 @@ function TestResults({ results }) {
   };
 
   return (
-    <Paper sx={{ p: 3, backgroundColor: 'white' }}>
-      <Typography variant="h6" gutterBottom sx={{ color: 'text.primary', fontWeight: 600 }}>
+    <Paper sx={{ p: { xs: 2, sm: 3 }, backgroundColor: 'white' }}>
+      <Typography variant="h6" gutterBottom sx={{
+        color: 'text.primary',
+        fontWeight: 600,
+        fontSize: { xs: '1.125rem', sm: '1.25rem' }
+      }}>
         Test Case Validation Results
       </Typography>
 
-      <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
+      <Box sx={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: { xs: 1, sm: 2 },
+        mb: 3
+      }}>
         <Chip
           label={`Passed: ${summary.passed}`}
           sx={{
             fontWeight: 500,
+            fontSize: { xs: '0.75rem', sm: '0.813rem' },
             backgroundColor: summary.passed > 0 ? '#e8f5e9' : 'transparent',
             color: summary.passed > 0 ? '#2e7d32' : 'text.secondary',
             border: '1px solid',
@@ -71,6 +216,7 @@ function TestResults({ results }) {
           label={`Failed: ${summary.failed}`}
           sx={{
             fontWeight: 500,
+            fontSize: { xs: '0.75rem', sm: '0.813rem' },
             backgroundColor: summary.failed > 0 ? '#ffebee' : 'transparent',
             color: summary.failed > 0 ? '#c62828' : 'text.secondary',
             border: '1px solid',
@@ -81,6 +227,7 @@ function TestResults({ results }) {
           label={`Total: ${summary.total}`}
           sx={{
             fontWeight: 500,
+            fontSize: { xs: '0.75rem', sm: '0.813rem' },
             backgroundColor: '#f5f5f5',
             color: 'text.primary',
             border: '1px solid',
@@ -88,6 +235,45 @@ function TestResults({ results }) {
           }}
         />
       </Box>
+
+      {/* Get Hints Button - Only show when there are failed tests */}
+      {hasFailedTests && executionId && !hintsRequested && (
+        <Box sx={{ mb: 3 }}>
+          <Button
+            variant="contained"
+            startIcon={<LightbulbIcon />}
+            onClick={requestHints}
+            disabled={hintsLoading}
+            sx={{
+              backgroundColor: '#f57c00',
+              '&:hover': { backgroundColor: '#e65100' },
+              fontSize: { xs: '0.875rem', sm: '1rem' },
+              px: { xs: 2, sm: 3 },
+              py: { xs: 1, sm: 1.25 },
+              fontWeight: 600,
+              boxShadow: 2,
+              '&:hover': {
+                boxShadow: 4
+              }
+            }}
+          >
+            Get Hints to Fix Failing Tests
+          </Button>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, fontSize: { xs: '0.75rem', sm: '0.813rem' } }}>
+            Get AI-powered hints to help debug your failing test cases
+          </Typography>
+        </Box>
+      )}
+
+      {/* Hints Display */}
+      {(hintsLoading || hints || hintsError) && (
+        <HintsDisplay
+          hints={hints}
+          loading={hintsLoading}
+          error={hintsError}
+          displayMode="accordion"
+        />
+      )}
 
       {testResults.length > 0 ? (
         <>
@@ -148,12 +334,26 @@ function TestResults({ results }) {
                     />
                   </Box>
                 </AccordionSummary>
-                <AccordionDetails sx={{ backgroundColor: '#fafafa', borderTop: '1px solid', borderColor: 'divider' }}>
-                  <Box sx={{ display: 'flex', gap: 2 }}>
-                    {/* Input - 1/3 width */}
-                    <Box sx={{ flex: '1 1 33.33%', minWidth: 0 }}>
+                <AccordionDetails sx={{
+                  backgroundColor: '#fafafa',
+                  borderTop: '1px solid',
+                  borderColor: 'divider',
+                  p: { xs: 1.5, sm: 2 }
+                }}>
+                  <Box sx={{
+                    display: 'flex',
+                    flexDirection: { xs: 'column', md: 'row' },
+                    gap: 2
+                  }}>
+                    {/* Input */}
+                    <Box sx={{ flex: { xs: '1 1 100%', md: '1 1 33.33%' }, minWidth: 0 }}>
                       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-                        <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary', textTransform: 'uppercase', fontSize: '0.7rem' }}>
+                        <Typography variant="caption" sx={{
+                          fontWeight: 600,
+                          color: 'text.secondary',
+                          textTransform: 'uppercase',
+                          fontSize: { xs: '0.65rem', sm: '0.7rem' }
+                        }}>
                           Input
                         </Typography>
                         <IconButton
@@ -162,28 +362,51 @@ function TestResults({ results }) {
                             e.stopPropagation();
                             downloadText(result.input, `test_case_${index + 1}_input.txt`);
                           }}
-                          sx={{ color: 'text.secondary' }}
+                          sx={{ color: 'text.secondary', p: { xs: 0.5, sm: 1 } }}
                           title="Download Input"
                         >
-                          <DownloadIcon fontSize="small" />
+                          <DownloadIcon sx={{ fontSize: { xs: '1rem', sm: '1.125rem' } }} />
                         </IconButton>
                       </Box>
-                      <Paper elevation={0} sx={{ p: 1.5, backgroundColor: 'white', border: '1px solid', borderColor: 'divider' }}>
-                        <pre style={{ margin: 0, fontSize: '0.8rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#333', overflowWrap: 'break-word', fontFamily: 'monospace' }}>
+                      <Paper elevation={0} sx={{
+                        p: { xs: 1, sm: 1.5 },
+                        backgroundColor: 'white',
+                        border: '1px solid',
+                        borderColor: 'divider'
+                      }}>
+                        <pre style={{
+                          margin: 0,
+                          fontSize: window.innerWidth < 600 ? '0.7rem' : '0.8rem',
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-word',
+                          color: '#333',
+                          overflowWrap: 'break-word',
+                          fontFamily: 'monospace'
+                        }}>
                           {truncatedInput.text}
                         </pre>
                         {truncatedInput.isTruncated && (
-                          <Typography variant="caption" sx={{ color: 'text.secondary', mt: 1, display: 'block', fontSize: '0.7rem' }}>
+                          <Typography variant="caption" sx={{
+                            color: 'text.secondary',
+                            mt: 1,
+                            display: 'block',
+                            fontSize: { xs: '0.65rem', sm: '0.7rem' }
+                          }}>
                             (Truncated - download to see full content)
                           </Typography>
                         )}
                       </Paper>
                     </Box>
 
-                    {/* Expected Output - 1/3 width */}
-                    <Box sx={{ flex: '1 1 33.33%', minWidth: 0 }}>
+                    {/* Expected Output */}
+                    <Box sx={{ flex: { xs: '1 1 100%', md: '1 1 33.33%' }, minWidth: 0 }}>
                       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-                        <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary', textTransform: 'uppercase', fontSize: '0.7rem' }}>
+                        <Typography variant="caption" sx={{
+                          fontWeight: 600,
+                          color: 'text.secondary',
+                          textTransform: 'uppercase',
+                          fontSize: { xs: '0.65rem', sm: '0.7rem' }
+                        }}>
                           Expected
                         </Typography>
                         <IconButton
@@ -192,28 +415,51 @@ function TestResults({ results }) {
                             e.stopPropagation();
                             downloadText(result.expected || result.expectedOutput, `test_case_${index + 1}_expected.txt`);
                           }}
-                          sx={{ color: 'text.secondary' }}
+                          sx={{ color: 'text.secondary', p: { xs: 0.5, sm: 1 } }}
                           title="Download Expected Output"
                         >
-                          <DownloadIcon fontSize="small" />
+                          <DownloadIcon sx={{ fontSize: { xs: '1rem', sm: '1.125rem' } }} />
                         </IconButton>
                       </Box>
-                      <Paper elevation={0} sx={{ p: 1.5, backgroundColor: 'white', border: '1px solid', borderColor: 'divider' }}>
-                        <pre style={{ margin: 0, fontSize: '0.8rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#333', overflowWrap: 'break-word', fontFamily: 'monospace' }}>
+                      <Paper elevation={0} sx={{
+                        p: { xs: 1, sm: 1.5 },
+                        backgroundColor: 'white',
+                        border: '1px solid',
+                        borderColor: 'divider'
+                      }}>
+                        <pre style={{
+                          margin: 0,
+                          fontSize: window.innerWidth < 600 ? '0.7rem' : '0.8rem',
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-word',
+                          color: '#333',
+                          overflowWrap: 'break-word',
+                          fontFamily: 'monospace'
+                        }}>
                           {truncatedExpected.text}
                         </pre>
                         {truncatedExpected.isTruncated && (
-                          <Typography variant="caption" sx={{ color: 'text.secondary', mt: 1, display: 'block', fontSize: '0.7rem' }}>
+                          <Typography variant="caption" sx={{
+                            color: 'text.secondary',
+                            mt: 1,
+                            display: 'block',
+                            fontSize: { xs: '0.65rem', sm: '0.7rem' }
+                          }}>
                             (Truncated - download to see full content)
                           </Typography>
                         )}
                       </Paper>
                     </Box>
 
-                    {/* Actual Output - 1/3 width */}
-                    <Box sx={{ flex: '1 1 33.33%', minWidth: 0 }}>
+                    {/* Actual Output */}
+                    <Box sx={{ flex: { xs: '1 1 100%', md: '1 1 33.33%' }, minWidth: 0 }}>
                       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-                        <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary', textTransform: 'uppercase', fontSize: '0.7rem' }}>
+                        <Typography variant="caption" sx={{
+                          fontWeight: 600,
+                          color: 'text.secondary',
+                          textTransform: 'uppercase',
+                          fontSize: { xs: '0.65rem', sm: '0.7rem' }
+                        }}>
                           Actual
                         </Typography>
                         <IconButton
@@ -222,23 +468,36 @@ function TestResults({ results }) {
                             e.stopPropagation();
                             downloadText(result.output || result.actualOutput || '(No output)', `test_case_${index + 1}_actual.txt`);
                           }}
-                          sx={{ color: 'text.secondary' }}
+                          sx={{ color: 'text.secondary', p: { xs: 0.5, sm: 1 } }}
                           title="Download Actual Output"
                         >
-                          <DownloadIcon fontSize="small" />
+                          <DownloadIcon sx={{ fontSize: { xs: '1rem', sm: '1.125rem' } }} />
                         </IconButton>
                       </Box>
                       <Paper elevation={0} sx={{
-                        p: 1.5,
+                        p: { xs: 1, sm: 1.5 },
                         backgroundColor: 'white',
                         border: '1px solid',
                         borderColor: result.passed ? 'divider' : '#ef9a9a'
                       }}>
-                        <pre style={{ margin: 0, fontSize: '0.8rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: result.passed ? '#333' : '#c62828', overflowWrap: 'break-word', fontFamily: 'monospace' }}>
+                        <pre style={{
+                          margin: 0,
+                          fontSize: window.innerWidth < 600 ? '0.7rem' : '0.8rem',
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-word',
+                          color: result.passed ? '#333' : '#c62828',
+                          overflowWrap: 'break-word',
+                          fontFamily: 'monospace'
+                        }}>
                           {truncatedActual.text || '(No output)'}
                         </pre>
                         {truncatedActual.isTruncated && (
-                          <Typography variant="caption" sx={{ color: 'text.secondary', mt: 1, display: 'block', fontSize: '0.7rem' }}>
+                          <Typography variant="caption" sx={{
+                            color: 'text.secondary',
+                            mt: 1,
+                            display: 'block',
+                            fontSize: { xs: '0.65rem', sm: '0.7rem' }
+                          }}>
                             (Truncated - download to see full content)
                           </Typography>
                         )}
@@ -252,9 +511,29 @@ function TestResults({ results }) {
                         Error Message
                       </Typography>
                       <Paper elevation={0} sx={{ p: 1.5, backgroundColor: 'white', border: '1px solid', borderColor: '#ef9a9a' }}>
-                        <pre style={{ margin: 0, fontSize: '0.8rem', whiteSpace: 'pre-wrap', color: '#c62828', fontFamily: 'monospace' }}>
-                          {result.error}
-                        </pre>
+                        {result.error.includes('Segmentation fault') || result.error.includes('SIGSEGV') || result.status === 'segfault' ? (
+                          <Box>
+                            <Typography variant="body2" sx={{ fontWeight: 700, color: '#c62828', mb: 1 }}>
+                              ⚠️ Segmentation Fault (메모리 접근 오류)
+                            </Typography>
+                            <Typography variant="body2" sx={{ color: '#c62828', fontSize: '0.875rem', mb: 1 }}>
+                              프로그램이 잘못된 메모리 영역에 접근하려고 했습니다. 일반적인 원인:
+                            </Typography>
+                            <ul style={{ margin: 0, paddingLeft: '1.5rem', color: '#c62828', fontSize: '0.813rem' }}>
+                              <li>배열 범위를 벗어난 접근</li>
+                              <li>NULL 포인터 역참조</li>
+                              <li>스택 오버플로우 (재귀 깊이 초과)</li>
+                              <li>해제된 메모리 접근</li>
+                            </ul>
+                            <pre style={{ margin: '8px 0 0 0', fontSize: '0.75rem', whiteSpace: 'pre-wrap', color: '#999', fontFamily: 'monospace' }}>
+                              {result.error}
+                            </pre>
+                          </Box>
+                        ) : (
+                          <pre style={{ margin: 0, fontSize: '0.8rem', whiteSpace: 'pre-wrap', color: '#c62828', fontFamily: 'monospace' }}>
+                            {result.error}
+                          </pre>
+                        )}
                       </Paper>
                     </Box>
                   )}
@@ -277,6 +556,22 @@ function TestResults({ results }) {
           No test results available
         </Alert>
       )}
+
+      {/* Snackbar for notifications */}
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={4000}
+        onClose={() => setSnackbar({ ...snackbar, open: false })}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert
+          onClose={() => setSnackbar({ ...snackbar, open: false })}
+          severity={snackbar.severity}
+          sx={{ width: '100%' }}
+        >
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
     </Paper>
   );
 }

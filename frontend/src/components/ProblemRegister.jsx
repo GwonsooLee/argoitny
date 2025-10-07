@@ -91,11 +91,14 @@ function ProblemRegister({ onBack }) {
   const [executing, setExecuting] = useState(false);
   const [registering, setRegistering] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [extracting, setExtracting] = useState(false);
   const [progress, setProgress] = useState('');
   const [drafts, setDrafts] = useState([]);
   const [showDrafts, setShowDrafts] = useState(false);
   const [loadedDraftId, setLoadedDraftId] = useState(null);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
+  const [extractJobId, setExtractJobId] = useState(null);
+  const [showFullForm, setShowFullForm] = useState(false);
 
   const showSnackbar = (message, severity = 'info') => {
     setSnackbar({ open: true, message, severity });
@@ -131,6 +134,7 @@ function ProblemRegister({ onBack }) {
               setLanguage(draft.language || 'python');
               setConstraints(draft.constraints || '');
               setLoadedDraftId(draftId);
+              setShowFullForm(true); // Show full form when loading draft from URL
             } else {
               console.error('Draft not found:', draftId);
               alert('Draft not found');
@@ -158,8 +162,72 @@ function ProblemRegister({ onBack }) {
     }
   };
 
+  // Poll job status
+  const pollJobStatus = async (jobId) => {
+    const maxAttempts = 60; // 60 attempts * 3 seconds = 3 minutes max
+    let attempts = 0;
+
+    const poll = async () => {
+      try {
+        const response = await apiGet(API_ENDPOINTS.jobDetail(jobId));
+        if (!response.ok) {
+          throw new Error('Failed to fetch job status');
+        }
+
+        const data = await response.json();
+
+        if (data.status === 'COMPLETED') {
+          // Success - fill in the form
+          setTitle(data.title || '');
+          setConstraints(data.constraints || '');
+          setSolutionCode(data.solution_code || '');
+          setLanguage(data.language || 'cpp');
+          setPlatform(data.platform || platform);
+          setProblemId(data.problem_id || problemId);
+
+          setExtracting(false);
+          setProgress('');
+          setShowFullForm(true); // Show full form after extraction
+          showSnackbar('Problem information extracted successfully!', 'success');
+          setExtractJobId(null);
+          return;
+        } else if (data.status === 'FAILED') {
+          // Failed
+          setExtracting(false);
+          setProgress('');
+          setUrlError(data.error_message || 'Failed to extract problem information');
+          showSnackbar('Failed to extract problem information', 'error');
+          setExtractJobId(null);
+          return;
+        } else if (data.status === 'PROCESSING' || data.status === 'PENDING') {
+          // Still processing
+          attempts++;
+          if (attempts >= maxAttempts) {
+            setExtracting(false);
+            setProgress('');
+            setUrlError('Extraction timeout. Please try again.');
+            showSnackbar('Extraction timeout', 'error');
+            setExtractJobId(null);
+            return;
+          }
+          setProgress(`Extracting problem information... (${attempts}/${maxAttempts})`);
+          setTimeout(poll, 3000); // Poll every 3 seconds
+        }
+      } catch (error) {
+        console.error('Error polling job status:', error);
+        setExtracting(false);
+        setProgress('');
+        setUrlError('Failed to check extraction status');
+        showSnackbar('Failed to check extraction status', 'error');
+        setExtractJobId(null);
+      }
+    };
+
+    poll();
+  };
+
   // Handle URL change and auto-extract problem info
-  const handleUrlChange = (url) => {
+  const handleUrlChange = async (url) => {
     setProblemUrl(url);
     setUrlError('');
 
@@ -167,13 +235,95 @@ function ProblemRegister({ onBack }) {
       return;
     }
 
+    // Validate URL format
+    const urlPattern = /^https?:\/\/.+/;
+    if (!urlPattern.test(url)) {
+      setUrlError('Please enter a valid URL starting with http:// or https://');
+      return;
+    }
+
+    // Check if it's a supported platform
     const extracted = extractProblemInfo(url);
-    if (extracted) {
-      setPlatform(extracted.platform);
-      setProblemId(extracted.problemId);
-      setUrlError('');
-    } else {
-      setUrlError('Invalid URL format. Please use Baekjoon or Codeforces URL.');
+    if (!extracted) {
+      setUrlError('Unsupported platform. Currently supports Baekjoon and Codeforces.');
+      return;
+    }
+
+    // Valid URL - set platform and problem ID
+    setPlatform(extracted.platform);
+    setProblemId(extracted.problemId);
+    setUrlError('');
+
+    // Check if problem already exists in DB
+    setExtracting(true);
+    setProgress('Checking if problem already exists...');
+
+    try {
+      // Check existing problem by platform and problem_id
+      const checkResponse = await apiGet(
+        API_ENDPOINTS.problemDetailByPlatform(extracted.platform, extracted.problemId)
+      );
+
+      if (checkResponse.ok) {
+        const existingProblem = await checkResponse.json();
+
+        // Problem exists - redirect to detail page
+        setExtracting(false);
+        setProgress('');
+        showSnackbar('Problem already exists! Redirecting to problem detail...', 'info');
+
+        setTimeout(() => {
+          window.location.href = `/problems/${extracted.platform}/${extracted.problemId}`;
+        }, 1500);
+        return;
+      }
+    } catch (error) {
+      // Problem doesn't exist or error checking - continue with extraction
+      console.log('[Extract] Problem not found in DB, proceeding with extraction');
+    }
+
+    // Auto-extract problem info using Gemini
+    setProgress('Starting problem information extraction...');
+
+    try {
+      console.log('[Extract] Sending request to:', API_ENDPOINTS.extractProblemInfo);
+      console.log('[Extract] Request data:', { problem_url: url });
+
+      const response = await apiPost(API_ENDPOINTS.extractProblemInfo, {
+        problem_url: url,
+      });
+
+      console.log('[Extract] Response status:', response.status);
+      console.log('[Extract] Response headers:', response.headers);
+
+      if (!response.ok) {
+        const contentType = response.headers.get('content-type');
+        console.log('[Extract] Error response content-type:', contentType);
+
+        if (contentType && contentType.includes('application/json')) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'Failed to start extraction');
+        } else {
+          const text = await response.text();
+          console.log('[Extract] Error response text:', text.substring(0, 200));
+          throw new Error(`Server error: ${response.status} - Received HTML instead of JSON. Is the Django server running?`);
+        }
+      }
+
+      const data = await response.json();
+      console.log('[Extract] Success response:', data);
+
+      setExtractJobId(data.job_id);
+      setProgress('Extraction job created. Analyzing problem page...');
+
+      // Start polling for results
+      pollJobStatus(data.job_id);
+    } catch (error) {
+      console.error('[Extract] Error starting extraction:', error);
+      setExtracting(false);
+      setProgress('');
+      setUrlError(error.message);
+      showSnackbar('Failed to start extraction: ' + error.message, 'error');
     }
   };
 
@@ -216,6 +366,7 @@ function ProblemRegister({ onBack }) {
     setConstraints(draft.constraints || '');
     setLoadedDraftId(draft.id); // Track the loaded draft ID
     setShowDrafts(false);
+    setShowFullForm(true); // Show full form when loading draft
 
     // Refresh drafts list after loading
     fetchDrafts();
@@ -236,6 +387,10 @@ function ProblemRegister({ onBack }) {
     setTestCases(null);
     setLoadedDraftId(null);
     setShowDrafts(false);
+    setExtracting(false);
+    setExtractJobId(null);
+    setProgress('');
+    setShowFullForm(false);
   };
 
   const handleGenerateScript = async () => {
@@ -351,16 +506,17 @@ function ProblemRegister({ onBack }) {
         throw new Error(errorMessage);
       }
 
-      setProgress('Draft saved successfully!');
-      setTimeout(() => setProgress(''), 3000);
+      const data = await response.json();
+      setProgress('Draft saved successfully! Redirecting...');
 
-      // Refresh drafts list
-      fetchDrafts();
+      // Redirect to problem detail page
+      setTimeout(() => {
+        window.location.href = `/problems/${platform}/${problemId}`;
+      }, 1000);
     } catch (error) {
       console.error('Error saving draft:', error);
       alert('An error occurred while saving draft: ' + error.message);
       setProgress('');
-    } finally {
       setSaving(false);
     }
   };
@@ -418,6 +574,22 @@ function ProblemRegister({ onBack }) {
 
   return (
     <Box sx={{ maxWidth: 1100, margin: '0 auto' }}>
+      {/* Snackbar for notifications */}
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={6000}
+        onClose={() => setSnackbar({ ...snackbar, open: false })}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+      >
+        <Alert
+          onClose={() => setSnackbar({ ...snackbar, open: false })}
+          severity={snackbar.severity}
+          sx={{ width: '100%' }}
+        >
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
+
       {/* Header */}
       <Box sx={{ mb: 4 }}>
         <Typography variant="h4" sx={{ fontWeight: 700, color: 'primary.main' }}>
@@ -427,37 +599,82 @@ function ProblemRegister({ onBack }) {
 
       {/* Main Form */}
       <Paper sx={{ p: 4, border: 1, borderColor: 'divider' }}>
-        {/* Problem Information Section */}
-        <Box sx={{ mb: 4, pb: 4, borderBottom: 2, borderColor: 'divider' }}>
-          <Typography variant="h6" sx={{ mb: 3, fontWeight: 700, color: 'primary.main' }}>
-            Problem Information
-          </Typography>
+        {/* Step 1: URL Input Only */}
+        {!showFullForm && (
+          <Box>
+            <Typography variant="h6" sx={{ mb: 3, fontWeight: 700, color: 'primary.main' }}>
+              Step 1: Enter Problem URL
+            </Typography>
+            <Typography variant="body2" sx={{ mb: 3, color: 'text.secondary' }}>
+              Enter a problem URL from Baekjoon or Codeforces. We'll automatically extract the problem information using Gemini AI.
+            </Typography>
 
-          {/* Problem URL */}
-          <Box sx={{ mb: 3 }}>
+            {/* Problem URL */}
+            <Box sx={{ mb: 3 }}>
             <TextField
               fullWidth
-              label="Problem URL"
+              label="Problem URL (Auto-extract with Gemini AI)"
               placeholder="e.g., https://www.acmicpc.net/problem/1000"
               value={problemUrl}
               onChange={(e) => handleUrlChange(e.target.value)}
               error={!!urlError}
+              disabled={extracting}
               color={problemUrl && !urlError && problemId ? 'success' : 'primary'}
+              InputProps={{
+                endAdornment: extracting ? (
+                  <CircularProgress size={20} sx={{ mr: 1 }} />
+                ) : null,
+              }}
             />
             {urlError && (
               <Alert severity="error" sx={{ mt: 1 }}>
                 {urlError}
               </Alert>
             )}
-            {problemUrl && !urlError && problemId && (
+            {problemUrl && !urlError && problemId && !extracting && (
               <Alert severity="success" sx={{ mt: 1 }}>
                 Extracted: {platform.charAt(0).toUpperCase() + platform.slice(1)} - Problem {problemId}
               </Alert>
             )}
+            {extracting && (
+              <Alert severity="info" sx={{ mt: 1 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <CircularProgress size={16} />
+                  <Typography variant="body2">
+                    Extracting problem information with Gemini AI... Please wait.
+                  </Typography>
+                </Box>
+              </Alert>
+            )}
           </Box>
+          </Box>
+        )}
 
-          {/* Platform */}
-          <Box sx={{ mb: 3 }}>
+        {/* Step 2: Full Form After Extraction */}
+        {showFullForm && (
+          <>
+            {/* Problem Information Section */}
+            <Box sx={{ mb: 4, pb: 4, borderBottom: 2, borderColor: 'divider' }}>
+              <Typography variant="h6" sx={{ mb: 3, fontWeight: 700, color: 'primary.main' }}>
+                Problem Information
+              </Typography>
+
+              {/* Problem URL (Read-only after extraction) */}
+              <Box sx={{ mb: 3 }}>
+                <TextField
+                  fullWidth
+                  label="Problem URL"
+                  value={problemUrl}
+                  disabled
+                  color="success"
+                />
+                <Alert severity="success" sx={{ mt: 1 }}>
+                  Extracted: {platform.charAt(0).toUpperCase() + platform.slice(1)} - Problem {problemId}
+                </Alert>
+              </Box>
+
+              {/* Platform */}
+              <Box sx={{ mb: 3 }}>
             <FormControl component="fieldset">
               <FormLabel component="legend" sx={{ mb: 1, fontWeight: 600 }}>
                 Platform
@@ -504,6 +721,7 @@ function ProblemRegister({ onBack }) {
               placeholder="e.g., 1000 or 1A"
               value={problemId}
               onChange={(e) => setProblemId(e.target.value)}
+              disabled={extracting}
             />
           </Box>
 
@@ -511,10 +729,12 @@ function ProblemRegister({ onBack }) {
           <Box sx={{ mb: 3 }}>
             <TextField
               fullWidth
-              label="Problem Title"
+              label="Problem Title (Auto-filled)"
               placeholder="e.g., A+B"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
+              disabled={extracting}
+              color={title ? 'success' : 'primary'}
             />
           </Box>
 
@@ -559,11 +779,12 @@ function ProblemRegister({ onBack }) {
                 onChange={(e) => setTagInput(e.target.value)}
                 onKeyPress={handleTagKeyPress}
                 size="small"
+                disabled={extracting}
               />
               <Button
                 variant="outlined"
                 onClick={handleAddTag}
-                disabled={!tagInput.trim()}
+                disabled={!tagInput.trim() || extracting}
                 sx={{ minWidth: 80 }}
               >
                 Add
@@ -587,6 +808,7 @@ function ProblemRegister({ onBack }) {
               onChange={(e) => setLanguage(e.target.value)}
               size="small"
               sx={{ minWidth: 120 }}
+              disabled={extracting}
             >
               <MenuItem value="python">Python</MenuItem>
               <MenuItem value="javascript">JavaScript</MenuItem>
@@ -594,7 +816,7 @@ function ProblemRegister({ onBack }) {
               <MenuItem value="java">Java</MenuItem>
             </Select>
             <Typography variant="caption" sx={{ color: 'text.secondary', fontStyle: 'italic' }}>
-              (Auto-detected)
+              {extracting ? '(Extracting...)' : '(Auto-detected from URL)'}
             </Typography>
           </Box>
 
@@ -602,9 +824,10 @@ function ProblemRegister({ onBack }) {
             fullWidth
             multiline
             rows={15}
-            placeholder="Enter your solution code..."
+            placeholder="C++ solution code will be auto-generated..."
             value={solutionCode}
             onChange={(e) => handleCodeChange(e.target.value)}
+            disabled={extracting}
             InputProps={{
               sx: {
                 fontFamily: "'JetBrains Mono', 'Fira Code', 'Courier New', monospace",
@@ -627,10 +850,12 @@ function ProblemRegister({ onBack }) {
             fullWidth
             multiline
             rows={8}
-            label="Constraint Description"
-            placeholder="e.g.,&#10;- Two integers A and B are given in the first line (0 ≤ A, B ≤ 10,000)&#10;- A and B are separated by a space&#10;- Multiple test cases may exist"
+            label="Constraint Description (Auto-filled)"
+            placeholder="Constraints will be auto-extracted..."
             value={constraints}
             onChange={(e) => setConstraints(e.target.value)}
+            disabled={extracting}
+            color={constraints ? 'success' : 'primary'}
           />
         </Box>
 
@@ -639,7 +864,7 @@ function ProblemRegister({ onBack }) {
           <Button
             variant="contained"
             onClick={handleSaveDraft}
-            disabled={loading || executing || registering || saving}
+            disabled={loading || executing || registering || saving || extracting}
             sx={{
               flex: 1,
               py: 1.5,
@@ -651,7 +876,7 @@ function ProblemRegister({ onBack }) {
               },
             }}
           >
-            {saving ? 'Saving...' : 'Save'}
+            {saving ? 'Saving...' : extracting ? 'Extracting...' : 'Save Draft'}
           </Button>
         </Box>
 
@@ -708,7 +933,7 @@ function ProblemRegister({ onBack }) {
                   variant="contained"
                   color="success"
                   onClick={handleExecuteScript}
-                  disabled={loading || executing || registering || saving}
+                  disabled={loading || executing || registering || saving || extracting}
                   sx={{ fontWeight: 700, textTransform: 'uppercase' }}
                 >
                   {executing ? 'Executing...' : 'Execute Script'}
@@ -783,12 +1008,14 @@ function ProblemRegister({ onBack }) {
               variant="contained"
               color="success"
               onClick={handleRegister}
-              disabled={loading || executing || registering || saving}
+              disabled={loading || executing || registering || saving || extracting}
               sx={{ py: 1.5, fontWeight: 700, textTransform: 'uppercase' }}
             >
               {registering ? 'Registering...' : 'Register Problem'}
             </Button>
           </Box>
+        )}
+          </>
         )}
       </Paper>
     </Box>

@@ -312,6 +312,102 @@ class TestProblemQueryOptimization:
 
 
 @pytest.mark.django_db
+class TestProblemDelete:
+    """Test problem deletion endpoint"""
+
+    def test_delete_problem_by_id_success(self, api_client, sample_problem, sample_test_cases):
+        """Test successful problem deletion by ID"""
+        problem_id = sample_problem.id
+        test_case_ids = [tc.id for tc in sample_test_cases]
+
+        response = api_client.delete(f'/api/problems/{problem_id}/')
+
+        assert response.status_code == status.HTTP_200_OK
+        assert 'message' in response.data
+        assert 'deleted successfully' in response.data['message'].lower()
+
+        # Verify problem was deleted
+        assert not Problem.objects.filter(id=problem_id).exists()
+
+        # Verify test cases were deleted (CASCADE)
+        for tc_id in test_case_ids:
+            assert not TestCase.objects.filter(id=tc_id).exists()
+
+    def test_delete_problem_by_platform_and_id_success(self, api_client, sample_problem, sample_test_cases):
+        """Test successful problem deletion by platform and problem_id"""
+        platform = sample_problem.platform
+        problem_id_str = sample_problem.problem_id
+        problem_pk = sample_problem.id
+
+        response = api_client.delete(f'/api/problems/{platform}/{problem_id_str}/')
+
+        assert response.status_code == status.HTTP_200_OK
+        assert 'message' in response.data
+
+        # Verify problem was deleted
+        assert not Problem.objects.filter(id=problem_pk).exists()
+
+    def test_delete_problem_not_found_by_id(self, api_client):
+        """Test deleting non-existent problem by ID"""
+        response = api_client.delete('/api/problems/99999/')
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        assert 'error' in response.data
+        assert 'not found' in response.data['error'].lower()
+
+    def test_delete_problem_not_found_by_platform_id(self, api_client):
+        """Test deleting non-existent problem by platform and problem_id"""
+        response = api_client.delete('/api/problems/baekjoon/99999/')
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        assert 'error' in response.data
+
+    def test_delete_problem_cascades_to_test_cases(self, api_client, sample_problem):
+        """Test that deleting a problem also deletes its test cases"""
+        # Create test cases
+        tc1 = TestCase.objects.create(problem=sample_problem, input='1', output='1')
+        tc2 = TestCase.objects.create(problem=sample_problem, input='2', output='2')
+        tc3 = TestCase.objects.create(problem=sample_problem, input='3', output='3')
+
+        problem_id = sample_problem.id
+        test_case_ids = [tc1.id, tc2.id, tc3.id]
+
+        # Delete problem
+        response = api_client.delete(f'/api/problems/{problem_id}/')
+
+        assert response.status_code == status.HTTP_200_OK
+
+        # Verify all test cases were deleted
+        for tc_id in test_case_ids:
+            assert not TestCase.objects.filter(id=tc_id).exists()
+
+    def test_delete_draft_problem(self, api_client, draft_problem):
+        """Test deleting a draft problem (no test cases)"""
+        problem_id = draft_problem.id
+
+        response = api_client.delete(f'/api/problems/{problem_id}/')
+
+        assert response.status_code == status.HTTP_200_OK
+        assert not Problem.objects.filter(id=problem_id).exists()
+
+    def test_delete_problem_with_solution_code(self, api_client):
+        """Test deleting a problem with solution code"""
+        problem = Problem.objects.create(
+            platform='baekjoon',
+            problem_id='6666',
+            title='Problem with Solution',
+            solution_code='print("test")',
+            language='python'
+        )
+        problem_id = problem.id
+
+        response = api_client.delete(f'/api/problems/{problem_id}/')
+
+        assert response.status_code == status.HTTP_200_OK
+        assert not Problem.objects.filter(id=problem_id).exists()
+
+
+@pytest.mark.django_db
 class TestProblemEdgeCases:
     """Test edge cases for problem endpoints"""
 
@@ -321,7 +417,8 @@ class TestProblemEdgeCases:
             platform='baekjoon',
             problem_id='9999',
             title='Test & <Special> "Characters"',
-            language='python'
+            language='python',
+            is_completed=True
         )
         TestCase.objects.create(problem=problem, input='1', output='1')
 
@@ -337,7 +434,8 @@ class TestProblemEdgeCases:
             problem_id='8888',
             title='No Tags Problem',
             tags=[],
-            language='python'
+            language='python',
+            is_completed=True
         )
         TestCase.objects.create(problem=problem, input='1', output='1')
 
@@ -354,7 +452,8 @@ class TestProblemEdgeCases:
             problem_id='7777',
             title='Long Constraints',
             constraints=long_constraints,
-            language='python'
+            language='python',
+            is_completed=True
         )
 
         response = api_client.get(f'/api/problems/{problem.id}/')

@@ -48,9 +48,6 @@ export const apiClient = async (endpoint, options = {}) => {
     const token = getAccessToken();
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
-      console.log(`[API] Request to ${endpoint} with auth token`);
-    } else {
-      console.log(`[API] Request to ${endpoint} - no token found!`);
     }
   }
 
@@ -70,12 +67,9 @@ export const apiClient = async (endpoint, options = {}) => {
 
     // If 401 and auth required, try to refresh token and retry once
     if (response.status === 401 && requireAuth) {
-      console.log('401 Unauthorized - attempting token refresh');
-
       try {
         // Try to refresh the access token
         const newAccessToken = await refreshAccessToken();
-        console.log('Token refreshed successfully, retrying request');
 
         // Retry the request with new token
         headers['Authorization'] = `Bearer ${newAccessToken}`;
@@ -93,14 +87,12 @@ export const apiClient = async (endpoint, options = {}) => {
 
         // If still 401 after refresh, logout
         if (response.status === 401) {
-          console.log('401 after token refresh - forcing logout');
           removeTokens();
           window.dispatchEvent(new CustomEvent('forceLogout'));
           throw new Error('Session expired. Please login again.');
         }
 
       } catch (refreshError) {
-        console.log('Token refresh failed - forcing logout', refreshError);
         removeTokens();
         window.dispatchEvent(new CustomEvent('forceLogout'));
         throw new Error('Session expired. Please login again.');
@@ -136,6 +128,14 @@ export const apiPut = (endpoint, data, options = {}) => {
   return apiClient(endpoint, {
     ...options,
     method: 'PUT',
+    body: JSON.stringify(data),
+  });
+};
+
+export const apiPatch = (endpoint, data, options = {}) => {
+  return apiClient(endpoint, {
+    ...options,
+    method: 'PATCH',
     body: JSON.stringify(data),
   });
 };

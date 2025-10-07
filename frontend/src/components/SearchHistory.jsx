@@ -20,13 +20,22 @@ import {
   Dialog,
   DialogTitle,
   DialogContent,
-  DialogActions
+  DialogActions,
+  Tooltip
 } from '@mui/material';
-import { Visibility as VisibilityIcon, NavigateBefore, NavigateNext, Download as DownloadIcon } from '@mui/icons-material';
+import {
+  Visibility as VisibilityIcon,
+  NavigateBefore,
+  NavigateNext,
+  Download as DownloadIcon,
+  Lightbulb as LightbulbIcon,
+  LightbulbOutlined as LightbulbOutlinedIcon
+} from '@mui/icons-material';
 import { apiGet } from '../utils/api-client';
 import { API_ENDPOINTS } from '../config/api';
 import { getUser } from '../utils/auth';
 import CodeModal from './CodeModal';
+import HintsDisplay from './HintsDisplay';
 
 const ITEMS_PER_PAGE = 20;
 
@@ -158,10 +167,21 @@ function SearchHistory({ onRequestLogin }) {
   };
 
   return (
-    <Box sx={{ p: 3 }}>
-      <Paper sx={{ p: 3 }}>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-          <Typography variant="h5" sx={{ color: 'text.primary', fontWeight: 600 }}>
+    <Box sx={{ p: { xs: 2, sm: 3 } }}>
+      <Paper sx={{ p: { xs: 2, sm: 3 } }}>
+        <Box sx={{
+          display: 'flex',
+          flexDirection: { xs: 'column', sm: 'row' },
+          justifyContent: 'space-between',
+          alignItems: { xs: 'flex-start', sm: 'center' },
+          mb: 3,
+          gap: 2
+        }}>
+          <Typography variant="h5" sx={{
+            color: 'text.primary',
+            fontWeight: 600,
+            fontSize: { xs: '1.25rem', sm: '1.5rem', md: '1.75rem' }
+          }}>
             Test Case Validation History
           </Typography>
           <FormControlLabel
@@ -175,6 +195,11 @@ function SearchHistory({ onRequestLogin }) {
               />
             }
             label="My History Only"
+            sx={{
+              '& .MuiFormControlLabel-label': {
+                fontSize: { xs: '0.875rem', sm: '1rem' }
+              }
+            }}
           />
         </Box>
 
@@ -184,7 +209,110 @@ function SearchHistory({ onRequestLogin }) {
           </Box>
         ) : (
           <>
-            <TableContainer>
+            {/* Mobile View - Card Based */}
+            <Box sx={{ display: { xs: 'block', md: 'none' } }}>
+              {history.length === 0 ? (
+                <Box sx={{ textAlign: 'center', py: 8 }}>
+                  <Typography variant="body1" color="text.secondary">
+                    No search history available
+                  </Typography>
+                </Box>
+              ) : (
+                history.map((item) => (
+                  <Paper
+                    key={item.id}
+                    sx={{
+                      p: 2,
+                      mb: 2,
+                      cursor: 'pointer',
+                      '&:hover': { boxShadow: 2 }
+                    }}
+                    onClick={() => handleExecutionClick(item)}
+                  >
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1.5 }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flex: 1 }}>
+                        <Typography variant="subtitle2" sx={{ fontWeight: 600, fontSize: '0.875rem' }}>
+                          {item.problem_title}
+                        </Typography>
+                        {item.has_hints && (
+                          <Tooltip title="Hints available">
+                            <LightbulbIcon sx={{ fontSize: '1rem', color: '#f57c00' }} />
+                          </Tooltip>
+                        )}
+                      </Box>
+                      <Chip
+                        label={`${item.passed_count}/${item.total_count}`}
+                        size="small"
+                        color={getResultColor(item)}
+                      />
+                    </Box>
+
+                    <Box sx={{ display: 'flex', gap: 1, mb: 1, flexWrap: 'wrap' }}>
+                      <Chip
+                        label={item.platform === 'baekjoon' ? 'Baekjoon' : 'Codeforces'}
+                        size="small"
+                        color="primary"
+                        variant="outlined"
+                        sx={{ fontSize: '0.75rem' }}
+                      />
+                      <Chip
+                        label={item.language}
+                        size="small"
+                        sx={{ fontSize: '0.75rem' }}
+                      />
+                      <Chip
+                        label={`#${item.problem_number}`}
+                        size="small"
+                        variant="outlined"
+                        sx={{ fontSize: '0.75rem' }}
+                      />
+                    </Box>
+
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1, fontSize: '0.75rem' }}>
+                      {formatDate(item.created_at)}
+                    </Typography>
+
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5, fontSize: '0.75rem' }}>
+                      User: {item.user_email || item.user_identifier || 'Anonymous'}
+                    </Typography>
+
+                    <Box sx={{ display: 'flex', gap: 1 }} onClick={(e) => e.stopPropagation()}>
+                      {item.is_code_public || isMyExecution(item) ? (
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          startIcon={<VisibilityIcon sx={{ fontSize: '1rem' }} />}
+                          onClick={() => handleCodeClick(item)}
+                          sx={{ fontSize: '0.75rem' }}
+                        >
+                          Code
+                        </Button>
+                      ) : (
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          disabled
+                          sx={{ fontSize: '0.75rem' }}
+                        >
+                          Private Code
+                        </Button>
+                      )}
+                      <Button
+                        size="small"
+                        variant="contained"
+                        onClick={() => handleExecutionClick(item)}
+                        sx={{ fontSize: '0.75rem' }}
+                      >
+                        Details
+                      </Button>
+                    </Box>
+                  </Paper>
+                ))
+              )}
+            </Box>
+
+            {/* Desktop View - Table */}
+            <TableContainer sx={{ display: { xs: 'none', md: 'block' } }}>
               <Table>
                 <TableHead>
                   <TableRow>
@@ -232,7 +360,16 @@ function SearchHistory({ onRequestLogin }) {
                           />
                         </TableCell>
                         <TableCell>{item.problem_number}</TableCell>
-                        <TableCell>{item.problem_title}</TableCell>
+                        <TableCell>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                            {item.problem_title}
+                            {item.has_hints && (
+                              <Tooltip title="Hints available">
+                                <LightbulbIcon sx={{ fontSize: '1.125rem', color: '#f57c00' }} />
+                              </Tooltip>
+                            )}
+                          </Box>
+                        </TableCell>
                         <TableCell>
                           <Chip label={item.language} size="small" />
                         </TableCell>
@@ -341,13 +478,54 @@ function SearchHistory({ onRequestLogin }) {
 // Execution Detail Modal Component
 function ExecutionDetailModal({ execution, onClose }) {
   const [selectedTestCase, setSelectedTestCase] = useState(null);
+  const [hints, setHints] = useState(null);
+  const [hintsLoading, setHintsLoading] = useState(false);
 
-  const truncateText = (text, maxLines = 30) => {
+  // Check if execution has hints on mount
+  useEffect(() => {
+    const fetchHints = async () => {
+      if (!execution.id) return;
+
+      try {
+        setHintsLoading(true);
+        const response = await apiGet(
+          API_ENDPOINTS.getHints(execution.id),
+          { requireAuth: true }
+        );
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.hints && data.hints.length > 0) {
+            setHints(data.hints);
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching hints:', error);
+      } finally {
+        setHintsLoading(false);
+      }
+    };
+
+    fetchHints();
+  }, [execution.id]);
+
+  const truncateText = (text, maxLines = 10, maxChars = 1000) => {
     if (!text) return { text: '', isTruncated: false };
+
+    // First check character limit
+    if (text.length > maxChars) {
+      return {
+        text: text.substring(0, maxChars) + '\n...',
+        isTruncated: true
+      };
+    }
+
+    // Then check line limit
     const lines = text.split('\n');
     if (lines.length <= maxLines) {
       return { text, isTruncated: false };
     }
+
     return {
       text: lines.slice(0, maxLines).join('\n') + '\n...',
       isTruncated: true
@@ -433,6 +611,18 @@ function ExecutionDetailModal({ execution, onClose }) {
               />
             </Box>
           </Box>
+
+          {/* Hints Section */}
+          {(hintsLoading || (hints && hints.length > 0)) && (
+            <Box sx={{ mb: 3 }}>
+              <HintsDisplay
+                hints={hints || []}
+                loading={hintsLoading}
+                error={null}
+                displayMode="accordion"
+              />
+            </Box>
+          )}
 
           <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
             Test Case Results

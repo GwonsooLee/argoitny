@@ -14,16 +14,25 @@ from ..serializers import (
     GenerateTestCasesSerializer,
     ProblemSerializer,
     ProblemSaveSerializer,
-    ScriptGenerationJobSerializer
+    ScriptGenerationJobSerializer,
+    ExtractProblemInfoSerializer
 )
-from ..tasks import generate_script_task
+from ..tasks import generate_script_task, extract_problem_info_task
 
 
 class GenerateTestCasesView(APIView):
     """Generate test case generator code using Gemini AI"""
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        # Check if user has permission to register problems
+        if not request.user.is_admin():
+            limits = request.user.get_plan_limits()
+            if not limits.get('can_register_problems', False):
+                return Response(
+                    {'error': 'You do not have permission to register problems'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
         """
         Enqueue a job to generate Python code that will generate test cases using Gemini AI
 
@@ -64,7 +73,8 @@ class GenerateTestCasesView(APIView):
                 solution_code=serializer.validated_data.get('solution_code', ''),
                 language=serializer.validated_data['language'],
                 constraints=serializer.validated_data['constraints'],
-                status='PENDING'
+                status='PENDING',
+                job_type='script_generation'
             )
 
             # Enqueue the job to Celery
@@ -89,9 +99,17 @@ class GenerateTestCasesView(APIView):
 
 class RegisterProblemView(APIView):
     """Register problem with test cases"""
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        # Check if user has permission to register problems
+        if not request.user.is_admin():
+            limits = request.user.get_plan_limits()
+            if not limits.get('can_register_problems', False):
+                return Response(
+                    {'error': 'You do not have permission to register problems'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
         """
         Register problem with test cases
 
@@ -297,7 +315,7 @@ class DraftProblemsView(APIView):
 
     def get(self, request):
         """
-        Get all draft problems (problems without test cases)
+        Get all draft problems (is_completed=False)
 
         Returns:
             {
@@ -316,14 +334,15 @@ class DraftProblemsView(APIView):
             }
         """
         try:
-            # Get problems that have no test cases (drafts)
-            from django.db.models import Count
+            # OPTIMIZATION: Use only() to fetch only needed fields
+            # This reduces data transfer from database significantly
+            drafts = Problem.objects.only(
+                'id', 'platform', 'problem_id', 'title', 'problem_url',
+                'tags', 'solution_code', 'language', 'constraints', 'created_at'
+            ).filter(is_completed=False).order_by('-created_at')
+
+            # OPTIMIZATION: Process in Python to decode base64 (consider moving to serializer)
             import base64
-
-            drafts = Problem.objects.annotate(
-                test_case_count=Count('test_cases')
-            ).filter(test_case_count=0).order_by('-created_at')
-
             draft_data = []
             for problem in drafts:
                 # Decode solution_code from base64
@@ -390,14 +409,20 @@ class JobListView(APIView):
             }
         """
         try:
-            jobs = ScriptGenerationJob.objects.all()
+            # OPTIMIZATION: Use only() to fetch only needed fields for list view
+            # This significantly reduces data transfer, especially for generator_code field
+            jobs = ScriptGenerationJob.objects.only(
+                'id', 'platform', 'problem_id', 'title', 'problem_url', 'tags',
+                'language', 'job_type', 'status', 'celery_task_id',
+                'created_at', 'updated_at', 'error_message'
+            ).filter(job_type='script_generation')
 
-            # Filter by status if provided
+            # Filter by status if provided - uses sgj_status_created_idx composite index
             status_filter = request.query_params.get('status')
             if status_filter:
                 jobs = jobs.filter(status=status_filter.upper())
 
-            # Filter by platform if provided
+            # Filter by platform if provided - uses sgj_platform_problem_idx composite index
             platform = request.query_params.get('platform')
             if platform:
                 jobs = jobs.filter(platform=platform)
@@ -406,6 +431,9 @@ class JobListView(APIView):
             problem_id = request.query_params.get('problem_id')
             if problem_id:
                 jobs = jobs.filter(problem_id=problem_id)
+
+            # OPTIMIZATION: Order by created_at (uses existing model ordering)
+            # Combined with filters, this uses composite indexes efficiently
 
             serializer = ScriptGenerationJobSerializer(jobs, many=True)
 
@@ -471,6 +499,35 @@ class JobDetailView(APIView):
         except Exception as e:
             return Response(
                 {'error': f'Failed to fetch job: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    def delete(self, request, job_id):
+        """
+        Delete a specific job synchronously
+
+        Returns:
+            {
+                "message": "Job deleted successfully"
+            }
+        """
+        try:
+            # Get and delete the job
+            job = ScriptGenerationJob.objects.only('id').get(id=job_id)
+            job.delete()
+
+            return Response({
+                'message': 'Job deleted successfully'
+            }, status=status.HTTP_200_OK)
+
+        except ScriptGenerationJob.DoesNotExist:
+            return Response(
+                {'error': 'Job not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to delete job: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
@@ -646,6 +703,12 @@ class CheckTaskStatusView(APIView):
                 'status': 'PROCESSING',
                 'message': 'Task is being processed'
             }
+        elif task.state == 'PROGRESS':
+            # Handle progress updates from task
+            response = {
+                'status': 'PROGRESS',
+                'result': task.info if task.info else {}
+            }
         elif task.state == 'SUCCESS':
             response = {
                 'status': 'COMPLETED',
@@ -815,3 +878,75 @@ class SaveProblemView(APIView):
             'message': 'Problem saved successfully',
             'problem': response_serializer.data
         }, status=status.HTTP_200_OK)
+
+
+class ExtractProblemInfoView(APIView):
+    """Extract problem information from URL using Gemini AI"""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        """
+        Extract problem information from a problem URL (async)
+
+        Request body:
+            {
+                "problem_url": "https://www.acmicpc.net/problem/1000"
+            }
+
+        Returns:
+            {
+                "job_id": 1,
+                "status": "PENDING",
+                "message": "Extraction job created and queued for processing"
+            }
+        """
+        serializer = ExtractProblemInfoSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {'error': serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        problem_url = serializer.validated_data['problem_url']
+
+        # Add logging
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"[ExtractProblemInfoView] Received URL: {problem_url}")
+
+        try:
+            # Create a job record
+            job = ScriptGenerationJob.objects.create(
+                platform='',  # Will be filled by task
+                problem_id='',  # Will be filled by task
+                title='',  # Will be filled by task
+                problem_url=problem_url,
+                tags=[],
+                solution_code='',
+                language='cpp',
+                constraints='',
+                status='PENDING',
+                job_type='problem_extraction'
+            )
+            logger.info(f"[ExtractProblemInfoView] Created job with ID: {job.id}")
+
+            # Enqueue the job to Celery
+            task = extract_problem_info_task.delay(problem_url, job.id)
+            logger.info(f"[ExtractProblemInfoView] Enqueued task with ID: {task.id}")
+
+            # Update job with task ID
+            job.celery_task_id = task.id
+            job.save(update_fields=['celery_task_id'])
+            logger.info(f"[ExtractProblemInfoView] Job {job.id} updated with task ID: {task.id}")
+
+            return Response({
+                'job_id': job.id,
+                'status': job.status,
+                'message': 'Extraction job created and queued for processing'
+            }, status=status.HTTP_202_ACCEPTED)
+
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to create extraction job: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

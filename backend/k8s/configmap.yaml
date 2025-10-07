@@ -1,0 +1,408 @@
+---
+# Kubernetes ConfigMap for AlgoItny Backend
+# This ConfigMap contains the application configuration
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: algoitny-backend-config
+  namespace: default
+  labels:
+    app: algoitny
+    component: backend
+data:
+  # Configuration file (mounted as /etc/algoitny/config.yaml)
+  config.yaml: |
+    # AlgoItny Production Configuration
+
+    # ============================================
+    # Django Core Settings
+    # ============================================
+    django:
+      # Debug mode (false in production)
+      debug: false
+
+      # Allowed hosts
+      allowed_hosts:
+        - "api.testcase.run"
+        - "testcase.run"
+
+      # Time zone
+      timezone: "UTC"
+
+      # Language code
+      language_code: "en-us"
+
+    # ============================================
+    # Database Configuration
+    # ============================================
+    database:
+      engine: "django.db.backends.mysql"
+      name: "algoitny"
+      user: "algoitny"
+      # Password should be stored in a Secret, not ConfigMap
+      host: "mysql-service.default.svc.cluster.local"
+      port: 3306
+
+      options:
+        charset: "utf8mb4"
+        init_command: "SET sql_mode='STRICT_TRANS_TABLES'"
+
+      conn_max_age: 600
+      conn_health_checks: true
+      atomic_requests: false
+      autocommit: true
+
+    # ============================================
+    # Cache Configuration
+    # ============================================
+    cache:
+      # Enable Redis cache in production
+      enable_redis: true
+
+      redis:
+        host: "redis-service.default.svc.cluster.local"
+        port: 6379
+        db: 0
+        # Password should be stored in a Secret
+
+        max_connections: 50
+        retry_on_timeout: true
+        socket_connect_timeout: 5
+        socket_timeout: 5
+
+      key_prefix: "algoitny"
+      default_timeout: 300
+
+      ttl:
+        problem_list: 300
+        problem_detail: 600
+        user_stats: 180
+        search_history: 120
+        test_cases: 900
+        short: 60
+        medium: 300
+        long: 1800
+
+    # ============================================
+    # Celery Configuration
+    # ============================================
+    celery:
+      broker_url: "redis://redis-service.default.svc.cluster.local:6379/0"
+      result_backend: "django-db"
+
+      task_time_limit: 1800
+      task_soft_time_limit: 1680
+      task_acks_late: true
+      task_reject_on_worker_lost: true
+
+      worker_prefetch_multiplier: 4
+      worker_max_tasks_per_child: 1000
+      worker_concurrency: 4
+
+      broker_connection_retry: true
+      broker_connection_retry_on_startup: true
+      broker_connection_max_retries: 10
+      broker_pool_limit: 10
+
+      result_expires: 86400
+      result_compression: "gzip"
+
+      task_queue_max_priority: 10
+      task_default_priority: 5
+
+    # ============================================
+    # Google OAuth Configuration
+    # ============================================
+    google_oauth:
+      # Client ID and Secret should be in Secrets
+      redirect_uri: "https://api.testcase.run/auth/callback"
+
+    # ============================================
+    # API Keys
+    # ============================================
+    api_keys:
+      # API keys should be stored in Secrets, not ConfigMap
+      judge0:
+        enabled: false
+        url: "https://judge0-ce.p.rapidapi.com"
+
+    # ============================================
+    # CORS Configuration
+    # ============================================
+    cors:
+      allowed_origins:
+        - "https://testcase.run"
+        - "https://www.testcase.run"
+      allow_credentials: true
+
+    # ============================================
+    # Security Settings
+    # ============================================
+    security:
+      csrf_trusted_origins:
+        - "https://api.testcase.run"
+        - "https://testcase.run"
+
+      secure_ssl_redirect: true
+      secure_hsts_seconds: 31536000
+
+      admin_emails:
+        - "admin@testcase.run"
+
+    # ============================================
+    # Application Settings
+    # ============================================
+    application:
+      code_execution_timeout: 5
+      admin_url: "admin/"
+
+    # ============================================
+    # Email Configuration
+    # ============================================
+    email:
+      backend: "django.core.mail.backends.smtp.EmailBackend"
+
+      smtp:
+        host: "smtp.gmail.com"
+        port: 587
+        use_tls: true
+        # Username and password should be in Secrets
+
+      default_from: "noreply@testcase.run"
+      server_email: "server@testcase.run"
+      admin_email: "admin@testcase.run"
+
+    # ============================================
+    # Monitoring & Logging
+    # ============================================
+    monitoring:
+      environment: "production"
+      enable_debug_toolbar: false
+
+    # ============================================
+    # Performance Settings
+    # ============================================
+    performance:
+      gunicorn:
+        workers: 4
+        log_level: "info"
+
+    # ============================================
+    # JWT Configuration
+    # ============================================
+    jwt:
+      access_token_lifetime: 60
+      refresh_token_lifetime: 43200
+      rotate_refresh_tokens: true
+      blacklist_after_rotation: false
+      update_last_login: true
+
+    # ============================================
+    # REST Framework Settings
+    # ============================================
+    rest_framework:
+      page_size: 20
+
+---
+# Secret for sensitive data (NOT included in version control)
+# Create this separately with actual secrets
+apiVersion: v1
+kind: Secret
+metadata:
+  name: algoitny-backend-secrets
+  namespace: default
+  labels:
+    app: algoitny
+    component: backend
+type: Opaque
+stringData:
+  # Django secret key
+  SECRET_KEY: "your-production-secret-key-here"
+
+  # Database credentials
+  DB_PASSWORD: "your-database-password"
+
+  # Google OAuth credentials
+  GOOGLE_CLIENT_ID: "your-google-client-id.apps.googleusercontent.com"
+  GOOGLE_CLIENT_SECRET: "your-google-client-secret"
+
+  # Gemini API key
+  GEMINI_API_KEY: "your-gemini-api-key"
+
+  # Redis password (if required)
+  REDIS_PASSWORD: "your-redis-password"
+
+  # Email SMTP credentials
+  EMAIL_HOST_USER: "your-email@gmail.com"
+  EMAIL_HOST_PASSWORD: "your-app-password"
+
+  # Judge0 API key (if using)
+  JUDGE0_API_KEY: "your-judge0-api-key"
+
+  # Sentry DSN (if using)
+  SENTRY_DSN: "your-sentry-dsn"
+
+---
+# Deployment example showing how to use ConfigMap and Secret
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: algoitny-backend
+  namespace: default
+  labels:
+    app: algoitny
+    component: backend
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: algoitny
+      component: backend
+  template:
+    metadata:
+      labels:
+        app: algoitny
+        component: backend
+    spec:
+      containers:
+      - name: backend
+        image: algoitny/backend:latest
+        ports:
+        - containerPort: 8000
+          name: http
+
+        # Environment variables from Secret
+        env:
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: algoitny-backend-secrets
+              key: SECRET_KEY
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: algoitny-backend-secrets
+              key: DB_PASSWORD
+        - name: GOOGLE_CLIENT_ID
+          valueFrom:
+            secretKeyRef:
+              name: algoitny-backend-secrets
+              key: GOOGLE_CLIENT_ID
+        - name: GOOGLE_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: algoitny-backend-secrets
+              key: GOOGLE_CLIENT_SECRET
+        - name: GEMINI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: algoitny-backend-secrets
+              key: GEMINI_API_KEY
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: algoitny-backend-secrets
+              key: REDIS_PASSWORD
+        - name: EMAIL_HOST_USER
+          valueFrom:
+            secretKeyRef:
+              name: algoitny-backend-secrets
+              key: EMAIL_HOST_USER
+        - name: EMAIL_HOST_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: algoitny-backend-secrets
+              key: EMAIL_HOST_PASSWORD
+
+        # Mount ConfigMap as file
+        volumeMounts:
+        - name: config
+          mountPath: /etc/algoitny
+          readOnly: true
+
+        # Health checks
+        livenessProbe:
+          httpGet:
+            path: /api/health/live/
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+
+        readinessProbe:
+          httpGet:
+            path: /api/health/ready/
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+
+        # Resource limits
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+
+      volumes:
+      - name: config
+        configMap:
+          name: algoitny-backend-config
+          items:
+          - key: config.yaml
+            path: config.yaml
+
+---
+# Celery Worker Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: algoitny-celery-worker
+  namespace: default
+  labels:
+    app: algoitny
+    component: celery-worker
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: algoitny
+      component: celery-worker
+  template:
+    metadata:
+      labels:
+        app: algoitny
+        component: celery-worker
+    spec:
+      containers:
+      - name: celery-worker
+        image: algoitny/backend:latest
+        command: ["celery", "-A", "config", "worker", "-l", "info", "-Q", "execution,generation,ai,maintenance"]
+
+        # Environment variables from Secret (same as backend)
+        envFrom:
+        - secretRef:
+            name: algoitny-backend-secrets
+
+        # Mount ConfigMap as file
+        volumeMounts:
+        - name: config
+          mountPath: /etc/algoitny
+          readOnly: true
+
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+
+      volumes:
+      - name: config
+        configMap:
+          name: algoitny-backend-config
+          items:
+          - key: config.yaml
+            path: config.yaml

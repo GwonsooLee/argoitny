@@ -1,0 +1,267 @@
+# Default values for algoitny-backend
+# This is a YAML-formatted file.
+
+# Global settings
+global:
+  environment: production
+  region: ap-northeast-2
+
+# Image settings
+image:
+  repository: YOUR_ECR_REGISTRY/algoitny
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Service Account
+serviceAccount:
+  create: true
+  annotations:
+    eks.amazonaws.com/role-arn: "arn:aws:iam::ACCOUNT_ID:role/algoitny-backend-role"
+  name: "algoitny-backend-sa"
+
+# External Secrets Operator
+externalSecrets:
+  enabled: true
+  backendType: secretsManager
+  region: ap-northeast-2
+  secretName: algoitny-backend-secrets
+  awsSecretsManager:
+    secretKey: algoitny/backend/prod
+  refreshInterval: 1h
+
+# Django/Gunicorn deployment
+gunicorn:
+  enabled: true
+  replicaCount: 2
+
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+  livenessProbe:
+    httpGet:
+      path: /api/health/
+      port: 8000
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  readinessProbe:
+    httpGet:
+      path: /api/health/
+      port: 8000
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+  env:
+    DJANGO_SETTINGS_MODULE: config.settings_production
+    WORKERS: "4"
+    WORKER_CLASS: sync
+    TIMEOUT: "120"
+
+# Celery Worker deployment
+celeryWorker:
+  enabled: true
+  replicaCount: 2
+
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 3Gi
+
+  autoscaling:
+    enabled: false  # KEDA will handle this
+
+  # KEDA ScaledObject for Celery queue-based scaling
+  keda:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 20
+    pollingInterval: 30
+    cooldownPeriod: 300
+    # Redis-based queue monitoring
+    triggers:
+      - type: redis
+        metadata:
+          address: REDIS_HOST:6379
+          listName: celery
+          listLength: "5"
+          databaseIndex: "0"
+
+  env:
+    CELERY_CONCURRENCY: "4"
+    CELERY_MAX_TASKS_PER_CHILD: "100"
+
+# Celery Beat deployment (scheduler)
+celeryBeat:
+  enabled: true
+  replicaCount: 1  # Only one beat instance should run
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  env: {}
+
+# Service
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8000
+  annotations: {}
+
+# Ingress (ALB)
+ingress:
+  enabled: true
+  className: alb
+  annotations:
+    # AWS Load Balancer Controller annotations
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: '443'
+    alb.ingress.kubernetes.io/certificate-arn: "arn:aws:acm:REGION:ACCOUNT_ID:certificate/CERT_ID"
+    alb.ingress.kubernetes.io/healthcheck-path: /api/health/
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: '15'
+    alb.ingress.kubernetes.io/healthcheck-timeout-seconds: '5'
+    alb.ingress.kubernetes.io/healthy-threshold-count: '2'
+    alb.ingress.kubernetes.io/unhealthy-threshold-count: '2'
+    alb.ingress.kubernetes.io/success-codes: '200'
+    # WAF
+    alb.ingress.kubernetes.io/wafv2-acl-arn: "arn:aws:wafv2:REGION:ACCOUNT_ID:regional/webacl/NAME/ID"
+    # Security groups
+    alb.ingress.kubernetes.io/security-groups: sg-xxxxx
+    # Tags
+    alb.ingress.kubernetes.io/tags: Environment=production,Service=algoitny-backend
+
+  hosts:
+    - host: api.testcase.run
+      paths:
+        - path: /
+          pathType: Prefix
+
+  tls:
+    - secretName: algoitny-tls
+      hosts:
+        - api.testcase.run
+
+# Karpenter Provisioner for node autoscaling
+karpenter:
+  enabled: true
+  provisioner:
+    name: algoitny-backend
+    requirements:
+      - key: karpenter.sh/capacity-type
+        operator: In
+        values: ["spot", "on-demand"]
+      - key: kubernetes.io/arch
+        operator: In
+        values: ["amd64"]
+      - key: karpenter.k8s.aws/instance-category
+        operator: In
+        values: ["c", "m", "r"]
+      - key: karpenter.k8s.aws/instance-generation
+        operator: Gt
+        values: ["5"]
+    limits:
+      cpu: 100
+      memory: 200Gi
+    ttlSecondsAfterEmpty: 30
+    ttlSecondsUntilExpired: 604800  # 7 days
+    consolidation:
+      enabled: true
+    # Spot instance settings
+    instanceProfile: KarpenterNodeInstanceProfile
+    subnetSelector:
+      karpenter.sh/discovery: algoitny-eks-cluster
+    securityGroupSelector:
+      karpenter.sh/discovery: algoitny-eks-cluster
+    tags:
+      Environment: production
+      ManagedBy: karpenter
+      Service: algoitny-backend
+
+# ConfigMap for application settings
+config:
+  # These are non-sensitive configs
+  DEBUG: "False"
+  ALLOWED_HOSTS: "api.testcase.run"
+  CORS_ALLOWED_ORIGINS: "https://testcase.run,https://www.testcase.run"
+  CELERY_TASK_ALWAYS_EAGER: "False"
+  CELERY_RESULT_BACKEND: "django-db"
+  JUDGE0_ENDPOINT: "http://judge0-api:2358"
+
+# Pod annotations
+podAnnotations: {}
+
+# Pod security context
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+# Security context
+securityContext:
+  capabilities:
+    drop:
+    - ALL
+  readOnlyRootFilesystem: false
+  allowPrivilegeEscalation: false
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations:
+  - key: karpenter.sh/capacity-type
+    operator: Equal
+    value: spot
+    effect: NoSchedule
+
+# Affinity
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - algoitny-backend
+          topologyKey: kubernetes.io/hostname
+
+# PodDisruptionBudget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Network Policy
+networkPolicy:
+  enabled: false

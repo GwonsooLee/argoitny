@@ -5,7 +5,9 @@ from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from django.db.models import Q
 from ..models import SearchHistory
-from ..serializers import SearchHistoryListSerializer, SearchHistorySerializer
+from ..serializers import SearchHistoryListSerializer, SearchHistorySerializer, GenerateHintsSerializer
+from ..tasks import generate_hints_task
+from ..utils.rate_limit import check_rate_limit, log_usage
 
 
 class SearchHistoryListView(APIView):
@@ -52,14 +54,9 @@ class SearchHistoryListView(APIView):
             limit = min(int(request.query_params.get('limit', 20)), 100)
             my_only = request.query_params.get('my_only', 'false').lower() == 'true'
 
-            # Build queryset with optimized select_related
-            # Only fetch user email field to minimize data transfer
-            queryset = SearchHistory.objects.select_related('user').only(
-                'id', 'user_id', 'user__email', 'user_identifier',
-                'platform', 'problem_number', 'problem_title', 'language',
-                'passed_count', 'failed_count', 'total_count',
-                'is_code_public', 'created_at', 'code'
-            )
+            # OPTIMIZATION: Build queryset with optimized select_related and minimal fields
+            # Use custom queryset methods for cleaner, more maintainable code
+            queryset = SearchHistory.objects.with_user().minimal_fields()
 
             # Filter by user if my_only is true
             if my_only:
@@ -176,5 +173,140 @@ class SearchHistoryDetailView(APIView):
         except Exception as e:
             return Response(
                 {'error': f'Failed to fetch history: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class GenerateHintsView(APIView):
+    """Generate hints for a failed code execution"""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, history_id):
+        """
+        Request hint generation for a specific execution
+
+        Args:
+            history_id: ID of the SearchHistory record
+
+        Returns:
+            {
+                "task_id": "celery-task-id",
+                "status": "PENDING",
+                "message": "Hint generation started"
+            }
+        """
+        # Check rate limit
+        allowed, current_count, limit, message = check_rate_limit(request.user, 'hint')
+        if not allowed:
+            return Response(
+                {
+                    'error': message,
+                    'current_count': current_count,
+                    'limit': limit
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS
+            )
+
+        try:
+            # Verify the history record exists and has failures (optimized: only fetch needed fields)
+            history = SearchHistory.objects.only(
+                'id', 'failed_count', 'hints', 'problem_id'
+            ).get(id=history_id)
+
+            # Check if there are failures
+            if history.failed_count == 0:
+                return Response(
+                    {'error': 'No failed test cases - hints not needed'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # If hints already exist, return them immediately
+            if history.hints:
+                return Response({
+                    'status': 'COMPLETED',
+                    'hints': history.hints,
+                    'message': 'Hints already exist'
+                }, status=status.HTTP_200_OK)
+
+            # Start async task
+            task = generate_hints_task.delay(history_id)
+
+            # Log usage
+            log_usage(
+                user=request.user,
+                action='hint',
+                problem_id=history.problem_id,
+                metadata={'history_id': history_id, 'task_id': task.id}
+            )
+
+            return Response({
+                'task_id': task.id,
+                'status': 'PENDING',
+                'message': 'Hint generation started',
+                'usage': {
+                    'current_count': current_count + 1,
+                    'limit': limit
+                }
+            }, status=status.HTTP_202_ACCEPTED)
+
+        except SearchHistory.DoesNotExist:
+            return Response(
+                {'error': 'History not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to start hint generation: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class GetHintsView(APIView):
+    """Get hints for a specific execution"""
+    permission_classes = [AllowAny]
+
+    def get(self, request, history_id):
+        """
+        Get hints for a specific execution
+
+        Returns:
+            {
+                "hints": ["hint1", "hint2", "hint3"],
+                "status": "available" | "not_generated" | "not_needed"
+            }
+        """
+        try:
+            # Get the history record (optimized: only fetch needed fields)
+            history = SearchHistory.objects.only(
+                'id', 'failed_count', 'hints'
+            ).get(id=history_id)
+
+            # Check if there are failures
+            if history.failed_count == 0:
+                return Response({
+                    'status': 'not_needed',
+                    'message': 'No failed test cases'
+                }, status=status.HTTP_200_OK)
+
+            # Return hints if available
+            if history.hints:
+                return Response({
+                    'status': 'available',
+                    'hints': history.hints
+                }, status=status.HTTP_200_OK)
+            else:
+                return Response({
+                    'status': 'not_generated',
+                    'message': 'Hints have not been generated yet'
+                }, status=status.HTTP_200_OK)
+
+        except SearchHistory.DoesNotExist:
+            return Response(
+                {'error': 'History not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to fetch hints: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )

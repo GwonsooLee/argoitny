@@ -35,8 +35,8 @@ function Problems({ onViewProblem }) {
   const fetchData = async () => {
     try {
       const [draftsResponse, registeredResponse] = await Promise.all([
-        apiGet(API_ENDPOINTS.problemDrafts),
-        apiGet(API_ENDPOINTS.problemRegistered)
+        apiGet(API_ENDPOINTS.problemDrafts, { requireAuth: true }),
+        apiGet(API_ENDPOINTS.problemRegistered, { requireAuth: true })
       ]);
 
       if (draftsResponse.ok) {
@@ -141,17 +141,36 @@ function Problems({ onViewProblem }) {
       }}
       onClick={() => onViewProblem(problem.platform, problem.problem_id)}
     >
-      <CardContent>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
-          <Box sx={{ flexGrow: 1 }}>
-            <Typography variant="h6" sx={{ fontWeight: 600, mb: 0.5 }}>
+      <CardContent sx={{ p: { xs: 2, sm: 2.5, md: 3 } }}>
+        <Box sx={{
+          display: 'flex',
+          flexDirection: { xs: 'column', sm: 'row' },
+          justifyContent: 'space-between',
+          alignItems: { xs: 'flex-start', sm: 'flex-start' },
+          mb: 1,
+          gap: { xs: 1, sm: 0 }
+        }}>
+          <Box sx={{ flexGrow: 1, width: { xs: '100%', sm: 'auto' } }}>
+            <Typography variant="h6" sx={{
+              fontWeight: 600,
+              mb: 0.5,
+              fontSize: { xs: '1rem', sm: '1.125rem', md: '1.25rem' }
+            }}>
               {problem.title}
             </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+            <Typography variant="body2" color="text.secondary" sx={{
+              mb: 1,
+              fontSize: { xs: '0.813rem', sm: '0.875rem' }
+            }}>
               {problem.platform === 'baekjoon' ? 'Baekjoon' : 'Codeforces'} - {problem.problem_id}
             </Typography>
           </Box>
-          <Box sx={{ display: 'flex', gap: 1 }}>
+          <Box sx={{
+            display: 'flex',
+            gap: 1,
+            width: { xs: '100%', sm: 'auto' },
+            justifyContent: { xs: 'flex-end', sm: 'flex-start' }
+          }}>
             <IconButton
               size="small"
               color="primary"
@@ -159,8 +178,11 @@ function Problems({ onViewProblem }) {
                 e.stopPropagation();
                 handleEditProblem(problem);
               }}
+              sx={{
+                p: { xs: 1, sm: 1 }
+              }}
             >
-              <EditIcon />
+              <EditIcon sx={{ fontSize: { xs: '1.125rem', sm: '1.25rem' } }} />
             </IconButton>
             {isDraft && (
               <IconButton
@@ -171,8 +193,11 @@ function Problems({ onViewProblem }) {
                   handleGenerateScript(problem);
                 }}
                 disabled={executingJobs[problem.id] || !problem.solution_code || !problem.constraints}
+                sx={{
+                  p: { xs: 1, sm: 1 }
+                }}
               >
-                <PlayArrowIcon />
+                <PlayArrowIcon sx={{ fontSize: { xs: '1.125rem', sm: '1.25rem' } }} />
               </IconButton>
             )}
           </Box>
@@ -187,21 +212,32 @@ function Problems({ onViewProblem }) {
                 size="small"
                 color="primary"
                 variant="outlined"
-                sx={{ fontSize: '0.75rem' }}
+                sx={{ fontSize: { xs: '0.688rem', sm: '0.75rem' } }}
               />
             ))}
           </Box>
         )}
 
-        <Box sx={{ display: 'flex', gap: 2, mt: 2 }}>
-          <Typography variant="caption" color="text.secondary">
+        <Box sx={{
+          display: 'flex',
+          flexDirection: { xs: 'column', sm: 'row' },
+          gap: { xs: 0.5, sm: 2 },
+          mt: 2
+        }}>
+          <Typography variant="caption" color="text.secondary" sx={{
+            fontSize: { xs: '0.75rem', sm: '0.813rem' }
+          }}>
             Language: {problem.language || 'N/A'}
           </Typography>
-          <Typography variant="caption" color="text.secondary">
+          <Typography variant="caption" color="text.secondary" sx={{
+            fontSize: { xs: '0.75rem', sm: '0.813rem' }
+          }}>
             Created: {new Date(problem.created_at).toLocaleDateString()}
           </Typography>
           {!isDraft && problem.test_case_count !== undefined && (
-            <Typography variant="caption" color="text.secondary">
+            <Typography variant="caption" color="text.secondary" sx={{
+              fontSize: { xs: '0.75rem', sm: '0.813rem' }
+            }}>
               Test Cases: {problem.test_case_count}
             </Typography>
           )}
@@ -301,7 +337,12 @@ function Problems({ onViewProblem }) {
 
   return (
     <Box>
-      <Typography variant="h4" sx={{ color: 'text.primary', fontWeight: 600, mb: 3 }}>
+      <Typography variant="h4" sx={{
+        color: 'text.primary',
+        fontWeight: 600,
+        mb: 3,
+        fontSize: { xs: '1.75rem', sm: '2rem', md: '2.125rem' }
+      }}>
         Problems
       </Typography>
 
@@ -314,9 +355,12 @@ function Problems({ onViewProblem }) {
         InputProps={{
           startAdornment: (
             <InputAdornment position="start">
-              <SearchIcon />
+              <SearchIcon sx={{ fontSize: { xs: '1.25rem', sm: '1.5rem' } }} />
             </InputAdornment>
           ),
+          sx: {
+            fontSize: { xs: '0.875rem', sm: '1rem' }
+          }
         }}
       />
 
@@ -324,6 +368,13 @@ function Problems({ onViewProblem }) {
         <Tabs
           value={activeTab}
           onChange={handleTabChange}
+          variant="fullWidth"
+          sx={{
+            '& .MuiTab-root': {
+              fontSize: { xs: '0.813rem', sm: '0.875rem', md: '1rem' },
+              minWidth: { xs: 'auto', sm: 120 }
+            }
+          }}
         >
           <Tab label={`Drafts (${drafts.length})`} />
           <Tab label={`Registered (${registered.length})`} />

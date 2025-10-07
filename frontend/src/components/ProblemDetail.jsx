@@ -30,7 +30,9 @@ import {
   Error as ErrorIcon,
   Schedule as ScheduleIcon,
   Close as CloseIcon,
-  Download as DownloadIcon
+  Download as DownloadIcon,
+  Delete as DeleteIcon,
+  ContentCopy as ContentCopyIcon
 } from '@mui/icons-material';
 import { apiGet, apiPost } from '../utils/api-client';
 import { API_ENDPOINTS } from '../config/api';
@@ -44,8 +46,13 @@ function ProblemDetail({ platform, problemId, onBack }) {
   const [showScript, setShowScript] = useState(false);
   const [executingScript, setExecutingScript] = useState(false);
   const [generatingOutputs, setGeneratingOutputs] = useState(false);
-  const [regeneratingTestCases, setRegeneratingTestCases] = useState(false);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteJobDialogOpen, setDeleteJobDialogOpen] = useState(false);
+  const [jobToDelete, setJobToDelete] = useState(null);
+  const [deletingJob, setDeletingJob] = useState(false);
+  const [deletingJobIds, setDeletingJobIds] = useState(new Set());
 
   const fetchProblemAndJobs = async () => {
     try {
@@ -257,64 +264,39 @@ function ProblemDetail({ platform, problemId, onBack }) {
     }
   };
 
-  const handleRegenerateTestCases = async () => {
-    // Find the most recent completed job
-    const completedJob = jobs.find(job => job.status === 'COMPLETED');
-    if (!completedJob || !completedJob.generator_code) {
-      showSnackbar('No completed script found', 'error');
+  const handleRegenerateScript = async () => {
+    if (!problem.solution_code || !problem.constraints) {
+      showSnackbar('Problem must have solution code and constraints to generate script', 'warning');
       return;
     }
 
-    setRegeneratingTestCases(true);
+    setGeneratingScript(true);
+
     try {
-      // Execute the script to get test inputs
-      const executeResponse = await apiPost(API_ENDPOINTS.executeTestCases, {
-        generator_code: completedJob.generator_code,
-        num_cases: 20
-      });
-
-      if (!executeResponse.ok) {
-        const errorData = await executeResponse.json();
-        throw new Error(errorData.error || 'Failed to execute script');
-      }
-
-      const executeData = await executeResponse.json();
-
-      // Save the test inputs to the problem
-      const saveResponse = await apiPost('/register/save-test-inputs/', {
+      const response = await apiPost(API_ENDPOINTS.generateTestCases, {
         platform: problem.platform,
         problem_id: problem.problem_id,
-        test_inputs: executeData.test_cases
+        title: problem.title,
+        problem_url: problem.problem_url || '',
+        tags: problem.tags || [],
+        solution_code: problem.solution_code,
+        language: problem.language || 'python',
+        constraints: problem.constraints,
       });
 
-      if (!saveResponse.ok) {
-        const errorData = await saveResponse.json();
-        throw new Error(errorData.error || 'Failed to save test cases');
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to create job');
       }
 
-      // If solution code exists, generate outputs immediately
-      if (problem.solution_code) {
-        const outputResponse = await apiPost('/register/generate-outputs/', {
-          platform: problem.platform,
-          problem_id: problem.problem_id
-        });
-
-        if (!outputResponse.ok) {
-          const errorData = await outputResponse.json();
-          throw new Error(errorData.error || 'Failed to generate outputs');
-        }
-
-        showSnackbar(`Successfully regenerated ${executeData.count} test cases with outputs`, 'success');
-      } else {
-        showSnackbar(`Successfully regenerated ${executeData.count} test case inputs`, 'success');
-      }
-
+      const data = await response.json();
+      showSnackbar('New script generation job created successfully!', 'success');
       fetchProblemAndJobs();
     } catch (error) {
-      console.error('Error regenerating test cases:', error);
-      showSnackbar('Failed to regenerate test cases: ' + error.message, 'error');
+      console.error('Error generating script:', error);
+      showSnackbar('An error occurred while generating script: ' + error.message, 'error');
     } finally {
-      setRegeneratingTestCases(false);
+      setGeneratingScript(false);
     }
   };
 
@@ -372,12 +354,112 @@ function ProblemDetail({ platform, problemId, onBack }) {
     }
   };
 
-  const truncateText = (text, maxLines = 30) => {
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000/api'}/problems/${platform}/${problemId}/`, {
+        method: 'DELETE',
+        credentials: 'include'
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to delete problem');
+      }
+
+      showSnackbar('Problem deleted successfully!', 'success');
+      setDeleteDialogOpen(false);
+
+      // Navigate back after successful deletion
+      setTimeout(() => {
+        if (onBack) {
+          onBack();
+        } else {
+          window.location.href = '/problems';
+        }
+      }, 1000);
+    } catch (error) {
+      console.error('Error deleting problem:', error);
+      showSnackbar('Failed to delete problem: ' + error.message, 'error');
+      setDeleting(false);
+      setDeleteDialogOpen(false);
+    }
+  };
+
+  const handleDeleteJob = async () => {
+    if (!jobToDelete) return;
+
+    const jobId = jobToDelete.id;
+    setDeletingJob(true);
+
+    // Add to deleting set immediately
+    setDeletingJobIds(prev => new Set(prev).add(jobId));
+
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000/api'}/register/jobs/${jobId}/`, {
+        method: 'DELETE',
+        credentials: 'include'
+      });
+
+      if (!response.ok) {
+        let errorMessage = 'Failed to delete job';
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorMessage;
+        } catch (jsonError) {
+          console.error('Failed to parse error response:', jsonError);
+          errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+        }
+        throw new Error(errorMessage);
+      }
+
+      showSnackbar('Generator script deleted successfully!', 'success');
+      setDeleteJobDialogOpen(false);
+      setJobToDelete(null);
+
+      // Refresh jobs list
+      await fetchProblemAndJobs();
+    } catch (error) {
+      console.error('Error deleting job:', error);
+      showSnackbar(error.message || 'Failed to delete job', 'error');
+
+      // Remove from deleting set on error
+      setDeletingJobIds(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(jobId);
+        return newSet;
+      });
+    } finally {
+      setDeletingJob(false);
+    }
+  };
+
+  const handleCopyScript = (script) => {
+    navigator.clipboard.writeText(script).then(() => {
+      showSnackbar('Script copied to clipboard!', 'success');
+    }).catch((error) => {
+      console.error('Failed to copy script:', error);
+      showSnackbar('Failed to copy script to clipboard', 'error');
+    });
+  };
+
+  const truncateText = (text, maxLines = 10, maxChars = 1000) => {
     if (!text) return { text: '', isTruncated: false };
+
+    // First check character limit
+    if (text.length > maxChars) {
+      return {
+        text: text.substring(0, maxChars) + '\n...',
+        isTruncated: true
+      };
+    }
+
+    // Then check line limit
     const lines = text.split('\n');
     if (lines.length <= maxLines) {
       return { text, isTruncated: false };
     }
+
     return {
       text: lines.slice(0, maxLines).join('\n') + '\n...',
       isTruncated: true
@@ -432,22 +514,55 @@ function ProblemDetail({ platform, problemId, onBack }) {
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Box sx={{ display: 'flex', gap: 1, ml: 'auto' }}>
+      <Box sx={{
+        display: 'flex',
+        flexDirection: { xs: 'column', sm: 'row' },
+        justifyContent: 'space-between',
+        alignItems: { xs: 'stretch', sm: 'center' },
+        mb: 3,
+        gap: 2
+      }}>
+        <Box sx={{
+          display: 'flex',
+          flexDirection: { xs: 'column', sm: 'row' },
+          gap: 1,
+          ml: { xs: 0, sm: 'auto' }
+        }}>
           <Button
             variant="outlined"
-            startIcon={<EditIcon />}
+            startIcon={<EditIcon sx={{ fontSize: { xs: '1.125rem', sm: '1.25rem' } }} />}
             onClick={() => window.location.href = `/register?draft_id=${problem.id}`}
+            sx={{
+              fontSize: { xs: '0.813rem', sm: '0.875rem' },
+              py: { xs: 1, sm: 0.75 }
+            }}
           >
             Edit Problem
           </Button>
-          {!isDraft && jobs.some(job => job.status === 'COMPLETED') && !isCompleted && (
+          <Button
+            variant="outlined"
+            color="error"
+            startIcon={<DeleteIcon sx={{ fontSize: { xs: '1.125rem', sm: '1.25rem' } }} />}
+            onClick={() => setDeleteDialogOpen(true)}
+            sx={{
+              fontSize: { xs: '0.813rem', sm: '0.875rem' },
+              py: { xs: 1, sm: 0.75 }
+            }}
+          >
+            Delete
+          </Button>
+          {!isDraft && !isCompleted && (
             <Button
               variant="outlined"
-              onClick={handleRegenerateTestCases}
-              disabled={regeneratingTestCases}
+              startIcon={<PlayArrowIcon sx={{ fontSize: { xs: '1.125rem', sm: '1.25rem' } }} />}
+              onClick={handleRegenerateScript}
+              disabled={generatingScript || !problem.solution_code || !problem.constraints}
+              sx={{
+                fontSize: { xs: '0.813rem', sm: '0.875rem' },
+                py: { xs: 1, sm: 0.75 }
+              }}
             >
-              {regeneratingTestCases ? 'Regenerating...' : 'Regenerate Test Cases'}
+              {generatingScript ? 'Generating...' : 'Regenerate Script'}
             </Button>
           )}
           {!isDraft && problem.test_cases && problem.test_cases.length > 0 && !isCompleted && (
@@ -455,6 +570,10 @@ function ProblemDetail({ platform, problemId, onBack }) {
               variant="outlined"
               onClick={handleGenerateOutputs}
               disabled={generatingOutputs || !problem.solution_code}
+              sx={{
+                fontSize: { xs: '0.813rem', sm: '0.875rem' },
+                py: { xs: 1, sm: 0.75 }
+              }}
             >
               {generatingOutputs ? 'Generating Outputs...' : 'Regenerate Outputs'}
             </Button>
@@ -462,9 +581,13 @@ function ProblemDetail({ platform, problemId, onBack }) {
           {isDraft && !isCompleted && (
             <Button
               variant="contained"
-              startIcon={<PlayArrowIcon />}
+              startIcon={<PlayArrowIcon sx={{ fontSize: { xs: '1.125rem', sm: '1.25rem' } }} />}
               onClick={handleGenerateScript}
               disabled={generatingScript || !problem.solution_code || !problem.constraints}
+              sx={{
+                fontSize: { xs: '0.813rem', sm: '0.875rem' },
+                py: { xs: 1, sm: 0.75 }
+              }}
             >
               {generatingScript ? 'Generating...' : 'Generate Script'}
             </Button>
@@ -474,6 +597,10 @@ function ProblemDetail({ platform, problemId, onBack }) {
               variant="contained"
               color="success"
               onClick={handleComplete}
+              sx={{
+                fontSize: { xs: '0.813rem', sm: '0.875rem' },
+                py: { xs: 1, sm: 0.75 }
+              }}
             >
               Complete
             </Button>
@@ -482,6 +609,10 @@ function ProblemDetail({ platform, problemId, onBack }) {
             <Button
               variant="outlined"
               onClick={handleMakeDraft}
+              sx={{
+                fontSize: { xs: '0.813rem', sm: '0.875rem' },
+                py: { xs: 1, sm: 0.75 }
+              }}
             >
               Make Draft
             </Button>
@@ -489,11 +620,19 @@ function ProblemDetail({ platform, problemId, onBack }) {
         </Box>
       </Box>
 
-      <Paper sx={{ p: 3, mb: 3 }}>
-        <Typography variant="h4" gutterBottom sx={{ color: 'text.primary', fontWeight: 600 }}>
+      <Paper sx={{ p: { xs: 2, sm: 3 }, mb: 3 }}>
+        <Typography variant="h4" gutterBottom sx={{
+          color: 'text.primary',
+          fontWeight: 600,
+          fontSize: { xs: '1.5rem', sm: '1.75rem', md: '2.125rem' }
+        }}>
           {problem.title}
         </Typography>
-        <Typography variant="body1" sx={{ color: 'text.secondary', mb: 2 }}>
+        <Typography variant="body1" sx={{
+          color: 'text.secondary',
+          mb: 2,
+          fontSize: { xs: '0.875rem', sm: '1rem' }
+        }}>
           {problem.platform === 'baekjoon' ? 'Baekjoon' : 'Codeforces'} - {problem.problem_id}
         </Typography>
 
@@ -592,10 +731,16 @@ function ProblemDetail({ platform, problemId, onBack }) {
                     <Typography>Test Case #{idx + 1}</Typography>
                   </AccordionSummary>
                   <AccordionDetails>
-                    <Box sx={{ display: 'flex', gap: 2 }}>
-                      <Box sx={{ flex: '1 1 50%', minWidth: 0 }}>
+                    <Box sx={{
+                      display: 'flex',
+                      flexDirection: { xs: 'column', md: 'row' },
+                      gap: 2
+                    }}>
+                      <Box sx={{ flex: { xs: '1 1 100%', md: '1 1 50%' }, minWidth: 0 }}>
                         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-                          <Typography variant="subtitle2" color="text.primary">Input:</Typography>
+                          <Typography variant="subtitle2" color="text.primary" sx={{
+                            fontSize: { xs: '0.813rem', sm: '0.875rem' }
+                          }}>Input:</Typography>
                           <IconButton
                             size="small"
                             onClick={() => downloadText(tc.input, `test_${idx + 1}_input.txt`)}
@@ -604,20 +749,41 @@ function ProblemDetail({ platform, problemId, onBack }) {
                             <DownloadIcon fontSize="small" />
                           </IconButton>
                         </Box>
-                        <Paper sx={{ p: 1.5, backgroundColor: '#f5f5f5', border: '1px solid', borderColor: 'divider' }}>
-                          <pre style={{ margin: 0, fontSize: '0.875rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#333', overflowWrap: 'break-word' }}>
+                        <Paper sx={{
+                          p: { xs: 1, sm: 1.5 },
+                          backgroundColor: '#f5f5f5',
+                          border: '1px solid',
+                          borderColor: 'divider',
+                          maxHeight: '200px',
+                          minHeight: '100px',
+                          overflow: 'auto'
+                        }}>
+                          <pre style={{
+                            margin: 0,
+                            fontSize: window.innerWidth < 600 ? '0.75rem' : '0.875rem',
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
+                            color: '#333',
+                            overflowWrap: 'break-word'
+                          }}>
                             {truncatedInput.text}
                           </pre>
                           {truncatedInput.isTruncated && (
-                            <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                            <Typography variant="caption" color="text.secondary" sx={{
+                              mt: 1,
+                              display: 'block',
+                              fontSize: { xs: '0.688rem', sm: '0.75rem' }
+                            }}>
                               (Truncated - download to see full content)
                             </Typography>
                           )}
                         </Paper>
                       </Box>
-                      <Box sx={{ flex: '1 1 50%', minWidth: 0 }}>
+                      <Box sx={{ flex: { xs: '1 1 100%', md: '1 1 50%' }, minWidth: 0 }}>
                         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-                          <Typography variant="subtitle2" color="text.primary">Expected Output:</Typography>
+                          <Typography variant="subtitle2" color="text.primary" sx={{
+                            fontSize: { xs: '0.813rem', sm: '0.875rem' }
+                          }}>Expected Output:</Typography>
                           <IconButton
                             size="small"
                             onClick={() => downloadText(tc.output, `test_${idx + 1}_output.txt`)}
@@ -626,12 +792,31 @@ function ProblemDetail({ platform, problemId, onBack }) {
                             <DownloadIcon fontSize="small" />
                           </IconButton>
                         </Box>
-                        <Paper sx={{ p: 1.5, backgroundColor: '#f5f5f5', border: '1px solid', borderColor: 'divider' }}>
-                          <pre style={{ margin: 0, fontSize: '0.875rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#333', overflowWrap: 'break-word' }}>
+                        <Paper sx={{
+                          p: { xs: 1, sm: 1.5 },
+                          backgroundColor: '#f5f5f5',
+                          border: '1px solid',
+                          borderColor: 'divider',
+                          maxHeight: '200px',
+                          minHeight: '100px',
+                          overflow: 'auto'
+                        }}>
+                          <pre style={{
+                            margin: 0,
+                            fontSize: window.innerWidth < 600 ? '0.75rem' : '0.875rem',
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
+                            color: '#333',
+                            overflowWrap: 'break-word'
+                          }}>
                             {truncatedOutput.text}
                           </pre>
                           {truncatedOutput.isTruncated && (
-                            <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                            <Typography variant="caption" color="text.secondary" sx={{
+                              mt: 1,
+                              display: 'block',
+                              fontSize: { xs: '0.688rem', sm: '0.75rem' }
+                            }}>
                               (Truncated - download to see full content)
                             </Typography>
                           )}
@@ -651,7 +836,7 @@ function ProblemDetail({ platform, problemId, onBack }) {
           Script Generation History
         </Typography>
 
-        {jobs.length === 0 ? (
+        {jobs.filter(job => !deletingJobIds.has(job.id)).length === 0 ? (
           <Box sx={{ textAlign: 'center', py: 4 }}>
             <CodeIcon sx={{ fontSize: 48, color: 'action.disabled', mb: 1 }} />
             <Typography color="text.secondary">
@@ -660,28 +845,41 @@ function ProblemDetail({ platform, problemId, onBack }) {
           </Box>
         ) : (
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-            {jobs.map((job) => (
+            {jobs.filter(job => !deletingJobIds.has(job.id)).map((job) => (
               <Card key={job.id} variant="outlined">
                 <CardContent sx={{ py: 1.5, px: 2, '&:last-child': { pb: 1.5 } }}>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                       {getStatusIcon(job.status)}
                       <Typography variant="body2" sx={{ color: 'text.secondary' }}>
                         {new Date(job.created_at).toLocaleString()}
                       </Typography>
                     </Box>
-                    {job.status === 'COMPLETED' && (
-                      <Button
-                        variant="outlined"
+                    <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                      {job.status === 'COMPLETED' && (
+                        <Button
+                          variant="outlined"
+                          size="small"
+                          startIcon={<CodeIcon />}
+                          onClick={() => handleViewScript(job)}
+                        >
+                          View Script
+                        </Button>
+                      )}
+                      <IconButton
                         size="small"
-                        startIcon={<CodeIcon />}
-                        onClick={() => handleViewScript(job)}
+                        color="error"
+                        onClick={() => {
+                          setJobToDelete(job);
+                          setDeleteJobDialogOpen(true);
+                        }}
+                        title="Delete Job"
                       >
-                        View Script
-                      </Button>
-                    )}
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    </Box>
                     {job.error_message && (
-                      <Typography variant="caption" color="error">
+                      <Typography variant="caption" color="error" sx={{ width: '100%' }}>
                         Error: {job.error_message}
                       </Typography>
                     )}
@@ -729,24 +927,136 @@ function ProblemDetail({ platform, problemId, onBack }) {
                   {selectedJob.generator_code}
                 </pre>
               </Paper>
-              <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1 }}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap' }}>
                 <Button
                   variant="outlined"
-                  onClick={() => setShowScript(false)}
+                  startIcon={<ContentCopyIcon />}
+                  onClick={() => handleCopyScript(selectedJob.generator_code)}
                 >
-                  Close
+                  Copy to Clipboard
                 </Button>
-                <Button
-                  variant="contained"
-                  startIcon={<PlayArrowIcon />}
-                  onClick={handleExecuteScript}
-                  disabled={executingScript}
-                >
-                  {executingScript ? 'Executing...' : 'Execute Script'}
-                </Button>
+                <Box sx={{ display: 'flex', gap: 1 }}>
+                  <Button
+                    variant="outlined"
+                    onClick={() => setShowScript(false)}
+                  >
+                    Close
+                  </Button>
+                  <Button
+                    variant="contained"
+                    startIcon={<PlayArrowIcon />}
+                    onClick={handleExecuteScript}
+                    disabled={executingScript}
+                  >
+                    {executingScript ? 'Executing...' : 'Execute Script'}
+                  </Button>
+                </Box>
               </Box>
             </>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog
+        open={deleteDialogOpen}
+        onClose={() => !deleting && setDeleteDialogOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>
+          Confirm Delete
+          <IconButton
+            onClick={() => setDeleteDialogOpen(false)}
+            disabled={deleting}
+            sx={{ position: 'absolute', right: 8, top: 8 }}
+          >
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent>
+          <Typography variant="body1" sx={{ mb: 2 }}>
+            Are you sure you want to delete this problem?
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            <strong>{problem?.title}</strong> ({problem?.platform} - {problem?.problem_id})
+          </Typography>
+          <Typography variant="body2" color="error">
+            This action cannot be undone. All test cases and associated data will be permanently deleted.
+          </Typography>
+          <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, mt: 3 }}>
+            <Button
+              variant="outlined"
+              onClick={() => setDeleteDialogOpen(false)}
+              disabled={deleting}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="contained"
+              color="error"
+              startIcon={<DeleteIcon />}
+              onClick={handleDelete}
+              disabled={deleting}
+            >
+              {deleting ? 'Deleting...' : 'Delete Problem'}
+            </Button>
+          </Box>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Job Confirmation Dialog */}
+      <Dialog
+        open={deleteJobDialogOpen}
+        onClose={() => !deletingJob && setDeleteJobDialogOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>
+          Confirm Delete Job
+          <IconButton
+            onClick={() => setDeleteJobDialogOpen(false)}
+            disabled={deletingJob}
+            sx={{ position: 'absolute', right: 8, top: 8 }}
+          >
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent>
+          <Typography variant="body1" sx={{ mb: 2 }}>
+            Are you sure you want to delete this generator script job?
+          </Typography>
+          {jobToDelete && (
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Created: <strong>{new Date(jobToDelete.created_at).toLocaleString()}</strong>
+              <br />
+              Status: <strong>{jobToDelete.status}</strong>
+            </Typography>
+          )}
+          <Typography variant="body2" color="error">
+            This action cannot be undone. The generator script will be permanently deleted.
+          </Typography>
+          <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, mt: 3 }}>
+            <Button
+              variant="outlined"
+              onClick={() => {
+                setDeleteJobDialogOpen(false);
+                setJobToDelete(null);
+              }}
+              disabled={deletingJob}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="contained"
+              color="error"
+              startIcon={<DeleteIcon />}
+              onClick={handleDeleteJob}
+              disabled={deletingJob}
+            >
+              {deletingJob ? 'Deleting...' : 'Delete Job'}
+            </Button>
+          </Box>
         </DialogContent>
       </Dialog>
 

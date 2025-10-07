@@ -530,3 +530,192 @@ class TestCheckTaskStatus:
         response = api_client.get('/api/register/task-status/test-task-123/')
 
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+@pytest.mark.django_db
+class TestJobDelete:
+    """Test script generation job deletion endpoint"""
+
+    def test_delete_job_success(self, api_client):
+        """Test successful job deletion"""
+        # Create a job
+        job = ScriptGenerationJob.objects.create(
+            platform='baekjoon',
+            problem_id='1000',
+            title='Test Problem',
+            solution_code='print("test")',
+            language='python',
+            constraints='1 <= n <= 100',
+            status='COMPLETED',
+            generator_code='def generate():\n    return ["1", "2"]'
+        )
+        job_id = job.id
+
+        response = api_client.delete(f'/api/register/jobs/{job_id}/')
+
+        assert response.status_code == status.HTTP_200_OK
+        assert 'message' in response.data
+        assert 'deleted successfully' in response.data['message'].lower()
+
+        # Verify job was deleted
+        assert not ScriptGenerationJob.objects.filter(id=job_id).exists()
+
+    def test_delete_job_not_found(self, api_client):
+        """Test deleting non-existent job"""
+        response = api_client.delete('/api/register/jobs/99999/')
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        assert 'error' in response.data
+        assert 'not found' in response.data['error'].lower()
+
+    def test_delete_pending_job(self, api_client):
+        """Test deleting a pending job"""
+        job = ScriptGenerationJob.objects.create(
+            platform='baekjoon',
+            problem_id='2000',
+            title='Pending Job',
+            solution_code='print("test")',
+            language='python',
+            constraints='1 <= n <= 100',
+            status='PENDING'
+        )
+        job_id = job.id
+
+        response = api_client.delete(f'/api/register/jobs/{job_id}/')
+
+        assert response.status_code == status.HTTP_200_OK
+        assert not ScriptGenerationJob.objects.filter(id=job_id).exists()
+
+    def test_delete_failed_job(self, api_client):
+        """Test deleting a failed job"""
+        job = ScriptGenerationJob.objects.create(
+            platform='codeforces',
+            problem_id='1A',
+            title='Failed Job',
+            solution_code='print("test")',
+            language='python',
+            constraints='1 <= n <= 100',
+            status='FAILED',
+            error_message='Generation failed'
+        )
+        job_id = job.id
+
+        response = api_client.delete(f'/api/register/jobs/{job_id}/')
+
+        assert response.status_code == status.HTTP_200_OK
+        assert not ScriptGenerationJob.objects.filter(id=job_id).exists()
+
+    def test_delete_processing_job(self, api_client):
+        """Test deleting a job that is currently processing"""
+        job = ScriptGenerationJob.objects.create(
+            platform='baekjoon',
+            problem_id='3000',
+            title='Processing Job',
+            solution_code='print("test")',
+            language='python',
+            constraints='1 <= n <= 100',
+            status='PROCESSING'
+        )
+        job_id = job.id
+
+        response = api_client.delete(f'/api/register/jobs/{job_id}/')
+
+        assert response.status_code == status.HTTP_200_OK
+        assert not ScriptGenerationJob.objects.filter(id=job_id).exists()
+
+    def test_delete_multiple_jobs_sequentially(self, api_client):
+        """Test deleting multiple jobs one by one"""
+        # Create multiple jobs
+        job1 = ScriptGenerationJob.objects.create(
+            platform='baekjoon',
+            problem_id='4000',
+            title='Job 1',
+            solution_code='print("test1")',
+            language='python',
+            constraints='1 <= n <= 100',
+            status='COMPLETED'
+        )
+        job2 = ScriptGenerationJob.objects.create(
+            platform='baekjoon',
+            problem_id='4000',
+            title='Job 2',
+            solution_code='print("test2")',
+            language='python',
+            constraints='1 <= n <= 100',
+            status='COMPLETED'
+        )
+
+        # Delete first job
+        response1 = api_client.delete(f'/api/register/jobs/{job1.id}/')
+        assert response1.status_code == status.HTTP_200_OK
+        assert not ScriptGenerationJob.objects.filter(id=job1.id).exists()
+
+        # Second job should still exist
+        assert ScriptGenerationJob.objects.filter(id=job2.id).exists()
+
+        # Delete second job
+        response2 = api_client.delete(f'/api/register/jobs/{job2.id}/')
+        assert response2.status_code == status.HTTP_200_OK
+        assert not ScriptGenerationJob.objects.filter(id=job2.id).exists()
+
+    def test_delete_job_with_celery_task_id(self, api_client):
+        """Test deleting a job that has a celery task ID"""
+        job = ScriptGenerationJob.objects.create(
+            platform='baekjoon',
+            problem_id='5000',
+            title='Job with Task ID',
+            solution_code='print("test")',
+            language='python',
+            constraints='1 <= n <= 100',
+            status='PROCESSING',
+            celery_task_id='test-task-id-123'
+        )
+        job_id = job.id
+
+        response = api_client.delete(f'/api/register/jobs/{job_id}/')
+
+        assert response.status_code == status.HTTP_200_OK
+        assert not ScriptGenerationJob.objects.filter(id=job_id).exists()
+
+    def test_delete_job_with_tags(self, api_client):
+        """Test deleting a job with tags"""
+        job = ScriptGenerationJob.objects.create(
+            platform='codeforces',
+            problem_id='100B',
+            title='Job with Tags',
+            solution_code='print("test")',
+            language='python',
+            constraints='1 <= n <= 100',
+            status='COMPLETED',
+            tags=['math', 'dp', 'greedy']
+        )
+        job_id = job.id
+
+        response = api_client.delete(f'/api/register/jobs/{job_id}/')
+
+        assert response.status_code == status.HTTP_200_OK
+        assert not ScriptGenerationJob.objects.filter(id=job_id).exists()
+
+    def test_delete_job_does_not_affect_problem(self, api_client, sample_problem):
+        """Test that deleting a job doesn't delete the related problem"""
+        # Create a job for an existing problem
+        job = ScriptGenerationJob.objects.create(
+            platform=sample_problem.platform,
+            problem_id=sample_problem.problem_id,
+            title=sample_problem.title,
+            solution_code='print("test")',
+            language='python',
+            constraints='1 <= n <= 100',
+            status='COMPLETED'
+        )
+        job_id = job.id
+        problem_id = sample_problem.id
+
+        # Delete the job
+        response = api_client.delete(f'/api/register/jobs/{job_id}/')
+
+        assert response.status_code == status.HTTP_200_OK
+        assert not ScriptGenerationJob.objects.filter(id=job_id).exists()
+
+        # Verify the problem still exists
+        assert Problem.objects.filter(id=problem_id).exists()

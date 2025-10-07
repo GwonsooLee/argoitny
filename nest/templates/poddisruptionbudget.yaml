@@ -1,0 +1,28 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "algoitny-backend.fullname" . }}-gunicorn
+  labels:
+    {{- include "algoitny-backend.gunicorn.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "algoitny-backend.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: gunicorn
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "algoitny-backend.fullname" . }}-celery-worker
+  labels:
+    {{- include "algoitny-backend.celeryWorker.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "algoitny-backend.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: celery-worker
+{{- end }}

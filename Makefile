@@ -194,32 +194,32 @@ clean-volumes:
 # 개발 도구
 test:
 	@echo "🧪 백엔드 테스트를 실행합니다..."
-	docker-compose exec backend pytest
+	docker-compose exec backend python -m pytest
 
 test-cov:
 	@echo "🧪 테스트를 실행하고 커버리지를 생성합니다..."
-	docker-compose exec backend pytest --cov=api --cov-report=term-missing --cov-report=html
+	docker-compose exec backend python -m pytest --cov=api --cov-report=term-missing --cov-report=html
 
 test-fast:
 	@echo "🧪 빠른 테스트를 실행합니다 (외부 API 제외)..."
-	docker-compose exec backend pytest -m "not external_api" --maxfail=1
+	docker-compose exec backend python -m pytest -m "not external_api" --maxfail=1
 
 test-watch:
 	@echo "🧪 파일 변경 감지 자동 테스트를 실행합니다..."
-	docker-compose exec backend pytest-watch
+	docker-compose exec backend python -m pytest_watch
 
 test-parallel:
 	@echo "🧪 병렬 테스트를 실행합니다 (빠른 실행)..."
-	docker-compose exec backend pytest -n auto
+	docker-compose exec backend python -m pytest -n auto
 
 test-verbose:
 	@echo "🧪 상세 출력으로 테스트를 실행합니다..."
-	docker-compose exec backend pytest -vv
+	docker-compose exec backend python -m pytest -vv
 
 test-specific:
 	@echo "🧪 특정 테스트 파일을 실행합니다..."
 	@read -p "테스트 파일명 (예: test_auth.py): " testfile; \
-	docker-compose exec backend pytest tests/$$testfile -v
+	docker-compose exec backend python -m pytest tests/$$testfile -v
 
 test-local:
 	@echo "🧪 로컬에서 테스트를 실행합니다 (Docker 없이)..."

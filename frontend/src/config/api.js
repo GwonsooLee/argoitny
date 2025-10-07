@@ -10,17 +10,10 @@
 // API Base URL - determined by environment
 export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
-// Environment info (useful for debugging)
+// Environment info
 export const ENV = import.meta.env.VITE_ENV || import.meta.env.MODE;
 export const isDevelopment = import.meta.env.DEV;
 export const isProduction = import.meta.env.PROD;
-
-// Log configuration in development
-if (isDevelopment) {
-  console.log('[API Config] Environment:', ENV);
-  console.log('[API Config] Base URL:', API_BASE_URL);
-  console.log('[API Config] Mode:', import.meta.env.MODE);
-}
 
 // API Endpoints
 export const API_ENDPOINTS = {
@@ -28,6 +21,7 @@ export const API_ENDPOINTS = {
   googleLogin: '/auth/google/',
   tokenRefresh: '/auth/refresh/',
   logout: '/auth/logout/',
+  availablePlans: '/auth/plans/',
 
   // Problems
   problems: '/problems/',
@@ -38,6 +32,7 @@ export const API_ENDPOINTS = {
 
   // Code Execution
   execute: '/execute/',
+  taskStatus: (taskId) => `/register/task-status/${taskId}/`,
 
   // Search History
   history: '/history/',
@@ -49,10 +44,27 @@ export const API_ENDPOINTS = {
   executeTestCases: '/register/execute-test-cases/',
   drafts: '/register/drafts/',
   saveDraft: '/register/save/',
+  extractProblemInfo: '/register/extract-problem-info/',
 
   // Script Generation Jobs
-  jobs: '/jobs/',
-  jobDetail: (id) => `/jobs/${id}/`,
+  jobs: '/register/jobs/',
+  jobDetail: (id) => `/register/jobs/${id}/`,
+
+  // Hints
+  requestHints: (executionId) => `/history/${executionId}/hints/generate/`,
+  getHints: (executionId) => `/history/${executionId}/hints/`,
+
+  // Account
+  accountStats: '/account/stats/',
+  updatePlan: '/account/plan/',
+  planUsage: '/account/plan-usage/',
+
+  // Admin
+  adminUsers: '/admin/users/',
+  adminUserDetail: (userId) => `/admin/users/${userId}/`,
+  adminPlans: '/admin/plans/',
+  adminPlanDetail: (planId) => `/admin/plans/${planId}/`,
+  adminUsageStats: '/admin/usage-stats/',
 };
 
 /**

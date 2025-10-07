@@ -1,0 +1,64 @@
+{{- if .Values.karpenter.enabled }}
+apiVersion: karpenter.sh/v1alpha5
+kind: Provisioner
+metadata:
+  name: {{ .Values.karpenter.provisioner.name }}
+  labels:
+    {{- include "algoitny-backend.labels" . | nindent 4 }}
+spec:
+  requirements:
+    {{- toYaml .Values.karpenter.provisioner.requirements | nindent 4 }}
+  limits:
+    resources:
+      cpu: {{ .Values.karpenter.provisioner.limits.cpu }}
+      memory: {{ .Values.karpenter.provisioner.limits.memory }}
+  providerRef:
+    name: {{ .Values.karpenter.provisioner.name }}
+  ttlSecondsAfterEmpty: {{ .Values.karpenter.provisioner.ttlSecondsAfterEmpty }}
+  ttlSecondsUntilExpired: {{ .Values.karpenter.provisioner.ttlSecondsUntilExpired }}
+  {{- if .Values.karpenter.provisioner.consolidation.enabled }}
+  consolidation:
+    enabled: {{ .Values.karpenter.provisioner.consolidation.enabled }}
+  {{- end }}
+---
+apiVersion: karpenter.k8s.aws/v1alpha1
+kind: AWSNodeTemplate
+metadata:
+  name: {{ .Values.karpenter.provisioner.name }}
+  labels:
+    {{- include "algoitny-backend.labels" . | nindent 4 }}
+spec:
+  subnetSelector:
+    {{- toYaml .Values.karpenter.provisioner.subnetSelector | nindent 4 }}
+  securityGroupSelector:
+    {{- toYaml .Values.karpenter.provisioner.securityGroupSelector | nindent 4 }}
+  instanceProfile: {{ .Values.karpenter.provisioner.instanceProfile }}
+  tags:
+    {{- toYaml .Values.karpenter.provisioner.tags | nindent 4 }}
+  metadataOptions:
+    httpEndpoint: enabled
+    httpProtocolIPv6: disabled
+    httpPutResponseHopLimit: 2
+    httpTokens: required
+  blockDeviceMappings:
+    - deviceName: /dev/xvda
+      ebs:
+        volumeSize: 100Gi
+        volumeType: gp3
+        iops: 3000
+        throughput: 125
+        encrypted: true
+        deleteOnTermination: true
+  userData: |
+    #!/bin/bash
+    set -e
+
+    # Configure container runtime
+    echo "Configuring container runtime..."
+
+    # Set up CloudWatch logging
+    echo "Setting up CloudWatch agent..."
+
+    # Custom user data for AlgoItny backend nodes
+    echo "AlgoItny Backend Node Ready"
+{{- end }}

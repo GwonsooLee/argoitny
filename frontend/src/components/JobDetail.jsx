@@ -1,7 +1,24 @@
 import { useState, useEffect } from 'react';
+import {
+  Box,
+  Typography,
+  Button,
+  Paper,
+  Chip,
+  CircularProgress,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
+  IconButton
+} from '@mui/material';
+import {
+  ArrowBack as ArrowBackIcon,
+  Refresh as RefreshIcon,
+  Download as DownloadIcon,
+  ExpandMore as ExpandMoreIcon
+} from '@mui/icons-material';
 import { apiGet, apiPost } from '../utils/api-client';
 import { API_ENDPOINTS } from '../config/api';
-import './JobDetail.css';
 
 function JobDetail({ jobId, onBack }) {
   const [job, setJob] = useState(null);
@@ -120,147 +137,448 @@ function JobDetail({ jobId, onBack }) {
 
   if (loading) {
     return (
-      <div className="job-detail-container">
-        <div className="job-detail-header">
-          <h2>Job Details</h2>
-          <button onClick={onBack} className="back-button">← Back to Jobs</button>
-        </div>
-        <div className="loading">Loading job details...</div>
-      </div>
+      <Box sx={{ px: { xs: 2, sm: 3 } }}>
+        <Box sx={{
+          display: 'flex',
+          flexDirection: { xs: 'column', sm: 'row' },
+          justifyContent: 'space-between',
+          alignItems: { xs: 'flex-start', sm: 'center' },
+          mb: 3,
+          gap: 2
+        }}>
+          <Typography variant="h4" sx={{
+            fontWeight: 600,
+            fontSize: { xs: '1.5rem', sm: '1.75rem', md: '2.125rem' }
+          }}>
+            Job Details
+          </Typography>
+          <Button
+            variant="outlined"
+            startIcon={<ArrowBackIcon />}
+            onClick={onBack}
+            sx={{ fontSize: { xs: '0.813rem', sm: '0.875rem' } }}
+          >
+            Back to Jobs
+          </Button>
+        </Box>
+        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', py: 8 }}>
+          <CircularProgress />
+          <Typography variant="body1" sx={{ ml: 2 }}>
+            Loading job details...
+          </Typography>
+        </Box>
+      </Box>
     );
   }
 
   if (error) {
     return (
-      <div className="job-detail-container">
-        <div className="job-detail-header">
-          <h2>Job Details</h2>
-          <button onClick={onBack} className="back-button">← Back to Jobs</button>
-        </div>
-        <div className="error-message">{error}</div>
-      </div>
+      <Box sx={{ px: { xs: 2, sm: 3 } }}>
+        <Box sx={{
+          display: 'flex',
+          flexDirection: { xs: 'column', sm: 'row' },
+          justifyContent: 'space-between',
+          alignItems: { xs: 'flex-start', sm: 'center' },
+          mb: 3,
+          gap: 2
+        }}>
+          <Typography variant="h4" sx={{
+            fontWeight: 600,
+            fontSize: { xs: '1.5rem', sm: '1.75rem', md: '2.125rem' }
+          }}>
+            Job Details
+          </Typography>
+          <Button
+            variant="outlined"
+            startIcon={<ArrowBackIcon />}
+            onClick={onBack}
+            sx={{ fontSize: { xs: '0.813rem', sm: '0.875rem' } }}
+          >
+            Back to Jobs
+          </Button>
+        </Box>
+        <Paper sx={{ p: { xs: 2, sm: 3 }, backgroundColor: 'error.lighter', border: '1px solid', borderColor: 'error.light' }}>
+          <Typography color="error">{error}</Typography>
+        </Paper>
+      </Box>
     );
   }
 
   if (!job) {
     return (
-      <div className="job-detail-container">
-        <div className="job-detail-header">
-          <h2>Job Details</h2>
-          <button onClick={onBack} className="back-button">← Back to Jobs</button>
-        </div>
-        <div className="error-message">Job not found</div>
-      </div>
+      <Box sx={{ px: { xs: 2, sm: 3 } }}>
+        <Box sx={{
+          display: 'flex',
+          flexDirection: { xs: 'column', sm: 'row' },
+          justifyContent: 'space-between',
+          alignItems: { xs: 'flex-start', sm: 'center' },
+          mb: 3,
+          gap: 2
+        }}>
+          <Typography variant="h4" sx={{
+            fontWeight: 600,
+            fontSize: { xs: '1.5rem', sm: '1.75rem', md: '2.125rem' }
+          }}>
+            Job Details
+          </Typography>
+          <Button
+            variant="outlined"
+            startIcon={<ArrowBackIcon />}
+            onClick={onBack}
+            sx={{ fontSize: { xs: '0.813rem', sm: '0.875rem' } }}
+          >
+            Back to Jobs
+          </Button>
+        </Box>
+        <Paper sx={{ p: { xs: 2, sm: 3 } }}>
+          <Typography>Job not found</Typography>
+        </Paper>
+      </Box>
     );
   }
 
   return (
-    <div className="job-detail-container">
-      <div className="job-detail-header">
-        <h2>Job Details</h2>
-        <div className="header-actions">
-          <button
+    <Box sx={{ px: { xs: 2, sm: 3 } }}>
+      <Box sx={{
+        display: 'flex',
+        flexDirection: { xs: 'column', sm: 'row' },
+        justifyContent: 'space-between',
+        alignItems: { xs: 'flex-start', sm: 'center' },
+        mb: 3,
+        gap: 2
+      }}>
+        <Typography variant="h4" sx={{
+          fontWeight: 600,
+          fontSize: { xs: '1.5rem', sm: '1.75rem', md: '2.125rem' }
+        }}>
+          Job Details
+        </Typography>
+        <Box sx={{
+          display: 'flex',
+          flexDirection: { xs: 'column', sm: 'row' },
+          gap: 1,
+          width: { xs: '100%', sm: 'auto' }
+        }}>
+          <Button
+            variant="outlined"
+            startIcon={<RefreshIcon />}
             onClick={handleRegenerateScript}
-            className="regenerate-button"
             disabled={regenerating}
+            sx={{
+              fontSize: { xs: '0.75rem', sm: '0.813rem' }
+            }}
           >
             {regenerating ? 'Regenerating...' : 'Regenerate Script'}
-          </button>
-          <button onClick={onBack} className="back-button">← Back to Jobs</button>
-        </div>
-      </div>
+          </Button>
+          <Button
+            variant="outlined"
+            startIcon={<ArrowBackIcon />}
+            onClick={onBack}
+            sx={{ fontSize: { xs: '0.75rem', sm: '0.813rem' } }}
+          >
+            Back to Jobs
+          </Button>
+        </Box>
+      </Box>
 
-      <div className="job-info-card">
-        <div className="job-info-row">
-          <span className="label">Job ID:</span>
-          <span className="value">{job.id}</span>
-        </div>
-        <div className="job-info-row">
-          <span className="label">Problem:</span>
-          <span className="value">{job.title} ({job.platform} - {job.problem_id})</span>
-        </div>
-        <div className="job-info-row">
-          <span className="label">Status:</span>
-          <span className={`status-badge status-${job.status.toLowerCase()}`}>{job.status}</span>
-        </div>
-        <div className="job-info-row">
-          <span className="label">Created:</span>
-          <span className="value">{new Date(job.created_at).toLocaleString()}</span>
-        </div>
-        <div className="job-info-row">
-          <span className="label">Updated:</span>
-          <span className="value">{new Date(job.updated_at).toLocaleString()}</span>
-        </div>
-        {job.tags && job.tags.length > 0 && (
-          <div className="job-info-row">
-            <span className="label">Tags:</span>
-            <div className="tags">
-              {job.tags.map((tag, idx) => (
-                <span key={idx} className="tag">{tag}</span>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
+      <Paper sx={{ p: { xs: 2, sm: 3 }, mb: 3 }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <Box>
+            <Typography variant="caption" color="text.secondary" sx={{
+              fontWeight: 600,
+              textTransform: 'uppercase',
+              fontSize: { xs: '0.688rem', sm: '0.75rem' }
+            }}>
+              Job ID
+            </Typography>
+            <Typography variant="body2" sx={{ fontSize: { xs: '0.875rem', sm: '1rem' } }}>
+              {job.id}
+            </Typography>
+          </Box>
+
+          <Box>
+            <Typography variant="caption" color="text.secondary" sx={{
+              fontWeight: 600,
+              textTransform: 'uppercase',
+              fontSize: { xs: '0.688rem', sm: '0.75rem' }
+            }}>
+              Problem
+            </Typography>
+            <Typography variant="body2" sx={{ fontSize: { xs: '0.875rem', sm: '1rem' } }}>
+              {job.title} ({job.platform} - {job.problem_id})
+            </Typography>
+          </Box>
+
+          <Box>
+            <Typography variant="caption" color="text.secondary" sx={{
+              fontWeight: 600,
+              textTransform: 'uppercase',
+              fontSize: { xs: '0.688rem', sm: '0.75rem' },
+              mb: 0.5,
+              display: 'block'
+            }}>
+              Status
+            </Typography>
+            <Chip
+              label={job.status}
+              color={
+                job.status === 'COMPLETED' ? 'success' :
+                job.status === 'FAILED' ? 'error' :
+                job.status === 'PROCESSING' ? 'info' : 'warning'
+              }
+              size="small"
+              sx={{ fontSize: { xs: '0.75rem', sm: '0.813rem' } }}
+            />
+          </Box>
+
+          <Box sx={{
+            display: 'flex',
+            flexDirection: { xs: 'column', sm: 'row' },
+            gap: { xs: 2, sm: 4 }
+          }}>
+            <Box>
+              <Typography variant="caption" color="text.secondary" sx={{
+                fontWeight: 600,
+                textTransform: 'uppercase',
+                fontSize: { xs: '0.688rem', sm: '0.75rem' }
+              }}>
+                Created
+              </Typography>
+              <Typography variant="body2" sx={{ fontSize: { xs: '0.875rem', sm: '1rem' } }}>
+                {new Date(job.created_at).toLocaleString()}
+              </Typography>
+            </Box>
+
+            <Box>
+              <Typography variant="caption" color="text.secondary" sx={{
+                fontWeight: 600,
+                textTransform: 'uppercase',
+                fontSize: { xs: '0.688rem', sm: '0.75rem' }
+              }}>
+                Updated
+              </Typography>
+              <Typography variant="body2" sx={{ fontSize: { xs: '0.875rem', sm: '1rem' } }}>
+                {new Date(job.updated_at).toLocaleString()}
+              </Typography>
+            </Box>
+          </Box>
+
+          {job.tags && job.tags.length > 0 && (
+            <Box>
+              <Typography variant="caption" color="text.secondary" sx={{
+                fontWeight: 600,
+                textTransform: 'uppercase',
+                fontSize: { xs: '0.688rem', sm: '0.75rem' },
+                mb: 0.5,
+                display: 'block'
+              }}>
+                Tags
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+                {job.tags.map((tag, idx) => (
+                  <Chip
+                    key={idx}
+                    label={tag}
+                    size="small"
+                    variant="outlined"
+                    sx={{ fontSize: { xs: '0.688rem', sm: '0.75rem' } }}
+                  />
+                ))}
+              </Box>
+            </Box>
+          )}
+        </Box>
+      </Paper>
 
       {job.error_message && (
-        <div className="error-card">
-          <h3>Error</h3>
-          <pre>{job.error_message}</pre>
-        </div>
+        <Paper sx={{
+          p: { xs: 2, sm: 3 },
+          mb: 3,
+          backgroundColor: 'error.lighter',
+          border: '1px solid',
+          borderColor: 'error.light'
+        }}>
+          <Typography variant="h6" sx={{
+            fontWeight: 600,
+            mb: 2,
+            fontSize: { xs: '1rem', sm: '1.125rem', md: '1.25rem' }
+          }}>
+            Error
+          </Typography>
+          <Paper sx={{
+            p: { xs: 1, sm: 1.5 },
+            backgroundColor: 'white',
+            fontFamily: 'monospace',
+            fontSize: { xs: '0.75rem', sm: '0.875rem' },
+            overflowX: 'auto'
+          }}>
+            <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+              {job.error_message}
+            </pre>
+          </Paper>
+        </Paper>
       )}
 
       {job.generator_code && (
-        <div className="generator-code-card">
-          <div className="card-header">
-            <h3>Generator Script</h3>
-            <button onClick={downloadGeneratorCode} className="download-button">
+        <Paper sx={{ p: { xs: 2, sm: 3 }, mb: 3 }}>
+          <Box sx={{
+            display: 'flex',
+            flexDirection: { xs: 'column', sm: 'row' },
+            justifyContent: 'space-between',
+            alignItems: { xs: 'flex-start', sm: 'center' },
+            mb: 2,
+            gap: 1
+          }}>
+            <Typography variant="h6" sx={{
+              fontWeight: 600,
+              fontSize: { xs: '1rem', sm: '1.125rem', md: '1.25rem' }
+            }}>
+              Generator Script
+            </Typography>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<DownloadIcon />}
+              onClick={downloadGeneratorCode}
+              sx={{ fontSize: { xs: '0.75rem', sm: '0.813rem' } }}
+            >
               Download Script
-            </button>
-          </div>
-          <pre className="code-block">{job.generator_code}</pre>
-        </div>
+            </Button>
+          </Box>
+          <Paper sx={{
+            p: { xs: 1, sm: 1.5 },
+            backgroundColor: '#f5f5f5',
+            border: '1px solid',
+            borderColor: 'divider',
+            maxHeight: 400,
+            overflow: 'auto'
+          }}>
+            <pre style={{
+              margin: 0,
+              fontFamily: 'monospace',
+              fontSize: window.innerWidth < 600 ? '0.7rem' : '0.85rem',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word'
+            }}>
+              {job.generator_code}
+            </pre>
+          </Paper>
+        </Paper>
       )}
 
       {job.test_cases && job.test_cases.length > 0 && (
-        <div className="test-cases-card">
-          <div className="card-header">
-            <h3>Generated Test Cases ({job.test_cases.length})</h3>
-            <button onClick={downloadAllTestCases} className="download-button">
-              Download All Test Cases
-            </button>
-          </div>
-          <div className="test-cases-list">
+        <Paper sx={{ p: { xs: 2, sm: 3 }, mb: 3 }}>
+          <Box sx={{
+            display: 'flex',
+            flexDirection: { xs: 'column', sm: 'row' },
+            justifyContent: 'space-between',
+            alignItems: { xs: 'flex-start', sm: 'center' },
+            mb: 2,
+            gap: 1
+          }}>
+            <Typography variant="h6" sx={{
+              fontWeight: 600,
+              fontSize: { xs: '1rem', sm: '1.125rem', md: '1.25rem' }
+            }}>
+              Generated Test Cases ({job.test_cases.length})
+            </Typography>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<DownloadIcon />}
+              onClick={downloadAllTestCases}
+              sx={{ fontSize: { xs: '0.75rem', sm: '0.813rem' } }}
+            >
+              Download All
+            </Button>
+          </Box>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
             {job.test_cases.map((testCase, idx) => (
-              <div key={idx} className="test-case-item">
-                <div className="test-case-header">
-                  <span className="test-case-number">Test Case {idx + 1}</span>
-                  <button
-                    onClick={() => downloadTestCase(testCase, idx)}
-                    className="download-link"
-                  >
-                    Download
-                  </button>
-                </div>
-                <pre className="test-case-content">
-                  {truncateText(testCase, 200)}
-                  {testCase.length > 200 && (
-                    <span className="truncate-indicator"> (truncated)</span>
-                  )}
-                </pre>
-              </div>
+              <Accordion key={idx}>
+                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                  <Typography sx={{
+                    fontWeight: 600,
+                    fontSize: { xs: '0.875rem', sm: '1rem' }
+                  }}>
+                    Test Case {idx + 1}
+                  </Typography>
+                </AccordionSummary>
+                <AccordionDetails>
+                  <Box sx={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    mb: 1
+                  }}>
+                    <Typography variant="caption" sx={{
+                      fontSize: { xs: '0.688rem', sm: '0.75rem' }
+                    }}>
+                      Preview (truncated at 200 characters)
+                    </Typography>
+                    <IconButton
+                      size="small"
+                      onClick={() => downloadTestCase(testCase, idx)}
+                    >
+                      <DownloadIcon fontSize="small" />
+                    </IconButton>
+                  </Box>
+                  <Paper sx={{
+                    p: { xs: 1, sm: 1.5 },
+                    backgroundColor: '#f5f5f5',
+                    border: '1px solid',
+                    borderColor: 'divider'
+                  }}>
+                    <pre style={{
+                      margin: 0,
+                      fontFamily: 'monospace',
+                      fontSize: window.innerWidth < 600 ? '0.7rem' : '0.8rem',
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word'
+                    }}>
+                      {truncateText(testCase, 200)}
+                      {testCase.length > 200 && (
+                        <Typography component="span" variant="caption" color="text.secondary">
+                          {' '}(truncated)
+                        </Typography>
+                      )}
+                    </pre>
+                  </Paper>
+                </AccordionDetails>
+              </Accordion>
             ))}
-          </div>
-        </div>
+          </Box>
+        </Paper>
       )}
 
       {job.test_case_error && (
-        <div className="error-card">
-          <h3>Test Case Generation Error</h3>
-          <pre>{job.test_case_error}</pre>
-        </div>
+        <Paper sx={{
+          p: { xs: 2, sm: 3 },
+          mb: 3,
+          backgroundColor: 'error.lighter',
+          border: '1px solid',
+          borderColor: 'error.light'
+        }}>
+          <Typography variant="h6" sx={{
+            fontWeight: 600,
+            mb: 2,
+            fontSize: { xs: '1rem', sm: '1.125rem', md: '1.25rem' }
+          }}>
+            Test Case Generation Error
+          </Typography>
+          <Paper sx={{
+            p: { xs: 1, sm: 1.5 },
+            backgroundColor: 'white',
+            fontFamily: 'monospace',
+            fontSize: { xs: '0.75rem', sm: '0.875rem' },
+            overflowX: 'auto'
+          }}>
+            <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+              {job.test_case_error}
+            </pre>
+          </Paper>
+        </Paper>
       )}
-    </div>
+    </Box>
   );
 }
 

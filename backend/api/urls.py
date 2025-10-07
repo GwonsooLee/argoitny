@@ -4,6 +4,7 @@ from .views import (
     GoogleLoginView,
     TokenRefreshView,
     LogoutView,
+    AvailablePlansView,
     ProblemListView,
     ProblemDetailView,
     ProblemDraftsView,
@@ -11,6 +12,8 @@ from .views import (
     ExecuteCodeView,
     SearchHistoryListView,
     SearchHistoryDetailView,
+    GenerateHintsView,
+    GetHintsView,
     RegisterProblemView,
     GenerateTestCasesView,
     ExecuteTestCasesView,
@@ -22,9 +25,15 @@ from .views import (
     ToggleCompletionView,
     JobListView,
     JobDetailView,
+    ExtractProblemInfoView,
 )
-from .views.account import AccountStatsView
+from .views.account import AccountStatsView, UpdatePlanView, PlanUsageView
 from .views.health import health_check, readiness_check, liveness_check
+from .views.admin import (
+    UserManagementView,
+    SubscriptionPlanManagementView,
+    UsageStatsView
+)
 
 urlpatterns = [
     # Health Checks
@@ -36,6 +45,7 @@ urlpatterns = [
     path('auth/google/', GoogleLoginView.as_view(), name='google-login'),
     path('auth/refresh/', TokenRefreshView.as_view(), name='token-refresh'),
     path('auth/logout/', LogoutView.as_view(), name='logout'),
+    path('auth/plans/', AvailablePlansView.as_view(), name='available-plans'),
 
     # Problems
     path('problems/', ProblemListView.as_view(), name='problem-list'),
@@ -50,6 +60,8 @@ urlpatterns = [
     # Search History
     path('history/', SearchHistoryListView.as_view(), name='history-list'),
     path('history/<int:history_id>/', SearchHistoryDetailView.as_view(), name='history-detail'),
+    path('history/<int:history_id>/hints/', GetHintsView.as_view(), name='get-hints'),
+    path('history/<int:history_id>/hints/generate/', GenerateHintsView.as_view(), name='generate-hints'),
 
     # Problem Registration
     path('register/', RegisterProblemView.as_view(), name='register-problem-short'),  # Alias for tests
@@ -66,6 +78,9 @@ urlpatterns = [
     path('register/jobs/', JobListView.as_view(), name='register-job-list'),
     path('register/jobs/<int:job_id>/', JobDetailView.as_view(), name='register-job-detail'),
 
+    # Extract Problem Info
+    path('register/extract-problem-info/', ExtractProblemInfoView.as_view(), name='extract-problem-info'),
+
     # Task Status
     path('register/task-status/<str:task_id>/', CheckTaskStatusView.as_view(), name='register-task-status'),
 
@@ -74,4 +89,13 @@ urlpatterns = [
 
     # Account
     path('account/stats/', AccountStatsView.as_view(), name='account-stats'),
+    path('account/plan/', UpdatePlanView.as_view(), name='update-plan'),
+    path('account/plan-usage/', PlanUsageView.as_view(), name='plan-usage'),
+
+    # Admin
+    path('admin/users/', UserManagementView.as_view(), name='admin-users'),
+    path('admin/users/<int:user_id>/', UserManagementView.as_view(), name='admin-user-detail'),
+    path('admin/plans/', SubscriptionPlanManagementView.as_view(), name='admin-plans'),
+    path('admin/plans/<int:plan_id>/', SubscriptionPlanManagementView.as_view(), name='admin-plan-detail'),
+    path('admin/usage-stats/', UsageStatsView.as_view(), name='admin-usage-stats'),
 ]

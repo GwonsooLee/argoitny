@@ -69,11 +69,11 @@ function ProblemSearch({ onSelectProblem }) {
       flexDirection: 'column',
       alignItems: 'center',
       minHeight: '70vh',
-      pt: 12
+      pt: { xs: 4, sm: 8, md: 12 }
     }}>
       {/* Search Box */}
-      <Box sx={{ width: '100%', maxWidth: 700, px: 2 }}>
-        <Box sx={{ display: 'flex', gap: 1 }}>
+      <Box sx={{ width: '100%', maxWidth: 700, px: { xs: 0, sm: 2 } }}>
+        <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 1 }}>
           <TextField
             fullWidth
             placeholder="Search by problem number or title"
@@ -83,7 +83,8 @@ function ProblemSearch({ onSelectProblem }) {
             sx={{
               '& .MuiOutlinedInput-root': {
                 backgroundColor: 'white',
-                borderRadius: 3,
+                borderRadius: { xs: 1, sm: 3 },
+                fontSize: { xs: '0.875rem', sm: '1rem' },
                 '&:hover': {
                   boxShadow: '0 1px 6px rgba(32, 33, 36, 0.28)'
                 },
@@ -95,7 +96,7 @@ function ProblemSearch({ onSelectProblem }) {
             InputProps={{
               startAdornment: (
                 <InputAdornment position="start">
-                  <SearchIcon color="action" />
+                  <SearchIcon color="action" sx={{ fontSize: { xs: '1.25rem', sm: '1.5rem' } }} />
                 </InputAdornment>
               ),
             }}
@@ -105,10 +106,11 @@ function ProblemSearch({ onSelectProblem }) {
             onClick={handleSearch}
             disabled={loading || !query.trim()}
             sx={{
-              minWidth: 120,
-              borderRadius: 3,
+              minWidth: { xs: '100%', sm: 120 },
+              borderRadius: { xs: 1, sm: 3 },
               textTransform: 'none',
-              fontSize: '1rem'
+              fontSize: { xs: '0.875rem', sm: '1rem' },
+              py: { xs: 1.5, sm: 1 }
             }}
           >
             {loading ? <CircularProgress size={20} color="inherit" /> : 'Search'}
@@ -118,7 +120,7 @@ function ProblemSearch({ onSelectProblem }) {
 
       {/* Search Results */}
       {hasSearched && (
-        <Box sx={{ width: '100%', maxWidth: 700, mt: 3, px: 2 }}>
+        <Box sx={{ width: '100%', maxWidth: 700, mt: 3, px: { xs: 0, sm: 2 } }}>
           {loading ? (
             <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
               <CircularProgress />
@@ -130,10 +132,10 @@ function ProblemSearch({ onSelectProblem }) {
                   key={`${problem.platform}-${problem.problem_id}-${index}`}
                   onClick={() => onSelectProblem(problem)}
                   sx={{
-                    p: 2,
+                    p: { xs: 2, sm: 2.5 },
                     mb: 2,
                     backgroundColor: 'white',
-                    borderRadius: 1,
+                    borderRadius: { xs: 0, sm: 1 },
                     cursor: 'pointer',
                     transition: 'all 0.2s',
                     '&:hover': {
@@ -141,13 +143,14 @@ function ProblemSearch({ onSelectProblem }) {
                     }
                   }}
                 >
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 0.5 }}>
                     <Typography
                       variant="h6"
                       sx={{
                         color: '#1a0dab',
-                        fontSize: '1.25rem',
+                        fontSize: { xs: '1rem', sm: '1.125rem', md: '1.25rem' },
                         fontWeight: 400,
+                        lineHeight: 1.3,
                         '&:hover': {
                           textDecoration: 'underline'
                         }
@@ -156,19 +159,27 @@ function ProblemSearch({ onSelectProblem }) {
                       {problem.title}
                     </Typography>
                   </Box>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
-                    <Typography variant="body2" sx={{ color: '#202124', fontSize: '0.875rem' }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1, mb: 0.5 }}>
+                    <Typography variant="body2" sx={{ color: '#202124', fontSize: { xs: '0.813rem', sm: '0.875rem' } }}>
                       {problem.platform === 'baekjoon' ? 'Baekjoon' : 'Codeforces'}
                     </Typography>
                     <Typography variant="body2" sx={{ color: '#70757a' }}>
                       •
                     </Typography>
-                    <Typography variant="body2" sx={{ color: '#70757a', fontSize: '0.875rem' }}>
+                    <Typography variant="body2" sx={{ color: '#70757a', fontSize: { xs: '0.813rem', sm: '0.875rem' } }}>
                       Problem ID: {problem.problem_id}
                     </Typography>
                   </Box>
                   {problem.problem_url && (
-                    <Typography variant="body2" sx={{ color: '#006621', fontSize: '0.875rem' }}>
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        color: '#006621',
+                        fontSize: { xs: '0.75rem', sm: '0.813rem', md: '0.875rem' },
+                        wordBreak: 'break-all',
+                        lineHeight: 1.4
+                      }}
+                    >
                       {problem.problem_url}
                     </Typography>
                   )}
@@ -176,8 +187,8 @@ function ProblemSearch({ onSelectProblem }) {
               ))}
             </Box>
           ) : (
-            <Box sx={{ textAlign: 'center', py: 4 }}>
-              <Typography variant="body1" color="text.secondary">
+            <Box sx={{ textAlign: 'center', py: 4, px: 2 }}>
+              <Typography variant="body1" color="text.secondary" sx={{ fontSize: { xs: '0.875rem', sm: '1rem' } }}>
                 No problems found for "{query}"
               </Typography>
             </Box>
