@@ -7,11 +7,12 @@ from django.db.models import Count, Q
 from django.utils import timezone
 from datetime import timedelta
 
-from api.models import User, SubscriptionPlan, UsageLog, Problem
+from api.models import User, SubscriptionPlan, UsageLog, Problem, TestCase
 from api.serializers import (
     UserManagementSerializer,
     SubscriptionPlanSerializer,
-    UsageLogSerializer
+    UsageLogSerializer,
+    ProblemSerializer
 )
 
 
@@ -253,3 +254,108 @@ class UsageStatsView(APIView):
             'top_users': top_users_data,
             'plan_distribution': list(plan_distribution)
         })
+
+
+class ProblemReviewView(APIView):
+    """Problem review management for admins"""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        """
+        List problems that need review
+        Query params:
+            - needs_review: filter by needs_review status (true/false)
+            - verified: filter by verified_by_admin status (true/false)
+            - platform: filter by platform
+            - limit: number of results (default 50)
+        """
+        if not request.user.is_admin():
+            return Response(
+                {'error': 'Admin access required'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        problems = Problem.objects.active().prefetch_related('test_cases')
+
+        # Filter by review status
+        needs_review = request.query_params.get('needs_review')
+        if needs_review is not None:
+            needs_review_bool = needs_review.lower() == 'true'
+            problems = problems.filter(needs_review=needs_review_bool)
+
+        # Filter by verification status
+        verified = request.query_params.get('verified')
+        if verified is not None:
+            verified_bool = verified.lower() == 'true'
+            problems = problems.filter(verified_by_admin=verified_bool)
+
+        # Filter by platform
+        platform = request.query_params.get('platform')
+        if platform:
+            problems = problems.filter(platform=platform)
+
+        # Limit results
+        limit = int(request.query_params.get('limit', 50))
+        problems = problems[:limit]
+
+        # Annotate with test case count
+        problems = problems.annotate(test_case_count_annotated=Count('test_cases'))
+
+        serializer = ProblemSerializer(problems, many=True)
+        return Response({
+            'problems': serializer.data,
+            'count': len(serializer.data)
+        })
+
+    def patch(self, request, problem_id=None):
+        """
+        Update problem review status
+        Body params:
+            - needs_review: boolean
+            - review_notes: string
+            - verified_by_admin: boolean
+        """
+        if not request.user.is_admin():
+            return Response(
+                {'error': 'Admin access required'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if not problem_id:
+            return Response(
+                {'error': 'Problem ID required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            problem = Problem.objects.prefetch_related('test_cases').get(
+                id=problem_id,
+                is_deleted=False
+            )
+        except Problem.DoesNotExist:
+            return Response(
+                {'error': 'Problem not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Update review fields
+        if 'needs_review' in request.data:
+            problem.needs_review = request.data['needs_review']
+
+        if 'review_notes' in request.data:
+            problem.review_notes = request.data['review_notes']
+
+        if 'verified_by_admin' in request.data:
+            problem.verified_by_admin = request.data['verified_by_admin']
+            if request.data['verified_by_admin']:
+                problem.reviewed_at = timezone.now()
+
+        problem.save()
+
+        # Return updated problem
+        serializer = ProblemSerializer(problem)
+        return Response(serializer.data)
+
+    def put(self, request, problem_id=None):
+        """Alias for patch"""
+        return self.patch(request, problem_id)

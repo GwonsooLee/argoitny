@@ -15,7 +15,7 @@ class GeminiService:
         else:
             self.model = None
 
-    def generate_test_case_generator_code(self, problem_info):
+    def generate_test_case_generator_code(self, problem_info, previous_failure=None):
         """
         Generate Python code that will generate test cases
 
@@ -27,6 +27,9 @@ class GeminiService:
                 - solution_code: str (optional, for reference)
                 - language: str
                 - constraints: str
+            previous_failure: Dict containing (optional):
+                - code: str (previously generated code that failed)
+                - error: str (error message from the failure)
 
         Returns:
             str: Python code that generates test cases
@@ -54,7 +57,32 @@ ANALYZE THIS CODE CAREFULLY to understand:
 3. What is the order of inputs?
 """
 
+        # Include previous failure context if available
+        previous_failure_section = ""
+        if previous_failure and previous_failure.get('code') and previous_failure.get('error'):
+            previous_failure_section = f"""
+⚠️ PREVIOUS ATTEMPT FAILED - LEARN FROM THIS MISTAKE:
+
+Previously Generated Code:
+```python
+{previous_failure['code']}
+```
+
+Error That Occurred:
+{previous_failure['error']}
+
+IMPORTANT: Analyze what went wrong in the previous attempt and FIX the issue in your new code.
+Common issues to check:
+1. Was the input format incorrect?
+2. Were the constraints violated?
+3. Was the multi-test case format handled correctly?
+4. Were there any syntax errors or logic errors?
+
+Generate NEW, CORRECTED code that addresses the failure above.
+"""
+
         prompt = f"""You are an expert at creating test case generators for competitive programming problems.
+{previous_failure_section}
 
 Problem Details:
 - Platform: {problem_info['platform']}
@@ -72,17 +100,37 @@ CRITICAL INPUT FORMAT REQUIREMENTS:
 1. If the solution code reads multiple test cases (has `int t` followed by a loop):
    - The generator must return a list of `n` COMPLETE input strings
    - Each string should be: "<t>\\n<case1>\\n<case2>\\n...\\n<case_t>"
-   - Where t is the number of cases in that input (can vary, but keep reasonable: 1-5 for small, 5-10 for medium, 10-20 for large)
+   - The value of t should vary based on test case distribution:
+     * SMALL: t = 1-5 test cases per input, each case with small data
+     * MEDIUM: t = 5-50 test cases per input, each case with medium data
+     * LARGE: t can be large BUT each individual case must be smaller to keep total data reasonable
+       - Example: If t = 1000, then each case should have small n (e.g., n ≤ 1000)
+       - Example: If t = 10, then each case can have large n (e.g., n ≤ 100000)
+       - RULE: Keep total data size reasonable (total elements across all cases ≤ 10^6)
    - Example: If generating 10 inputs, return 10 strings, each containing multiple test cases
 
 2. If the solution code processes a single test case (no t variable):
    - The generator must return a list of `n` input strings
    - Each string is ONE test case: "<input_data>"
+   - LARGE cases can use full maximum constraints since there's only one case per input
 
-Test Case Distribution:
-- 50% should be SMALL inputs (easy to verify, edge cases, minimal values)
-- 30% should be MEDIUM inputs (moderate complexity)
-- 20% should be LARGE inputs (maximum or near-maximum values to test performance)
+Test Case Distribution (STRICTLY ENFORCED):
+- 50% should be SMALL inputs:
+  * Edge cases: minimum values (0, 1, -1 where applicable)
+  * Boundary conditions
+  * Simple cases for manual verification
+
+- 30% should be MEDIUM inputs:
+  * Moderate size values (around 10-30% of maximum constraint)
+  * Typical use cases
+
+- 20% should be LARGE inputs (CRITICAL - MUST INCLUDE):
+  * Use MAXIMUM or NEAR-MAXIMUM values from the constraints
+  * Example: If constraint is "1 ≤ n ≤ 10^5", use n = 100000 or n = 99999
+  * Example: If constraint is "1 ≤ a[i] ≤ 10^9", use values like 10^9, 999999999
+  * Test performance at scale
+  * Stress test the algorithm
+  * MANDATORY: At least 20% of test cases MUST use maximum constraint values
 
 IMPORTANT REQUIREMENTS:
 - Create a function named `generate_test_cases(n)` that takes the number of cases as parameter
@@ -92,7 +140,8 @@ IMPORTANT REQUIREMENTS:
 - Each input string should be ready to be passed directly to stdin
 - For multi-line inputs, use newline character (\\n)
 - Include edge cases: minimum values, maximum values, boundary conditions
-- Follow the 50/30/20 distribution for small/medium/large cases
+- STRICTLY follow the 50/30/20 distribution for small/medium/large cases
+- For LARGE cases: Extract maximum values from constraints and USE THEM
 - Match the EXACT input format from the solution code
 
 CRITICAL: Return ONLY executable Python code. Do NOT include:
@@ -100,24 +149,66 @@ CRITICAL: Return ONLY executable Python code. Do NOT include:
 - Explanations before or after the code
 - Comments explaining what the code does
 - Any text that is not valid Python syntax
+- Placeholder code like case_data = "..." or case_data = '...'
+
+IMPORTANT: You MUST write the COMPLETE implementation. Do NOT use placeholders like "..." or "# TODO" or "# Your logic here".
+Every line of code must be fully implemented and ready to execute.
 
 You must return ONLY the function definition starting with "def generate_test_cases(n):" and nothing else.
 
 Example for MULTI-TEST CASE format (if solution has `int t` loop):
+'''
+Suppose the problem requires:
+- Input: First line has t (number of test cases). Each test case has n (array size) and an array of n integers.
+- Constraints: 1 <= t <= 1000, 1 <= n <= 10^5, 1 <= a[i] <= 10^9
+
+Then your generator should look like:
+'''
 def generate_test_cases(n):
     import random
     test_cases = []
-    for _ in range(n):
-        t = random.randint(1, 5)  # Number of test cases in this input
+
+    # Calculate distribution: 50% small, 30% medium, 20% large
+    num_small = n // 2
+    num_medium = (n * 3) // 10
+    num_large = n - num_small - num_medium
+
+    # SMALL cases (50%)
+    for _ in range(num_small):
+        t = random.randint(1, 3)  # Few test cases
         cases = []
         for _ in range(t):
-            # Generate one test case
-            case_data = "..."
-            cases.append(case_data)
+            arr_size = random.randint(1, 10)  # Small array
+            arr = [random.randint(1, 100) for _ in range(arr_size)]
+            cases.append(f"{{arr_size}}\\n{{' '.join(map(str, arr))}}")
         test_cases.append(f"{{t}}\\n{{chr(10).join(cases)}}")
+
+    # MEDIUM cases (30%)
+    for _ in range(num_medium):
+        t = random.randint(5, 50)  # Moderate number of test cases
+        cases = []
+        for _ in range(t):
+            arr_size = random.randint(100, 1000)  # Medium array
+            arr = [random.randint(1, 10**6) for _ in range(arr_size)]
+            cases.append(f"{{arr_size}}\\n{{' '.join(map(str, arr))}}")
+        test_cases.append(f"{{t}}\\n{{chr(10).join(cases)}}")
+
+    # LARGE cases (20%) - USE MAXIMUM CONSTRAINT VALUES
+    for _ in range(num_large):
+        # Use MAXIMUM t value from constraints
+        t = random.randint(800, 1000)  # t <= 1000, so use close to max
+        cases = []
+        for _ in range(t):
+            # Use MAXIMUM n and a[i] values
+            arr_size = random.randint(90000, 100000)  # n <= 10^5
+            arr = [random.randint(10**8, 10**9) for _ in range(arr_size)]  # a[i] <= 10^9
+            cases.append(f"{{arr_size}}\\n{{' '.join(map(str, arr))}}")
+        test_cases.append(f"{{t}}\\n{{chr(10).join(cases)}}")
+
+    random.shuffle(test_cases)
     return test_cases
 
-Now write the complete function based on the solution code format:"""
+Now write the COMPLETE function based on the solution code format and constraints:"""
 
         try:
             response = self.model.generate_content(prompt)
@@ -192,12 +283,97 @@ Now write the complete function based on the solution code format:"""
         except Exception as e:
             raise ValueError(f'Failed to generate test case generator code: {str(e)}')
 
-    def extract_problem_info_from_url(self, problem_url):
+    def _validate_solution_with_samples(self, solution_code, samples):
+        """
+        Validate C++ solution code against sample test cases
+
+        Args:
+            solution_code: C++ code string
+            samples: List of dicts with 'input' and 'output' keys
+
+        Returns:
+            tuple: (success: bool, error_message: str or None)
+        """
+        import tempfile
+        import subprocess
+        import os
+
+        try:
+            # Create temp directory for compilation
+            with tempfile.TemporaryDirectory() as tmpdir:
+                source_file = os.path.join(tmpdir, 'solution.cpp')
+                binary_file = os.path.join(tmpdir, 'solution')
+
+                # Write C++ code to file
+                with open(source_file, 'w', encoding='utf-8') as f:
+                    f.write(solution_code)
+
+                # Compile C++ code
+                compile_cmd = [
+                    'g++',
+                    '-std=c++17',
+                    '-O2',
+                    '-Wall',
+                    source_file,
+                    '-o',
+                    binary_file
+                ]
+
+                compile_result = subprocess.run(
+                    compile_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+
+                if compile_result.returncode != 0:
+                    return False, f"Compilation error: {compile_result.stderr}"
+
+                # Test each sample
+                for idx, sample in enumerate(samples, 1):
+                    sample_input = sample.get('input', '').strip()
+                    expected_output = sample.get('output', '').strip()
+
+                    # Run the binary with sample input
+                    try:
+                        run_result = subprocess.run(
+                            [binary_file],
+                            input=sample_input,
+                            capture_output=True,
+                            text=True,
+                            timeout=2
+                        )
+
+                        if run_result.returncode != 0:
+                            return False, f"Sample {idx} runtime error: {run_result.stderr}"
+
+                        actual_output = run_result.stdout.strip()
+
+                        # Compare outputs (normalize whitespace)
+                        actual_lines = [line.strip() for line in actual_output.split('\n') if line.strip()]
+                        expected_lines = [line.strip() for line in expected_output.split('\n') if line.strip()]
+
+                        if actual_lines != expected_lines:
+                            return False, f"Sample {idx} failed:\nInput: {sample_input}\nExpected: {expected_output}\nGot: {actual_output}"
+
+                    except subprocess.TimeoutExpired:
+                        return False, f"Sample {idx} timeout (>2s)"
+
+                # All samples passed
+                return True, None
+
+        except Exception as e:
+            return False, f"Validation error: {str(e)}"
+
+    def extract_problem_info_from_url(self, problem_url, progress_callback=None, additional_context=None):
         """
         Extract problem information from URL using Gemini AI
 
         Args:
             problem_url: URL of the problem page
+            progress_callback: Optional function to call with progress updates
+            additional_context: Optional additional context (e.g., counterexamples, edge cases)
+                               to provide to AI for better solution generation
 
         Returns:
             dict: {
@@ -211,6 +387,11 @@ Now write the complete function based on the solution code format:"""
         """
         if not self.model:
             raise ValueError('Gemini API key not configured')
+
+        def update_progress(message):
+            """Helper to update progress if callback provided"""
+            if progress_callback:
+                progress_callback(message)
 
         try:
             import time
@@ -235,11 +416,11 @@ Now write the complete function based on the solution code format:"""
             ]
 
             # Fetch the webpage content with randomized headers to avoid bot detection
+            # Note: Don't set Accept-Encoding - let requests handle it automatically
             headers = {
                 'User-Agent': random.choice(user_agents),
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
                 'Accept-Language': random.choice(accept_languages),
-                'Accept-Encoding': 'gzip, deflate, br',
                 'Connection': 'keep-alive',
                 'Upgrade-Insecure-Requests': '1',
                 'Sec-Fetch-Dest': 'document',
@@ -259,12 +440,14 @@ Now write the complete function based on the solution code format:"""
 
             # Try to get the page with retry logic
             max_retries = 3
+            update_progress("Fetching webpage...")
             for attempt in range(max_retries):
                 try:
                     response = session.get(problem_url, timeout=30, allow_redirects=True)
 
                     if response.status_code == 403:
                         if attempt < max_retries - 1:
+                            update_progress(f"Retrying fetch (attempt {attempt + 2}/{max_retries})...")
                             # Wait longer on retry with exponential backoff
                             wait_time = random.uniform(5, 10) * (attempt + 1)
                             time.sleep(wait_time)
@@ -276,95 +459,373 @@ Now write the complete function based on the solution code format:"""
                             raise ValueError(f'Failed to fetch problem URL after {max_retries} attempts: 403 Forbidden. The website may be blocking automated requests.')
 
                     response.raise_for_status()
-                    webpage_content = response.text
+
+                    # Let requests handle decompression automatically
+                    # It will decompress gzip/deflate/br if needed
+                    import logging
+                    logger = logging.getLogger(__name__)
+
+                    # Use response.text which handles encoding automatically
+                    raw_html = response.text
+
+                    # Log raw HTML for debugging
+                    logger.info(f"Raw HTML fetched from {problem_url}")
+                    logger.info(f"HTML length: {len(raw_html)} characters")
+                    logger.info(f"HTML preview (first 2000 chars):\n{raw_html[:2000]}")
+                    logger.info(f"HTML status code: {response.status_code}")
+                    logger.info(f"Content-Type: {response.headers.get('Content-Type', 'N/A')}")
+                    logger.info(f"Response encoding: {response.encoding}")
+
+                    webpage_content = raw_html
                     break
 
                 except requests.exceptions.RequestException as e:
                     if attempt < max_retries - 1:
+                        update_progress(f"Retrying fetch (attempt {attempt + 2}/{max_retries})...")
                         wait_time = random.uniform(3, 6) * (attempt + 1)
                         time.sleep(wait_time)
                         continue
                     else:
                         raise ValueError(f'Failed to fetch problem URL: {str(e)}')
 
-            # Limit content size to avoid token limits
-            if len(webpage_content) > 50000:
-                webpage_content = webpage_content[:50000]
+            # Extract clean text from HTML using BeautifulSoup
+            from bs4 import BeautifulSoup
 
-            prompt = f"""You are an expert at analyzing competitive programming problems and generating efficient C++ solutions.
+            soup = BeautifulSoup(webpage_content, 'html.parser')
 
-Given the following problem webpage content, extract:
+            # Platform-specific HTML parsing to extract only problem content
+            update_progress("Extracting problem content...")
+            problem_content = None
+
+            # Codeforces: Extract problem statement div
+            if 'codeforces.com' in problem_url:
+                # Try to find problem statement div
+                problem_div = soup.find('div', class_='problem-statement')
+                if problem_div:
+                    logger.info("Found Codeforces problem-statement div")
+                    problem_content = problem_div
+                else:
+                    logger.warning("Could not find problem-statement div, using full content")
+
+            # Baekjoon: Extract problem content
+            elif 'acmicpc.net' in problem_url:
+                problem_div = soup.find('div', id='problem-body') or soup.find('div', id='problem_description')
+                if problem_div:
+                    logger.info("Found Baekjoon problem content div")
+                    problem_content = problem_div
+                else:
+                    logger.warning("Could not find problem body div, using full content")
+
+            # Use extracted content or fall back to full soup
+            if problem_content:
+                soup = BeautifulSoup(str(problem_content), 'html.parser')
+                logger.info(f"Using extracted problem content (HTML length: {len(str(problem_content))} chars)")
+
+            # Remove script and style elements
+            for script in soup(["script", "style", "noscript"]):
+                script.decompose()
+
+            # Get text and clean it up
+            text = soup.get_text()
+
+            # Break into lines and remove leading/trailing space on each
+            lines = (line.strip() for line in text.splitlines())
+            # Break multi-headlines into a line each
+            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+            # Drop blank lines
+            webpage_content = '\n'.join(chunk for chunk in chunks if chunk)
+
+            # Log parsed content for debugging
+            logger.info(f"Parsed webpage content length: {len(webpage_content)} characters")
+            logger.info(f"Parsed content preview (first 2000 chars):\n{webpage_content[:2000]}")
+
+            # Limit content size to avoid token limits (increased to 80000 since we're filtering)
+            if len(webpage_content) > 80000:
+                logger.info(f"Content truncated from {len(webpage_content)} to 80000 characters")
+                webpage_content = webpage_content[:80000]
+
+            # Try up to 3 times to generate and validate a correct solution
+            max_attempts = 3
+            last_error = None
+
+            update_progress("Analyzing problem...")
+
+            for attempt in range(1, max_attempts + 1):
+                import logging
+                logger = logging.getLogger(__name__)
+
+                if attempt == 1:
+                    update_progress("Generating solution (AI thinking)...")
+                else:
+                    update_progress(f"Regenerating solution (attempt {attempt}/{max_attempts})...")
+                    logger.info(f"Retry attempt {attempt}/{max_attempts} to generate correct solution...")
+
+                # Build additional context section if provided
+                additional_context_section = ""
+                if additional_context:
+                    additional_context_section = f"""
+
+ADDITIONAL CONTEXT FROM ADMIN:
+The previous solution had issues. Please consider this feedback when generating the new solution:
+{additional_context}
+
+IMPORTANT: Analyze this feedback carefully and ensure your new solution addresses these specific issues.
+"""
+
+                prompt = f"""You are a TOP-RANKED competitive programming expert with multiple years of experience solving Codeforces, Baekjoon, and ICPC problems.
+
+Your task is to analyze the following problem webpage and extract:
 1. Problem title
-2. Input/output constraints (describe the input format, constraints, and limits)
-3. C++ solution code that is optimized for performance
+2. Input/output constraints (detailed format, limits, and rules)
+3. Sample input(s) and expected output(s) from the problem statement
+4. A CORRECT, OPTIMIZED C++ solution
 
-IMPORTANT REQUIREMENTS FOR THE C++ SOLUTION:
-- The code must be HIGHLY OPTIMIZED for speed and efficiency
-- It must handle the maximum input constraints within time limits
-- Use efficient algorithms and data structures (prefer O(n log n) or better when possible)
-- Use fast I/O techniques (ios_base::sync_with_stdio(false), cin.tie(NULL))
-- Avoid unnecessary operations or slow algorithms
-- The solution should be production-quality and pass all test cases efficiently
-- NO EXPLANATIONS, NO COMMENTS - only the working C++ code
+CRITICAL REQUIREMENTS FOR THE C++ SOLUTION:
+- YOU ARE A COMPETITIVE PROGRAMMING EXPERT - write code that you would submit in a real contest
+- The solution MUST be ALGORITHMICALLY CORRECT first, then optimized
+- Carefully analyze the problem logic, edge cases, and corner cases
+- Think through the algorithm step-by-step before writing code
+- The solution MUST pass ALL test cases, including edge cases
+- Use correct data types (long long for large numbers, avoid integer overflow)
+- Handle special cases: n=0, n=1, negative numbers, empty input, maximum constraints
+- Use efficient algorithms: O(n log n) or better when possible
+- Use fast I/O: ios_base::sync_with_stdio(false), cin.tie(NULL), cout.tie(NULL)
+- Avoid TLE: no unnecessary operations, optimize loops, use appropriate data structures
+- NO EXPLANATIONS, NO COMMENTS in the code - only pure working C++ code
 
+SAMPLE INPUT/OUTPUT EXTRACTION:
+- Extract ALL sample inputs and outputs from the problem statement
+- Format each sample as: "input" and "output" pairs
+- If there are multiple samples, include all of them
+- These will be used to verify your solution is correct
+{additional_context_section}
 CRITICAL: You MUST return ONLY a valid JSON object. Do NOT include any text before or after the JSON.
 
-Return your response in EXACTLY this format (replace the content inside quotes):
+Return your response in EXACTLY this format:
 {{
     "title": "problem title here",
-    "constraints": "detailed input/output constraints here",
-    "solution_code": "C++ code here (no explanations, no comments, just code)"
+    "constraints": "detailed input/output format, constraints, and limits",
+    "samples": [
+        {{"input": "sample input 1", "output": "expected output 1"}},
+        {{"input": "sample input 2", "output": "expected output 2"}}
+    ],
+    "solution_code": "C++ code here - MUST be correct and pass all samples"
 }}
 
 Webpage content:
 {webpage_content}
 
-Remember: Return ONLY the JSON object above. No additional text, no markdown, no explanations."""
+Remember:
+1. You are a competitive programming EXPERT - write code that WORKS
+2. Think carefully about the algorithm and edge cases
+3. Return ONLY the JSON object. No markdown, no explanations.{' IMPORTANT: This is attempt ' + str(attempt) + ' of ' + str(max_attempts) + '. The solution MUST be correct.' if attempt > 1 else ''}"""
 
-            # Generate response
-            response = self.model.generate_content(prompt)
-            response_text = response.text.strip()
+                # Log the full prompt being sent to Gemini
+                logger.info("="*80)
+                logger.info(f"GEMINI PROMPT (Attempt {attempt}/{max_attempts}):")
+                logger.info("="*80)
+                logger.info(prompt)
+                logger.info("="*80)
 
-            # Remove markdown code blocks if present
-            response_text = response_text.replace('```json\n', '').replace('```json', '')
-            response_text = response_text.replace('```\n', '').replace('```', '')
-            response_text = response_text.strip()
+                try:
+                    # Generate response
+                    response = self.model.generate_content(prompt)
+                    response_text = response.text.strip()
 
-            # Parse JSON response with better error handling
-            import re
-            import logging
-            logger = logging.getLogger(__name__)
+                    # Log the Gemini response
+                    logger.info("="*80)
+                    logger.info(f"GEMINI RESPONSE (Attempt {attempt}/{max_attempts}):")
+                    logger.info("="*80)
+                    logger.info(response_text)
+                    logger.info("="*80)
 
-            try:
-                # First try direct parsing
-                result = json.loads(response_text)
-            except json.JSONDecodeError as e:
-                logger.warning(f'Direct JSON parse failed: {e}. Attempting to extract JSON from response.')
+                    # Check if Gemini returned an error about corrupted content
+                    if 'corrupted' in response_text.lower() or 'garbled' in response_text.lower() or 'unsupported encoding' in response_text.lower():
+                        logger.error("Gemini reported corrupted/garbled content")
+                        logger.error(f"Gemini response: {response_text}")
+                        logger.error(f"Full webpage content sent to Gemini ({len(webpage_content)} chars):\n{webpage_content}")
+                        raise ValueError(f"Gemini could not parse webpage: {response_text}")
 
-                # Try to find JSON object in the response
-                # Look for the first { and the last }
-                json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-                if json_match:
-                    json_str = json_match.group()
+                    # Remove markdown code blocks if present
+                    response_text = response_text.replace('```json\n', '').replace('```json', '')
+                    response_text = response_text.replace('```\n', '').replace('```', '')
+                    response_text = response_text.strip()
+
+                    # Parse JSON response with better error handling
+                    import re
+
                     try:
+                        # First try to extract JSON from markdown code block
+                        json_block_match = re.search(r'```json\s*\n(.*?)\n```', response_text, re.DOTALL)
+                        if json_block_match:
+                            json_str = json_block_match.group(1).strip()
+                            logger.info('Found JSON in markdown code block')
+                        else:
+                            # Try direct parsing
+                            json_str = response_text.strip()
+
                         result = json.loads(json_str)
-                        logger.info('Successfully extracted JSON from response')
-                    except json.JSONDecodeError as e2:
-                        logger.error(f'Failed to parse extracted JSON: {e2}')
-                        logger.error(f'Response text (first 500 chars): {response_text[:500]}')
-                        raise ValueError(f'Failed to parse JSON from Gemini response: {str(e2)}')
-                else:
-                    logger.error(f'No JSON found in response. Response text (first 500 chars): {response_text[:500]}')
-                    raise ValueError('No JSON object found in Gemini response')
+                    except json.JSONDecodeError as e:
+                        logger.warning(f'JSON parse failed: {e}. Attempting to extract JSON object.')
 
-            # Validate required fields
-            if not all(key in result for key in ['title', 'constraints', 'solution_code']):
-                missing_fields = [key for key in ['title', 'constraints', 'solution_code'] if key not in result]
-                logger.error(f'Missing required fields: {missing_fields}')
-                logger.error(f'Received keys: {list(result.keys())}')
-                raise ValueError(f'Missing required fields in Gemini response: {missing_fields}')
+                        # Try to find JSON object by matching balanced braces
+                        first_brace = response_text.find('{')
+                        if first_brace == -1:
+                            logger.error(f'No opening brace found. Response text (first 500 chars): {response_text[:500]}')
+                            raise ValueError('No JSON object found in Gemini response')
 
-            return result
+                        # Find matching closing brace
+                        brace_count = 0
+                        in_string = False
+                        escape_next = False
+                        last_brace = -1
+
+                        for i in range(first_brace, len(response_text)):
+                            char = response_text[i]
+
+                            if escape_next:
+                                escape_next = False
+                                continue
+
+                            if char == '\\':
+                                escape_next = True
+                                continue
+
+                            if char == '"':
+                                in_string = not in_string
+                                continue
+
+                            if not in_string:
+                                if char == '{':
+                                    brace_count += 1
+                                elif char == '}':
+                                    brace_count -= 1
+                                    if brace_count == 0:
+                                        last_brace = i
+                                        break
+
+                        if last_brace == -1:
+                            logger.error(f'No matching closing brace found. Response text (first 500 chars): {response_text[:500]}')
+                            raise ValueError('Incomplete JSON object in Gemini response')
+
+                        json_str = response_text[first_brace:last_brace + 1]
+                        try:
+                            result = json.loads(json_str)
+                            logger.info('Successfully extracted JSON from response using brace matching')
+                        except json.JSONDecodeError as e2:
+                            logger.error(f'Failed to parse extracted JSON: {e2}')
+                            logger.error(f'Extracted JSON (first 500 chars): {json_str[:500]}')
+                            raise ValueError(f'Failed to parse JSON from Gemini response: {str(e2)}')
+
+                    # Validate required fields
+                    required_fields = ['title', 'constraints', 'solution_code']
+                    if not all(key in result for key in required_fields):
+                        missing_fields = [key for key in required_fields if key not in result]
+                        logger.error(f'Missing required fields: {missing_fields}')
+                        logger.error(f'Received keys: {list(result.keys())}')
+                        raise ValueError(f'Missing required fields in Gemini response: {missing_fields}')
+
+                    # Check if solution_code is a placeholder and extract actual code from response
+                    solution_code = result.get('solution_code', '')
+                    if 'MUST be correct' in solution_code or len(solution_code) < 100:
+                        logger.warning('solution_code appears to be a placeholder. Extracting code from response.')
+
+                        # Try multiple extraction methods
+                        actual_code = None
+
+                        # Method 1: Find C++ code block (```cpp ... ```)
+                        cpp_match = re.search(r'```cpp\s*\n(.*?)\n```', response_text, re.DOTALL)
+                        if cpp_match:
+                            actual_code = cpp_match.group(1).strip()
+                            logger.info(f'Method 1: Extracted C++ from code block ({len(actual_code)} chars)')
+
+                        # Method 2: Find code block without language specifier (``` ... ```) after JSON
+                        if not actual_code or len(actual_code) < 100:
+                            # Find JSON closing brace, then look for code block after it
+                            json_end = response_text.rfind('}')
+                            if json_end != -1:
+                                after_json = response_text[json_end:]
+                                code_block_match = re.search(r'```\s*\n(#include.*?)\n```', after_json, re.DOTALL)
+                                if code_block_match:
+                                    actual_code = code_block_match.group(1).strip()
+                                    logger.info(f'Method 2: Extracted from code block after JSON ({len(actual_code)} chars)')
+
+                        # Method 3: Find complete C++ code from #include to return 0;
+                        if not actual_code or len(actual_code) < 100:
+                            # Look for #include ... int main() ... return 0;
+                            cpp_pattern = r'(#include[\s\S]*?int\s+main\s*\([^\)]*\)[\s\S]*?return\s+0\s*;[\s\S]*?\})'
+                            include_match = re.search(cpp_pattern, response_text)
+                            if include_match:
+                                actual_code = include_match.group(1).strip()
+                                logger.info(f'Method 3: Extracted from #include to return 0 ({len(actual_code)} chars)')
+
+                        # Method 4: Find any code starting with #include
+                        if not actual_code or len(actual_code) < 100:
+                            # Find from #include to end, but stop at markdown or JSON
+                            parts = response_text.split('#include')
+                            if len(parts) > 1:
+                                code_part = '#include' + parts[-1]
+                                # Clean up: stop at next ``` or {
+                                clean_end = min(
+                                    [len(code_part)] +
+                                    [code_part.find('```', 1) if code_part.find('```', 1) != -1 else len(code_part)] +
+                                    [code_part.find('\n{', 1) if code_part.find('\n{', 1) != -1 else len(code_part)]
+                                )
+                                actual_code = code_part[:clean_end].strip()
+                                logger.info(f'Method 4: Extracted from #include to end ({len(actual_code)} chars)')
+
+                        if actual_code and len(actual_code) >= 100:
+                            result['solution_code'] = actual_code
+                            logger.info(f'Successfully extracted C++ code: {len(actual_code)} characters')
+                        else:
+                            logger.error('Could not extract valid C++ code from response')
+                            logger.error(f'Response preview: {response_text[:1000]}')
+
+                    # Get samples if available
+                    samples = result.get('samples', [])
+
+                    # If samples are provided, validate the solution against them
+                    if samples and len(samples) > 0:
+                        logger.info(f'Found {len(samples)} sample test cases. Validating solution...')
+                        update_progress(f"Testing solution ({len(samples)} sample{'s' if len(samples) > 1 else ''})...")
+
+                        validation_passed, validation_error = self._validate_solution_with_samples(
+                            result['solution_code'],
+                            samples
+                        )
+
+                        if not validation_passed:
+                            logger.warning(f'Attempt {attempt}/{max_attempts} - Solution failed sample validation: {validation_error}')
+
+                            # If this is not the last attempt, retry
+                            if attempt < max_attempts:
+                                last_error = validation_error
+                                update_progress(f"Sample test failed, retrying...")
+                                continue
+                            else:
+                                raise ValueError(f'Generated solution failed sample test cases after {max_attempts} attempts: {validation_error}')
+
+                        logger.info(f'✓ Solution passed all {len(samples)} sample test cases on attempt {attempt}')
+                        update_progress(f"✓ Solution verified with {len(samples)} samples")
+                    else:
+                        logger.warning('No sample test cases provided for validation')
+
+                    # Success!
+                    return result
+
+                except ValueError as e:
+                    # Validation or parsing error - retry if not last attempt
+                    if attempt < max_attempts and 'failed sample test cases' in str(e):
+                        last_error = str(e)
+                        continue
+                    else:
+                        raise
+
+            # If we get here, all attempts failed
+            if last_error:
+                raise ValueError(f'Failed to generate correct solution after {max_attempts} attempts. Last error: {last_error}')
+            else:
+                raise ValueError(f'Failed to generate solution after {max_attempts} attempts')
 
         except requests.RequestException as e:
             raise ValueError(f'Failed to fetch problem URL: {str(e)}')

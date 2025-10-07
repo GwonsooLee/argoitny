@@ -1,6 +1,8 @@
 """Django models for AlgoItny"""
 from django.db import models
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
 from django.conf import settings
 
 
@@ -47,6 +49,22 @@ class UserManager(BaseUserManager):
     def create_superuser(self, email, password=None, **extra_fields):
         extra_fields.setdefault('is_staff', True)
         extra_fields.setdefault('is_superuser', True)
+
+        # Get or create admin plan
+        admin_plan, _ = SubscriptionPlan.objects.get_or_create(
+            name='Admin',
+            defaults={
+                'description': 'Full access plan for administrators',
+                'max_hints_per_day': -1,
+                'max_executions_per_day': -1,
+                'max_problems': -1,
+                'can_view_all_problems': True,
+                'can_register_problems': True,
+                'is_active': True,
+            }
+        )
+        extra_fields.setdefault('subscription_plan', admin_plan)
+
         return self.create_user(email, password, **extra_fields)
 
 
@@ -147,6 +165,14 @@ class ProblemQuerySet(models.QuerySet):
         """Filter only draft problems"""
         return self.filter(is_completed=False, is_deleted=False)
 
+    def needs_review(self):
+        """Filter problems that need admin review"""
+        return self.filter(needs_review=True, is_deleted=False)
+
+    def verified(self):
+        """Filter problems verified by admin"""
+        return self.filter(verified_by_admin=True, is_deleted=False)
+
     def with_test_case_count(self):
         """Annotate with test case count"""
         from django.db.models import Count
@@ -182,6 +208,12 @@ class ProblemManager(models.Manager):
     def drafts(self):
         return self.get_queryset().drafts()
 
+    def needs_review(self):
+        return self.get_queryset().needs_review()
+
+    def verified(self):
+        return self.get_queryset().verified()
+
     def with_test_case_count(self):
         return self.get_queryset().with_test_case_count()
 
@@ -211,6 +243,29 @@ class Problem(models.Model):
         blank=True,
         help_text='Extensible metadata field for storing additional information (e.g., execution_count, difficulty, etc.)'
     )
+
+    # Admin review fields
+    needs_review = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text='Flag if test cases pass locally but fail on actual platform'
+    )
+    review_notes = models.TextField(
+        blank=True,
+        null=True,
+        help_text='Admin notes about test case issues or review status'
+    )
+    verified_by_admin = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text='Whether test cases have been verified by admin'
+    )
+    reviewed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text='Timestamp when admin reviewed the problem'
+    )
+
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
 
     objects = ProblemManager()
@@ -229,6 +284,9 @@ class Problem(models.Model):
             models.Index(fields=['language', '-created_at'], name='problem_language_created_idx'),
             # Composite index for soft delete filtering (exclude deleted items)
             models.Index(fields=['is_deleted', 'is_completed', '-created_at'], name='problem_deleted_completed_idx'),
+            # Index for admin review filtering
+            models.Index(fields=['needs_review', 'is_deleted', '-created_at'], name='problem_needs_review_idx'),
+            models.Index(fields=['verified_by_admin', 'is_deleted', '-created_at'], name='problem_verified_idx'),
         ]
 
     def __str__(self):
@@ -371,8 +429,8 @@ class SearchHistory(models.Model):
         return f"{self.user_identifier} - {self.problem_number}"
 
 
-class ScriptGenerationJob(models.Model):
-    """Script generation job model for tracking async script generation"""
+class BaseJob(models.Model):
+    """Abstract base job model for all async jobs"""
     STATUS_CHOICES = [
         ('PENDING', 'Pending'),
         ('PROCESSING', 'Processing'),
@@ -380,48 +438,88 @@ class ScriptGenerationJob(models.Model):
         ('FAILED', 'Failed'),
     ]
 
-    JOB_TYPE_CHOICES = [
-        ('script_generation', 'Script Generation'),
-        ('problem_extraction', 'Problem Extraction'),
-    ]
-
+    # Common fields
     platform = models.CharField(max_length=50, db_index=True)
     problem_id = models.CharField(max_length=50, db_index=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING', db_index=True)
+    celery_task_id = models.CharField(max_length=255, blank=True, null=True, db_index=True)
+    error_message = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        abstract = True
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.platform} - {self.problem_id}: {self.status}"
+
+
+class ScriptGenerationJob(BaseJob):
+    """Script generation job model for tracking async script generation"""
     title = models.CharField(max_length=255)
     problem_url = models.URLField(blank=True, null=True)
     tags = models.JSONField(default=list, blank=True)
     solution_code = models.TextField(blank=True, null=True)
     language = models.CharField(max_length=50)
     constraints = models.TextField()
-
-    # Job status
-    job_type = models.CharField(max_length=30, choices=JOB_TYPE_CHOICES, default='script_generation', db_index=True)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING', db_index=True)
-    celery_task_id = models.CharField(max_length=255, blank=True, null=True, db_index=True)
-
-    # Result
     generator_code = models.TextField(blank=True, null=True)
-    error_message = models.TextField(blank=True, null=True)
-
-    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
-    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = 'script_generation_jobs'
         ordering = ['-created_at']
         indexes = [
-            # Composite index for filtering by job type and ordering by creation date
-            models.Index(fields=['job_type', '-created_at'], name='sgj_type_created_idx'),
-            # Composite index for filtering by status and ordering by creation date
             models.Index(fields=['status', '-created_at'], name='sgj_status_created_idx'),
-            # Composite index for platform + problem_id lookups
             models.Index(fields=['platform', 'problem_id'], name='sgj_platform_problem_idx'),
-            # Index for celery task ID lookups (for task status checks)
             models.Index(fields=['celery_task_id'], name='sgj_task_id_idx'),
         ]
 
+
+class ProblemExtractionJob(BaseJob):
+    """Problem extraction job model for tracking async problem extraction"""
+    problem_url = models.URLField()
+    problem_identifier = models.CharField(max_length=255, help_text='Human-readable identifier (e.g., 1520E)')
+
+    class Meta:
+        db_table = 'problem_extraction_jobs'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['status', '-created_at'], name='pej_status_created_idx'),
+            models.Index(fields=['platform', 'problem_id'], name='pej_platform_problem_idx'),
+            models.Index(fields=['celery_task_id'], name='pej_task_id_idx'),
+        ]
+
+
+class JobProgressHistory(models.Model):
+    """Progress history for tracking job execution steps"""
+    # Generic foreign key to support both ScriptGenerationJob and ProblemExtractionJob
+    content_type = models.ForeignKey('contenttypes.ContentType', on_delete=models.CASCADE)
+    object_id = models.PositiveIntegerField()
+    job = GenericForeignKey('content_type', 'object_id')
+
+    step = models.CharField(max_length=100, help_text='Step name (e.g., "Fetching problem", "Extracting constraints")')
+    message = models.TextField(help_text='Detailed progress message')
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ('started', 'Started'),
+            ('in_progress', 'In Progress'),
+            ('completed', 'Completed'),
+            ('failed', 'Failed'),
+        ],
+        default='in_progress'
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        db_table = 'job_progress_history'
+        ordering = ['created_at']
+        indexes = [
+            models.Index(fields=['content_type', 'object_id', 'created_at'], name='jph_job_created_idx'),
+        ]
+
     def __str__(self):
-        return f"{self.platform} - {self.problem_id}: {self.status}"
+        return f"{self.step}: {self.status} at {self.created_at}"
 
 
 class UsageLog(models.Model):

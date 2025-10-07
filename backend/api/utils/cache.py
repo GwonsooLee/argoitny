@@ -197,28 +197,20 @@ class CacheInvalidator:
         """
         Invalidate all cache keys matching a pattern
 
+        Note: Pattern matching is not supported with Django's default cache backend.
+        This method will simply log the pattern and return 0.
+        For full pattern support, use Redis with django-redis.
+
         Args:
             pattern: Pattern to match (e.g., 'problem_*', 'user_stats:*')
 
         Returns:
-            int: Number of keys deleted
+            int: Number of keys deleted (always 0 with default backend)
         """
-        try:
-            from django_redis import get_redis_connection
-            redis_conn = get_redis_connection("default")
-
-            # Get all keys matching pattern
-            full_pattern = f"{settings.CACHES['default']['KEY_PREFIX']}:*:{pattern}"
-            keys = redis_conn.keys(full_pattern)
-
-            if keys:
-                count = redis_conn.delete(*keys)
-                logger.info(f"Invalidated {count} cache keys matching pattern: {pattern}")
-                return count
-            return 0
-        except Exception as e:
-            logger.error(f"Error invalidating cache pattern {pattern}: {e}")
-            return 0
+        # Pattern matching requires Redis backend which we're not using
+        # Log the attempt and return gracefully
+        logger.debug(f"Pattern invalidation requested for: {pattern} (not supported with current cache backend)")
+        return 0
 
     @staticmethod
     def invalidate_problem_caches(problem_id: Optional[int] = None,

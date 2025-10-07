@@ -49,6 +49,8 @@ export const API_ENDPOINTS = {
   // Script Generation Jobs
   jobs: '/register/jobs/',
   jobDetail: (id) => `/register/jobs/${id}/`,
+  jobRetry: (id) => `/register/jobs/${id}/retry/`,
+  jobProgress: (id, jobType = 'extraction') => `/register/jobs/${id}/progress/?job_type=${jobType}`,
 
   // Hints
   requestHints: (executionId) => `/history/${executionId}/hints/generate/`,

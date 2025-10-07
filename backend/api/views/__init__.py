@@ -15,7 +15,10 @@ from .register import (
     ToggleCompletionView,
     JobListView,
     JobDetailView,
-    ExtractProblemInfoView
+    ExtractProblemInfoView,
+    RetryExtractionView,
+    JobProgressHistoryView,
+    RegenerateSolutionView
 )
 
 __all__ = [
@@ -44,4 +47,7 @@ __all__ = [
     'JobListView',
     'JobDetailView',
     'ExtractProblemInfoView',
+    'RetryExtractionView',
+    'JobProgressHistoryView',
+    'RegenerateSolutionView',
 ]

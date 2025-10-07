@@ -20,18 +20,33 @@ services:
     networks:
       - algoitny-network
 
-  redis:
-    image: redis:7-alpine
-    container_name: algoitny-redis
+  localstack:
+    image: localstack/localstack:3.0.2
+    container_name: algoitny-localstack
     ports:
-      - "6379:6379"
+      - "4566:4566"
+      - "4571:4571"
+    environment:
+      - SERVICES=sqs,dynamodb
+      - DEBUG=1
+      - DEFAULT_REGION=us-east-1
+      - AWS_DEFAULT_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - HOSTNAME_EXTERNAL=localstack
+      - LAMBDA_EXECUTOR=local
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    volumes:
+      - localstack_data:/var/lib/localstack
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - algoitny-network
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
       interval: 10s
       timeout: 5s
       retries: 5
-    networks:
-      - algoitny-network
+
 
   migration-init:
     build:
@@ -42,17 +57,21 @@ services:
       - ./backend/.env
     environment:
       DB_HOST: mysql
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      LOCALSTACK_URL: http://localstack:4566
     depends_on:
       mysql:
         condition: service_healthy
-      redis:
+      localstack:
         condition: service_healthy
     volumes:
       - ./backend:/app
       - /app/.venv
     networks:
       - algoitny-network
-    command: sh -c "python manage.py migrate"
+    command: sh -c "python init_db.py"
     restart: "no"
 
   backend:
@@ -64,12 +83,16 @@ services:
       - ./backend/.env
     environment:
       DB_HOST: mysql
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      LOCALSTACK_URL: http://localstack:4566
     ports:
       - "8000:8000"
     depends_on:
       mysql:
         condition: service_healthy
-      redis:
+      localstack:
         condition: service_healthy
       migration-init:
         condition: service_completed_successfully
@@ -80,22 +103,25 @@ services:
       - algoitny-network
     command: sh -c "gunicorn config.asgi:application -c gunicorn.conf.py"
 
-  celery-worker:
+  celery-worker-1:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: algoitny-celery-worker
+    container_name: algoitny-celery-worker-1
     env_file:
       - ./backend/.env
     environment:
       DB_HOST: mysql
-      REDIS_HOST: redis
       DJANGO_SETTINGS_MODULE: config.settings
       CONFIG_FILE: /app/config/config.yaml
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      LOCALSTACK_URL: http://localstack:4566
     depends_on:
       mysql:
         condition: service_healthy
-      redis:
+      localstack:
         condition: service_healthy
       migration-init:
         condition: service_completed_successfully
@@ -105,6 +131,88 @@ services:
     networks:
       - algoitny-network
     command: bash /app/start_celery.sh
+    healthcheck:
+      disable: true
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+
+  celery-worker-2:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: algoitny-celery-worker-2
+    env_file:
+      - ./backend/.env
+    environment:
+      DB_HOST: mysql
+      DJANGO_SETTINGS_MODULE: config.settings
+      CONFIG_FILE: /app/config/config.yaml
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      LOCALSTACK_URL: http://localstack:4566
+    depends_on:
+      mysql:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+      migration-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./backend:/app
+      - /app/.venv
+    networks:
+      - algoitny-network
+    command: bash /app/start_celery.sh
+    healthcheck:
+      disable: true
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+
+  celery-worker-3:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: algoitny-celery-worker-3
+    env_file:
+      - ./backend/.env
+    environment:
+      DB_HOST: mysql
+      DJANGO_SETTINGS_MODULE: config.settings
+      CONFIG_FILE: /app/config/config.yaml
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      LOCALSTACK_URL: http://localstack:4566
+    depends_on:
+      mysql:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+      migration-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./backend:/app
+      - /app/.venv
+    networks:
+      - algoitny-network
+    command: bash /app/start_celery.sh
+    healthcheck:
+      disable: true
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
 
   frontend:
     image: node:20-alpine
@@ -125,6 +233,7 @@ services:
 
 volumes:
   mysql_data:
+  localstack_data:
 
 networks:
   algoitny-network:

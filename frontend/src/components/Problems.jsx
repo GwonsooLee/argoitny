@@ -19,7 +19,8 @@ import {
   ArrowBack as ArrowBackIcon,
   Edit as EditIcon,
   PlayArrow as PlayArrowIcon,
-  Code as CodeIcon
+  Code as CodeIcon,
+  Refresh as RefreshIcon
 } from '@mui/icons-material';
 import { apiGet, apiPost } from '../utils/api-client';
 import { API_ENDPOINTS } from '../config/api';
@@ -31,6 +32,7 @@ function Problems({ onViewProblem }) {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [executingJobs, setExecutingJobs] = useState({});
+  const [retryingJobs, setRetryingJobs] = useState({});
 
   const fetchData = async () => {
     try {
@@ -117,6 +119,27 @@ function Problems({ onViewProblem }) {
     }
   };
 
+  const handleRetryExtraction = async (jobId) => {
+    setRetryingJobs({ ...retryingJobs, [jobId]: true });
+
+    try {
+      const response = await apiPost(API_ENDPOINTS.jobRetry(jobId), {});
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to retry extraction');
+      }
+
+      alert('Extraction job retry initiated successfully!');
+      fetchData(); // Refresh the list
+    } catch (error) {
+      console.error('Error retrying extraction:', error);
+      alert('An error occurred while retrying extraction: ' + error.message);
+    } finally {
+      setRetryingJobs({ ...retryingJobs, [jobId]: false });
+    }
+  };
+
   const getStatusColor = (status) => {
     const colors = {
       PENDING: 'warning',
@@ -127,37 +150,91 @@ function Problems({ onViewProblem }) {
     return colors[status] || 'default';
   };
 
-  const renderProblemCard = (problem, isDraft = false) => (
-    <Card
-      key={problem.id}
-      sx={{
-        mb: 2,
-        '&:hover': {
-          boxShadow: 3,
-          transform: 'translateY(-2px)',
-          transition: 'all 0.3s ease'
-        },
-        cursor: 'pointer'
-      }}
-      onClick={() => onViewProblem(problem.platform, problem.problem_id)}
-    >
-      <CardContent sx={{ p: { xs: 2, sm: 2.5, md: 3 } }}>
-        <Box sx={{
-          display: 'flex',
-          flexDirection: { xs: 'column', sm: 'row' },
-          justifyContent: 'space-between',
-          alignItems: { xs: 'flex-start', sm: 'flex-start' },
-          mb: 1,
-          gap: { xs: 1, sm: 0 }
-        }}>
-          <Box sx={{ flexGrow: 1, width: { xs: '100%', sm: 'auto' } }}>
-            <Typography variant="h6" sx={{
-              fontWeight: 600,
-              mb: 0.5,
-              fontSize: { xs: '1rem', sm: '1.125rem', md: '1.25rem' }
-            }}>
-              {problem.title}
-            </Typography>
+  const renderProblemCard = (problem, isDraft = false) => {
+    const isExtracting = problem.extraction_status === 'PROCESSING' || problem.extraction_status === 'PENDING' || problem.is_extracting;
+
+    return (
+      <Card
+        key={problem.id}
+        sx={{
+          mb: 2,
+          '&:hover': {
+            boxShadow: 3,
+            transform: 'translateY(-2px)',
+            transition: 'all 0.3s ease'
+          },
+          cursor: 'pointer',
+          border: isExtracting ? '2px solid' : '1px solid',
+          borderColor: isExtracting ? 'info.main' : 'divider',
+          position: 'relative',
+          overflow: 'hidden'
+        }}
+        onClick={() => !isExtracting && onViewProblem(problem.platform, problem.problem_id)}
+      >
+        {/* Animated progress bar for extracting state */}
+        {isExtracting && (
+          <Box
+            sx={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              height: 4,
+              background: 'linear-gradient(90deg, transparent, #2196f3, transparent)',
+              animation: 'shimmer 2s infinite',
+              '@keyframes shimmer': {
+                '0%': { transform: 'translateX(-100%)' },
+                '100%': { transform: 'translateX(100%)' }
+              }
+            }}
+          />
+        )}
+
+        <CardContent sx={{ p: { xs: 2, sm: 2.5, md: 3 } }}>
+          <Box sx={{
+            display: 'flex',
+            flexDirection: { xs: 'column', sm: 'row' },
+            justifyContent: 'space-between',
+            alignItems: { xs: 'flex-start', sm: 'flex-start' },
+            mb: 1,
+            gap: { xs: 1, sm: 0 }
+          }}>
+            <Box sx={{ flexGrow: 1, width: { xs: '100%', sm: 'auto' } }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+                {isExtracting && (
+                  <CircularProgress
+                    size={20}
+                    thickness={4}
+                    sx={{ color: 'info.main' }}
+                  />
+                )}
+                <Typography
+                  variant="h6"
+                  sx={{
+                    fontWeight: 600,
+                    fontSize: { xs: '1rem', sm: '1.125rem', md: '1.25rem' },
+                    color: isExtracting ? 'info.main' : 'text.primary',
+                    fontStyle: isExtracting ? 'italic' : 'normal'
+                  }}
+                >
+                  {problem.title}
+                </Typography>
+                {problem.extraction_status && (
+                  <Chip
+                    label={problem.extraction_status}
+                    color={getStatusColor(problem.extraction_status)}
+                    size="small"
+                    sx={{
+                      fontSize: { xs: '0.688rem', sm: '0.75rem' },
+                      animation: isExtracting ? 'pulse 2s infinite' : 'none',
+                      '@keyframes pulse': {
+                        '0%, 100%': { opacity: 1 },
+                        '50%': { opacity: 0.6 }
+                      }
+                    }}
+                  />
+                )}
+              </Box>
             <Typography variant="body2" color="text.secondary" sx={{
               mb: 1,
               fontSize: { xs: '0.813rem', sm: '0.875rem' }
@@ -171,6 +248,27 @@ function Problems({ onViewProblem }) {
             width: { xs: '100%', sm: 'auto' },
             justifyContent: { xs: 'flex-end', sm: 'flex-start' }
           }}>
+            {problem.extraction_status === 'FAILED' && problem.extraction_job_id && (
+              <IconButton
+                size="small"
+                color="error"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleRetryExtraction(problem.extraction_job_id);
+                }}
+                disabled={retryingJobs[problem.extraction_job_id]}
+                sx={{
+                  p: { xs: 1, sm: 1 }
+                }}
+                title="Retry extraction"
+              >
+                {retryingJobs[problem.extraction_job_id] ? (
+                  <CircularProgress size={18} />
+                ) : (
+                  <RefreshIcon sx={{ fontSize: { xs: '1.125rem', sm: '1.25rem' } }} />
+                )}
+              </IconButton>
+            )}
             <IconButton
               size="small"
               color="primary"
@@ -178,6 +276,7 @@ function Problems({ onViewProblem }) {
                 e.stopPropagation();
                 handleEditProblem(problem);
               }}
+              disabled={problem.is_extracting || problem.extraction_status === 'PROCESSING' || problem.extraction_status === 'PENDING'}
               sx={{
                 p: { xs: 1, sm: 1 }
               }}
@@ -192,7 +291,7 @@ function Problems({ onViewProblem }) {
                   e.stopPropagation();
                   handleGenerateScript(problem);
                 }}
-                disabled={executingJobs[problem.id] || !problem.solution_code || !problem.constraints}
+                disabled={executingJobs[problem.id] || !problem.solution_code || !problem.constraints || problem.is_extracting || problem.extraction_status === 'PROCESSING' || problem.extraction_status === 'PENDING'}
                 sx={{
                   p: { xs: 1, sm: 1 }
                 }}
@@ -202,6 +301,28 @@ function Problems({ onViewProblem }) {
             )}
           </Box>
         </Box>
+
+        {/* Progress indicator for extracting problems */}
+        {isExtracting && (
+          <Box sx={{
+            mt: 1,
+            p: 1.5,
+            bgcolor: 'info.lighter',
+            borderRadius: 1,
+            border: '1px solid',
+            borderColor: 'info.light'
+          }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <CircularProgress size={16} thickness={5} />
+              <Typography variant="body2" color="info.main" sx={{ fontWeight: 500 }}>
+                {problem.extraction_status === 'PENDING' ? 'Queued for extraction...' : 'Extracting problem information...'}
+              </Typography>
+            </Box>
+            <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+              This may take 30-60 seconds. The page will update automatically.
+            </Typography>
+          </Box>
+        )}
 
         {problem.tags && problem.tags.length > 0 && (
           <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mb: 1 }}>
@@ -245,6 +366,7 @@ function Problems({ onViewProblem }) {
       </CardContent>
     </Card>
   );
+};
 
   const renderJobCard = (job) => (
     <Card

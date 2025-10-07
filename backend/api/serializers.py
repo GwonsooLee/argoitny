@@ -1,6 +1,6 @@
 """Serializers for API"""
 from rest_framework import serializers
-from .models import User, Problem, TestCase, SearchHistory, ScriptGenerationJob, SubscriptionPlan, UsageLog
+from .models import User, Problem, TestCase, SearchHistory, ScriptGenerationJob, ProblemExtractionJob, SubscriptionPlan, UsageLog, JobProgressHistory
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -47,10 +47,35 @@ class ProblemSerializer(serializers.ModelSerializer):
     def get_execution_count(self, obj):
         return obj.metadata.get('execution_count', 0) if obj.metadata else 0
 
+    def to_representation(self, instance):
+        """Ensure solution_code is base64 encoded when returning data"""
+        import base64
+        data = super().to_representation(instance)
+        if data.get('solution_code'):
+            try:
+                # Check if already base64 encoded by trying to decode
+                base64.b64decode(data['solution_code'])
+                # If successful, it's already base64 - return as-is
+            except:
+                # Not base64, so encode it
+                try:
+                    encoded = base64.b64encode(data['solution_code'].encode('utf-8')).decode('utf-8')
+                    data['solution_code'] = encoded
+                except:
+                    # If encoding fails, return as-is (for backwards compatibility)
+                    pass
+        return data
+
     class Meta:
         model = Problem
-        fields = ['id', 'platform', 'problem_id', 'title', 'problem_url', 'tags', 'solution_code', 'language', 'constraints', 'is_completed', 'created_at', 'test_cases', 'test_case_count', 'execution_count']
-        read_only_fields = ['id', 'created_at']
+        fields = [
+            'id', 'platform', 'problem_id', 'title', 'problem_url', 'tags',
+            'solution_code', 'language', 'constraints', 'is_completed',
+            'created_at', 'test_cases', 'test_case_count', 'execution_count',
+            'metadata', 'needs_review', 'review_notes', 'verified_by_admin',
+            'reviewed_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'reviewed_at']
 
 
 class ProblemListSerializer(serializers.ModelSerializer):
@@ -265,11 +290,23 @@ class ScriptGenerationJobSerializer(serializers.ModelSerializer):
         model = ScriptGenerationJob
         fields = [
             'id', 'platform', 'problem_id', 'title', 'problem_url', 'tags',
-            'solution_code', 'language', 'constraints', 'job_type', 'status',
+            'solution_code', 'language', 'constraints', 'status',
             'celery_task_id', 'generator_code', 'error_message',
             'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'job_type', 'status', 'celery_task_id', 'generator_code', 'error_message', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'status', 'celery_task_id', 'generator_code', 'error_message', 'created_at', 'updated_at']
+
+
+class ProblemExtractionJobSerializer(serializers.ModelSerializer):
+    """ProblemExtractionJob serializer"""
+    class Meta:
+        model = ProblemExtractionJob
+        fields = [
+            'id', 'platform', 'problem_id', 'problem_url', 'problem_identifier',
+            'status', 'celery_task_id', 'error_message',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'status', 'celery_task_id', 'error_message', 'created_at', 'updated_at']
 
 
 class ExtractProblemInfoSerializer(serializers.Serializer):
@@ -353,4 +390,12 @@ class UsageLogSerializer(serializers.ModelSerializer):
     class Meta:
         model = UsageLog
         fields = ['id', 'user', 'user_email', 'action', 'problem', 'problem_title', 'metadata', 'created_at']
+        read_only_fields = ['id', 'created_at']
+
+
+class JobProgressHistorySerializer(serializers.ModelSerializer):
+    """JobProgressHistory serializer"""
+    class Meta:
+        model = JobProgressHistory
+        fields = ['id', 'step', 'message', 'status', 'created_at']
         read_only_fields = ['id', 'created_at']

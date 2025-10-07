@@ -19,6 +19,7 @@ For Kubernetes deployments:
 from pathlib import Path
 from datetime import timedelta
 import sys
+import os
 
 # Add parent directory to path for config loader
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -270,7 +271,7 @@ _default_permission = config.get('rest_framework.default_permission', env_var='R
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'api.authentication.CustomJWTAuthentication',
     ),
     'DEFAULT_PERMISSION_CLASSES': (
         _permission_map.get(_default_permission, 'rest_framework.permissions.AllowAny'),
@@ -284,12 +285,11 @@ REST_FRAMEWORK = {
         'rest_framework.renderers.BrowsableAPIRenderer',
     ),
     'DEFAULT_THROTTLE_CLASSES': [
-        'rest_framework.throttling.AnonRateThrottle',
-        'rest_framework.throttling.UserRateThrottle'
+        # Throttling disabled for development
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'anon': config.get('rest_framework.throttling.anon_rate', env_var='ANON_RATE_LIMIT', default='100/hour'),
-        'user': config.get('rest_framework.throttling.user_rate', env_var='USER_RATE_LIMIT', default='1000/hour'),
+        'anon': config.get('rest_framework.throttling.anon_rate', env_var='ANON_RATE_LIMIT', default='2000/hour'),
+        'user': config.get('rest_framework.throttling.user_rate', env_var='USER_RATE_LIMIT', default='5000/hour'),
     },
     'EXCEPTION_HANDLER': 'rest_framework.views.exception_handler',
 }
@@ -314,6 +314,14 @@ SIMPLE_JWT = {
     'AUTH_HEADER_NAME': 'HTTP_AUTHORIZATION',
     'USER_ID_FIELD': 'id',
     'USER_ID_CLAIM': 'user_id',
+    'TOKEN_OBTAIN_SERIALIZER': 'rest_framework_simplejwt.serializers.TokenObtainPairSerializer',
+    'TOKEN_REFRESH_SERIALIZER': 'rest_framework_simplejwt.serializers.TokenRefreshSerializer',
+    'TOKEN_VERIFY_SERIALIZER': 'rest_framework_simplejwt.serializers.TokenVerifySerializer',
+    'TOKEN_BLACKLIST_SERIALIZER': 'rest_framework_simplejwt.serializers.TokenBlacklistSerializer',
+    'SLIDING_TOKEN_OBTAIN_SERIALIZER': 'rest_framework_simplejwt.serializers.TokenObtainSlidingSerializer',
+    'SLIDING_TOKEN_REFRESH_SERIALIZER': 'rest_framework_simplejwt.serializers.TokenRefreshSlidingSerializer',
+    # Clock skew tolerance: Allow 30 seconds difference between client and server clocks
+    'LEEWAY': timedelta(seconds=30),
 }
 
 # ============================================
@@ -362,58 +370,20 @@ ADMIN_EMAILS = config.get_list(
 # Redis Configuration
 # ============================================
 
-REDIS_HOST = config.get('cache.redis.host', env_var='REDIS_HOST', default='localhost')
-REDIS_PORT = config.get_int('cache.redis.port', env_var='REDIS_PORT', default=6379)
-REDIS_DB = config.get_int('cache.redis.db', env_var='REDIS_DB', default=0)
-REDIS_PASSWORD = secrets.get('REDIS_PASSWORD', default='')  # From Secrets Manager
-
-# Redis URL construction
-if REDIS_PASSWORD:
-    REDIS_URL = f'redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}'
-else:
-    REDIS_URL = f'redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}'
+# Redis configuration removed - using LocMemCache instead
 
 # ============================================
 # Cache Configuration
 # ============================================
 
-ENABLE_REDIS_CACHE = config.get_bool(
-    'cache.enable_redis',
-    env_var='ENABLE_REDIS_CACHE',
-    default=False
-)
-
-if ENABLE_REDIS_CACHE:
-    # Production configuration with Redis
-    CACHES = {
-        'default': {
-            'BACKEND': 'django_redis.cache.RedisCache',
-            'LOCATION': REDIS_URL,
-            'OPTIONS': {
-                'CLIENT_CLASS': 'django_redis.client.DefaultClient',
-                'CONNECTION_POOL_KWARGS': {
-                    'max_connections': config.get_int('cache.redis.max_connections', default=50),
-                    'retry_on_timeout': config.get_bool('cache.redis.retry_on_timeout', default=True),
-                },
-                'SOCKET_CONNECT_TIMEOUT': config.get_int('cache.redis.socket_connect_timeout', default=5),
-                'SOCKET_TIMEOUT': config.get_int('cache.redis.socket_timeout', default=5),
-                'COMPRESSOR': 'django_redis.compressors.zlib.ZlibCompressor',
-                'IGNORE_EXCEPTIONS': True,
-            },
-            'KEY_PREFIX': config.get('cache.key_prefix', default='algoitny'),
-            'TIMEOUT': config.get_int('cache.default_timeout', default=300),
-            'VERSION': 1,
-        }
+# Using LocMemCache for all environments (Redis removed)
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'unique-snowflake',
+        'TIMEOUT': config.get_int('cache.default_timeout', default=300),
     }
-else:
-    # Local development or fallback configuration with LocMemCache
-    CACHES = {
-        'default': {
-            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
-            'LOCATION': 'unique-snowflake',
-            'TIMEOUT': config.get_int('cache.default_timeout', default=300),
-        }
-    }
+}
 
 # Cache TTL settings
 CACHE_TTL = config.get_dict('cache.ttl', default={
@@ -445,10 +415,19 @@ CSRF_COOKIE_SAMESITE = config.get('session.cookie_samesite', env_var='CSRF_COOKI
 # Celery Configuration
 # ============================================
 
+# Use LocalStack SQS as broker
+LOCALSTACK_URL = os.getenv('LOCALSTACK_URL', 'http://localhost:4566')
+AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID', 'test')
+AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY', 'test')
+AWS_DEFAULT_REGION = os.getenv('AWS_DEFAULT_REGION', 'us-east-1')
+
+# SQS broker URL for LocalStack
+# For SQS with kombu, we don't specify the hostname in the URL
+# The hostname is specified in the transport options
 CELERY_BROKER_URL = config.get(
     'celery.broker_url',
     env_var='CELERY_BROKER_URL',
-    default=f'redis://{REDIS_HOST}:{REDIS_PORT}/0'
+    default=f'sqs://{AWS_ACCESS_KEY_ID}:{AWS_SECRET_ACCESS_KEY}@'
 )
 
 CELERY_RESULT_BACKEND = 'django-db'
@@ -464,7 +443,7 @@ CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = config.get_int('celery.task_time_limit', default=1800)
 CELERY_TASK_SOFT_TIME_LIMIT = config.get_int('celery.task_soft_time_limit', default=1680)
-CELERY_TASK_ACKS_LATE = config.get_bool('celery.task_acks_late', default=True)
+CELERY_TASK_ACKS_LATE = config.get_bool('celery.task_acks_late', default=False)
 CELERY_TASK_REJECT_ON_WORKER_LOST = config.get_bool('celery.task_reject_on_worker_lost', default=True)
 
 # Worker optimization
@@ -478,6 +457,27 @@ CELERY_BROKER_CONNECTION_RETRY = config.get_bool('celery.broker_connection_retry
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = config.get_bool('celery.broker_connection_retry_on_startup', default=True)
 CELERY_BROKER_CONNECTION_MAX_RETRIES = config.get_int('celery.broker_connection_max_retries', default=10)
 CELERY_BROKER_POOL_LIMIT = config.get_int('celery.broker_pool_limit', default=10)
+
+# SQS specific configuration for LocalStack
+# Set environment variables for boto3 to use LocalStack
+os.environ['AWS_ENDPOINT_URL'] = LOCALSTACK_URL
+os.environ['AWS_ENDPOINT_URL_SQS'] = LOCALSTACK_URL
+
+CELERY_BROKER_TRANSPORT_OPTIONS = {
+    'region': AWS_DEFAULT_REGION,
+    'visibility_timeout': 300,  # 5 minutes (reduced from 1 hour to prevent stuck tasks)
+    'polling_interval': 1,  # 1 second
+    'queue_name_prefix': 'algoitny-',
+    'is_secure': False,
+    'endpoint_url': LOCALSTACK_URL,  # Force LocalStack endpoint
+    'sqs_client_kwargs': {
+        'endpoint_url': LOCALSTACK_URL,
+        'region_name': AWS_DEFAULT_REGION,
+        'aws_access_key_id': AWS_ACCESS_KEY_ID,
+        'aws_secret_access_key': AWS_SECRET_ACCESS_KEY,
+        'use_ssl': False
+    }
+}
 
 # Result backend optimization
 CELERY_RESULT_EXTENDED = True
@@ -522,14 +522,7 @@ if config.get_bool('testing.celery_eager', env_var='CELERY_TASK_ALWAYS_EAGER', d
 else:
     CELERY_TASK_ALWAYS_EAGER = False
 
-# Redis broker transport options
-CELERY_BROKER_TRANSPORT_OPTIONS = {
-    'visibility_timeout': 3600,
-    'fanout_prefix': True,
-    'fanout_patterns': True,
-    'priority_steps': list(range(10)),
-    'max_connections': 50,
-}
+# Broker transport options are defined above for SQS
 
 # ============================================
 # Judge0 API Configuration

@@ -25,7 +25,7 @@ import { apiPost, apiGet } from '../utils/api-client';
 import { API_ENDPOINTS } from '../config/api';
 import HintsDisplay from './HintsDisplay';
 
-function TestResults({ results, executionId }) {
+function TestResults({ results, executionId, onHintsLoadingChange }) {
   // Handle both old format (array) and new format (object with results and summary)
   const testResults = Array.isArray(results) ? results : (results?.results || []);
   const summary = results?.summary || {
@@ -58,6 +58,13 @@ function TestResults({ results, executionId }) {
     };
   }, [pollingInterval]);
 
+  // Notify parent when hints loading state changes
+  useEffect(() => {
+    if (onHintsLoadingChange) {
+      onHintsLoadingChange(hintsLoading);
+    }
+  }, [hintsLoading, onHintsLoadingChange]);
+
   const showSnackbar = (message, severity = 'info') => {
     setSnackbar({ open: true, message, severity });
   };
@@ -81,6 +88,11 @@ function TestResults({ results, executionId }) {
       );
 
       if (!response.ok) {
+        // Check if it's a rate limit error (429)
+        if (response.status === 429) {
+          const errorData = await response.json();
+          throw new Error('RATE_LIMIT_EXCEEDED');
+        }
         throw new Error('Failed to request hints');
       }
 
@@ -98,15 +110,24 @@ function TestResults({ results, executionId }) {
       }
     } catch (error) {
       console.error('Error requesting hints:', error);
-      setHintsError(error.message || 'Failed to request hints');
+
+      // Show user-friendly message for rate limit
+      if (error.message === 'RATE_LIMIT_EXCEEDED') {
+        setHintsError('You have reached your plan limit for hints. Please upgrade your plan to continue.');
+        showSnackbar('Plan limit reached. Please upgrade to get more hints.', 'warning');
+      } else {
+        setHintsError(error.message || 'Failed to request hints');
+        showSnackbar('Failed to request hints', 'error');
+      }
+
       setHintsLoading(false);
-      showSnackbar('Failed to request hints', 'error');
+      setHintsRequested(false); // Reset so button reappears
     }
   };
 
   const startPollingForHints = () => {
     let pollCount = 0;
-    const maxPolls = 30; // Poll for up to 60 seconds (30 * 2s)
+    const maxPolls = 36; // Poll for up to 180 seconds (36 * 5s = 3 minutes)
 
     const interval = setInterval(async () => {
       pollCount++;
@@ -134,18 +155,20 @@ function TestResults({ results, executionId }) {
           clearInterval(interval);
           setPollingInterval(null);
           setHintsLoading(false);
+          setHintsRequested(false); // Reset so button reappears
           setHintsError('Hint generation timed out. Please try again later.');
-          showSnackbar('Hint generation timed out', 'warning');
+          showSnackbar('Hint generation timed out. Please try again.', 'warning');
         }
       } catch (error) {
         console.error('Error polling for hints:', error);
         clearInterval(interval);
         setPollingInterval(null);
         setHintsLoading(false);
+        setHintsRequested(false); // Reset so button reappears
         setHintsError(error.message || 'Failed to fetch hints');
-        showSnackbar('Failed to fetch hints', 'error');
+        showSnackbar('Failed to fetch hints. Please try again.', 'error');
       }
-    }, 2000); // Poll every 2 seconds
+    }, 5000); // Poll every 5 seconds
 
     setPollingInterval(interval);
   };
@@ -266,11 +289,11 @@ function TestResults({ results, executionId }) {
       )}
 
       {/* Hints Display */}
-      {(hintsLoading || hints || hintsError) && (
+      {(hintsLoading || hints) && (
         <HintsDisplay
           hints={hints}
           loading={hintsLoading}
-          error={hintsError}
+          error={null}
           displayMode="accordion"
         />
       )}
@@ -281,10 +304,6 @@ function TestResults({ results, executionId }) {
             Test Cases
           </Typography>
           {testResults.map((result, index) => {
-            const truncatedInput = truncateText(result.input);
-            const truncatedExpected = truncateText(result.expected || result.expectedOutput);
-            const truncatedActual = truncateText(result.output || result.actualOutput);
-
             return (
               <Accordion
                 key={result.testCaseId || index}
@@ -372,7 +391,11 @@ function TestResults({ results, executionId }) {
                         p: { xs: 1, sm: 1.5 },
                         backgroundColor: 'white',
                         border: '1px solid',
-                        borderColor: 'divider'
+                        borderColor: 'divider',
+                        height: { xs: '180px', sm: '200px' },
+                        overflow: 'auto',
+                        display: 'flex',
+                        flexDirection: 'column'
                       }}>
                         <pre style={{
                           margin: 0,
@@ -381,20 +404,11 @@ function TestResults({ results, executionId }) {
                           wordBreak: 'break-word',
                           color: '#333',
                           overflowWrap: 'break-word',
-                          fontFamily: 'monospace'
+                          fontFamily: 'monospace',
+                          flex: 1
                         }}>
-                          {truncatedInput.text}
+                          {result.input}
                         </pre>
-                        {truncatedInput.isTruncated && (
-                          <Typography variant="caption" sx={{
-                            color: 'text.secondary',
-                            mt: 1,
-                            display: 'block',
-                            fontSize: { xs: '0.65rem', sm: '0.7rem' }
-                          }}>
-                            (Truncated - download to see full content)
-                          </Typography>
-                        )}
                       </Paper>
                     </Box>
 
@@ -425,7 +439,11 @@ function TestResults({ results, executionId }) {
                         p: { xs: 1, sm: 1.5 },
                         backgroundColor: 'white',
                         border: '1px solid',
-                        borderColor: 'divider'
+                        borderColor: 'divider',
+                        height: { xs: '180px', sm: '200px' },
+                        overflow: 'auto',
+                        display: 'flex',
+                        flexDirection: 'column'
                       }}>
                         <pre style={{
                           margin: 0,
@@ -434,20 +452,11 @@ function TestResults({ results, executionId }) {
                           wordBreak: 'break-word',
                           color: '#333',
                           overflowWrap: 'break-word',
-                          fontFamily: 'monospace'
+                          fontFamily: 'monospace',
+                          flex: 1
                         }}>
-                          {truncatedExpected.text}
+                          {result.expected || result.expectedOutput}
                         </pre>
-                        {truncatedExpected.isTruncated && (
-                          <Typography variant="caption" sx={{
-                            color: 'text.secondary',
-                            mt: 1,
-                            display: 'block',
-                            fontSize: { xs: '0.65rem', sm: '0.7rem' }
-                          }}>
-                            (Truncated - download to see full content)
-                          </Typography>
-                        )}
                       </Paper>
                     </Box>
 
@@ -478,7 +487,11 @@ function TestResults({ results, executionId }) {
                         p: { xs: 1, sm: 1.5 },
                         backgroundColor: 'white',
                         border: '1px solid',
-                        borderColor: result.passed ? 'divider' : '#ef9a9a'
+                        borderColor: result.passed ? 'divider' : '#ef9a9a',
+                        height: { xs: '180px', sm: '200px' },
+                        overflow: 'auto',
+                        display: 'flex',
+                        flexDirection: 'column'
                       }}>
                         <pre style={{
                           margin: 0,
@@ -487,20 +500,11 @@ function TestResults({ results, executionId }) {
                           wordBreak: 'break-word',
                           color: result.passed ? '#333' : '#c62828',
                           overflowWrap: 'break-word',
-                          fontFamily: 'monospace'
+                          fontFamily: 'monospace',
+                          flex: 1
                         }}>
-                          {truncatedActual.text || '(No output)'}
+                          {result.output || result.actualOutput || '(No output)'}
                         </pre>
-                        {truncatedActual.isTruncated && (
-                          <Typography variant="caption" sx={{
-                            color: 'text.secondary',
-                            mt: 1,
-                            display: 'block',
-                            fontSize: { xs: '0.65rem', sm: '0.7rem' }
-                          }}>
-                            (Truncated - download to see full content)
-                          </Typography>
-                        )}
                       </Paper>
                     </Box>
                   </Box>

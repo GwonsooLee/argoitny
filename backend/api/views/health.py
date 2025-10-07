@@ -5,7 +5,6 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.db import connection
 from django.core.cache import cache
-import redis
 
 
 @api_view(['GET'])
@@ -31,7 +30,7 @@ def readiness_check(request):
 
     Checks:
     - Database connection
-    - Redis connection
+    - Cache availability
 
     Returns:
         200 OK if all dependencies are ready
@@ -39,7 +38,7 @@ def readiness_check(request):
     """
     checks = {
         'database': False,
-        'redis': False,
+        'cache': False,
     }
 
     # Check database
@@ -51,19 +50,19 @@ def readiness_check(request):
         checks['database'] = False
         checks['database_error'] = str(e)
 
-    # Check Redis
+    # Check Cache
     try:
         cache.set('health_check', 'ok', 1)
         result = cache.get('health_check')
-        checks['redis'] = (result == 'ok')
+        checks['cache'] = (result == 'ok')
     except Exception as e:
-        checks['redis'] = False
-        checks['redis_error'] = str(e)
+        checks['cache'] = False
+        checks['cache_error'] = str(e)
 
     # All checks must pass
     is_ready = all([
         checks['database'],
-        checks['redis'],
+        checks['cache'],
     ])
 
     if is_ready:

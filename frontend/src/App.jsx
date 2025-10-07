@@ -49,6 +49,7 @@ function App() {
   const [selectedJobId, setSelectedJobId] = useState(null);
   const [selectedProblemDetail, setSelectedProblemDetail] = useState(null);
   const [testResults, setTestResults] = useState(null);
+  const [hintsLoading, setHintsLoading] = useState(false);
   const [user, setUser] = useState(null);
   const [anchorEl, setAnchorEl] = useState(null);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
@@ -67,6 +68,13 @@ function App() {
       console.error('Failed to fetch plan usage:', error);
     }
   };
+
+  // Refresh plan usage when test results are updated (after code execution)
+  useEffect(() => {
+    if (testResults && user) {
+      fetchPlanUsage();
+    }
+  }, [testResults]);
 
   useEffect(() => {
     if (isAuthenticated()) {
@@ -626,8 +634,9 @@ function App() {
                   <CodeEditor
                     problemId={selectedProblem.id}
                     onTestResults={setTestResults}
+                    hintsLoading={hintsLoading}
                   />
-                  {testResults && <TestResults results={testResults} executionId={testResults.execution_id} />}
+                  {testResults && <TestResults results={testResults} executionId={testResults.execution_id} onHintsLoadingChange={setHintsLoading} />}
                 </>
               )}
             </Container>
@@ -716,6 +725,11 @@ function App() {
               <ProblemDetail
                 platform={selectedProblemDetail.platform}
                 problemId={selectedProblemDetail.problem_id}
+                onBack={() => {
+                  setCurrentView('search');
+                  setSelectedProblemDetail(null);
+                  window.history.pushState({}, '', '/');
+                }}
               />
             )}
 

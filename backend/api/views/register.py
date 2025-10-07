@@ -4,7 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from django.db import transaction
-from ..models import Problem, TestCase, ScriptGenerationJob
+from ..models import Problem, TestCase, ScriptGenerationJob, ProblemExtractionJob
 from ..services.gemini_service import GeminiService
 from ..services.code_executor import CodeExecutor
 from ..services.test_case_generator import TestCaseGenerator
@@ -18,21 +18,25 @@ from ..serializers import (
     ExtractProblemInfoSerializer
 )
 from ..tasks import generate_script_task, extract_problem_info_task
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class GenerateTestCasesView(APIView):
     """Generate test case generator code using Gemini AI"""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]  # Allow for development
 
     def post(self, request):
-        # Check if user has permission to register problems
-        if not request.user.is_admin():
-            limits = request.user.get_plan_limits()
-            if not limits.get('can_register_problems', False):
-                return Response(
-                    {'error': 'You do not have permission to register problems'},
-                    status=status.HTTP_403_FORBIDDEN
-                )
+        # Check if user is authenticated and has permission
+        if request.user and request.user.is_authenticated:
+            if not request.user.is_staff:
+                limits = request.user.get_plan_limits()
+                if not limits.get('can_register_problems', False):
+                    return Response(
+                        {'error': 'You do not have permission to register problems'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
         """
         Enqueue a job to generate Python code that will generate test cases using Gemini AI
 
@@ -73,8 +77,7 @@ class GenerateTestCasesView(APIView):
                 solution_code=serializer.validated_data.get('solution_code', ''),
                 language=serializer.validated_data['language'],
                 constraints=serializer.validated_data['constraints'],
-                status='PENDING',
-                job_type='script_generation'
+                status='PENDING'
             )
 
             # Enqueue the job to Celery
@@ -338,7 +341,7 @@ class DraftProblemsView(APIView):
             # This reduces data transfer from database significantly
             drafts = Problem.objects.only(
                 'id', 'platform', 'problem_id', 'title', 'problem_url',
-                'tags', 'solution_code', 'language', 'constraints', 'created_at'
+                'tags', 'solution_code', 'language', 'constraints', 'created_at', 'metadata'
             ).filter(is_completed=False).order_by('-created_at')
 
             # OPTIMIZATION: Process in Python to decode base64 (consider moving to serializer)
@@ -354,6 +357,10 @@ class DraftProblemsView(APIView):
                         # If decoding fails, use as-is
                         pass
 
+                # Get extraction job status if available
+                extraction_status = problem.metadata.get('extraction_status') if problem.metadata else None
+                extraction_job_id = problem.metadata.get('extraction_job_id') if problem.metadata else None
+
                 draft_data.append({
                     'id': problem.id,
                     'platform': problem.platform,
@@ -365,7 +372,39 @@ class DraftProblemsView(APIView):
                     'language': problem.language or 'python',
                     'constraints': problem.constraints or '',
                     'created_at': problem.created_at.isoformat(),
+                    'extraction_status': extraction_status,
+                    'extraction_job_id': extraction_job_id,
                 })
+
+            # Also include extraction jobs that haven't created Problems yet
+            pending_jobs = ProblemExtractionJob.objects.filter(
+                status__in=['PENDING', 'PROCESSING']
+            ).order_by('-created_at')
+
+            # Get job IDs that are already in draft_data
+            existing_job_ids = {d.get('extraction_job_id') for d in draft_data if d.get('extraction_job_id')}
+
+            # Add jobs that don't have corresponding Problems yet
+            for job in pending_jobs:
+                if job.id not in existing_job_ids:
+                    draft_data.append({
+                        'id': None,  # No Problem ID yet
+                        'platform': job.platform or 'unknown',
+                        'problem_id': job.problem_id or 'extracting',
+                        'title': job.title or 'Extracting problem info...',
+                        'problem_url': job.problem_url or '',
+                        'tags': [],
+                        'solution_code': '',
+                        'language': 'cpp',
+                        'constraints': '',
+                        'created_at': job.created_at.isoformat(),
+                        'extraction_status': job.status,
+                        'extraction_job_id': job.id,
+                        'is_extracting': True,  # Flag to indicate this is still being extracted
+                    })
+
+            # Re-sort by created_at after adding pending jobs
+            draft_data.sort(key=lambda x: x['created_at'], reverse=True)
 
             return Response({
                 'drafts': draft_data
@@ -413,9 +452,9 @@ class JobListView(APIView):
             # This significantly reduces data transfer, especially for generator_code field
             jobs = ScriptGenerationJob.objects.only(
                 'id', 'platform', 'problem_id', 'title', 'problem_url', 'tags',
-                'language', 'job_type', 'status', 'celery_task_id',
+                'language', 'status', 'celery_task_id',
                 'created_at', 'updated_at', 'error_message'
-            ).filter(job_type='script_generation')
+            )
 
             # Filter by status if provided - uses sgj_status_created_idx composite index
             status_filter = request.query_params.get('status')
@@ -454,7 +493,7 @@ class JobDetailView(APIView):
 
     def get(self, request, job_id):
         """
-        Get details of a specific job with generated test cases
+        Get details of a specific job
 
         Returns:
             {
@@ -464,7 +503,6 @@ class JobDetailView(APIView):
                 "title": "A+B",
                 "status": "COMPLETED",
                 "generator_code": "...",
-                "test_cases": ["1 2", "3 4", ...],
                 "error_message": null,
                 "created_at": "...",
                 "updated_at": "..."
@@ -473,23 +511,7 @@ class JobDetailView(APIView):
         try:
             job = ScriptGenerationJob.objects.get(id=job_id)
             serializer = ScriptGenerationJobSerializer(job)
-            response_data = serializer.data
-
-            # If job is completed and has generator code, execute it to get test cases
-            if job.status == 'COMPLETED' and job.generator_code:
-                try:
-                    test_cases = TestCaseGenerator.execute_generator_code(
-                        code=job.generator_code,
-                        num_cases=20
-                    )
-                    response_data['test_cases'] = test_cases
-                except Exception as e:
-                    response_data['test_cases'] = []
-                    response_data['test_case_error'] = str(e)
-            else:
-                response_data['test_cases'] = []
-
-            return Response(response_data, status=status.HTTP_200_OK)
+            return Response(serializer.data, status=status.HTTP_200_OK)
 
         except ScriptGenerationJob.DoesNotExist:
             return Response(
@@ -528,6 +550,90 @@ class JobDetailView(APIView):
         except Exception as e:
             return Response(
                 {'error': f'Failed to delete job: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class RetryExtractionView(APIView):
+    """Retry a failed problem extraction job"""
+    permission_classes = [AllowAny]
+
+    def post(self, request, job_id):
+        """
+        Retry a failed extraction job
+
+        Returns:
+            {
+                "message": "Extraction job retry initiated",
+                "job_id": 123,
+                "status": "PENDING"
+            }
+        """
+        try:
+            # Get the job
+            job = ProblemExtractionJob.objects.get(id=job_id)
+
+            # Check if job is in a retry-able state (FAILED or PROCESSING - to allow cancellation and retry)
+            if job.status not in ['FAILED', 'PROCESSING']:
+                return Response(
+                    {'error': f'Job status is {job.status}. Only FAILED or PROCESSING jobs can be retried.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Get the problem URL
+            if not job.problem_url:
+                return Response(
+                    {'error': 'Job does not have a problem_url to retry'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Reset job status and update Problem metadata atomically
+            job.status = 'PENDING'
+            job.error_message = None
+            job.save()
+
+            # Update Problem metadata to reflect retry
+            try:
+                problem = Problem.objects.get(
+                    platform=job.platform,
+                    problem_id=job.problem_id
+                )
+                problem.metadata = {
+                    **(problem.metadata or {}),
+                    'extraction_status': 'PENDING',
+                    'extraction_job_id': job.id,
+                    'progress': 'Retry initiated...',
+                    'error_message': None
+                }
+                problem.save(update_fields=['metadata'])
+                logger.info(f"Updated Problem {job.platform}/{job.problem_id} to PENDING")
+            except Problem.DoesNotExist:
+                logger.warning(f"Problem {job.platform}/{job.problem_id} not found")
+
+            # Trigger the extraction task again
+            from ..tasks import extract_problem_info_task
+            extract_problem_info_task.apply_async(
+                kwargs={
+                    'problem_url': job.problem_url,
+                    'job_id': job.id
+                },
+                queue='ai'
+            )
+
+            return Response({
+                'message': 'Extraction job retry initiated',
+                'job_id': job.id,
+                'status': 'PENDING'
+            }, status=status.HTTP_200_OK)
+
+        except ScriptGenerationJob.DoesNotExist:
+            return Response(
+                {'error': 'Job not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to retry job: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
@@ -895,9 +1001,10 @@ class ExtractProblemInfoView(APIView):
 
         Returns:
             {
+                "problem_id": 123,
                 "job_id": 1,
                 "status": "PENDING",
-                "message": "Extraction job created and queued for processing"
+                "message": "Problem draft created and extraction job queued"
             }
         """
         serializer = ExtractProblemInfoSerializer(data=request.data)
@@ -915,20 +1022,98 @@ class ExtractProblemInfoView(APIView):
         logger.info(f"[ExtractProblemInfoView] Received URL: {problem_url}")
 
         try:
-            # Create a job record
-            job = ScriptGenerationJob.objects.create(
-                platform='',  # Will be filled by task
-                problem_id='',  # Will be filled by task
-                title='',  # Will be filled by task
+            # Parse URL to extract platform and problem_id
+            from ..utils.url_parser import ProblemURLParser
+            platform, problem_id = ProblemURLParser.parse_url(problem_url)
+
+            if not platform or not problem_id:
+                return Response(
+                    {'error': 'Could not parse problem URL. Supported platforms: Baekjoon, Codeforces'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            logger.info(f"[ExtractProblemInfoView] Parsed URL: platform={platform}, problem_id={problem_id}")
+
+            # Create Problem immediately as draft
+            problem, created = Problem.objects.get_or_create(
+                platform=platform,
+                problem_id=problem_id,
+                defaults={
+                    'title': f'{platform.upper()} {problem_id}',  # Use problem identifier as title
+                    'problem_url': problem_url,
+                    'constraints': '',
+                    'solution_code': '',
+                    'language': 'cpp',
+                    'tags': [],
+                    'is_completed': False,
+                    'metadata': {
+                        'extraction_status': 'PENDING'
+                    }
+                }
+            )
+
+            logger.info(f"[ExtractProblemInfoView] {'Created' if created else 'Found existing'} Problem with ID: {problem.id}")
+
+            # If problem already exists, check if we should create a new job
+            if not created:
+                # Get extraction status
+                extraction_status = problem.metadata.get('extraction_status') if problem.metadata else None
+
+                # If extraction is completed or problem is marked as completed, don't create new job
+                if extraction_status == 'COMPLETED' or problem.is_completed or problem.constraints:
+                    logger.info(f"[ExtractProblemInfoView] Problem already fully extracted. extraction_status={extraction_status}, is_completed={problem.is_completed}")
+                    return Response({
+                        'problem_id': problem.id,
+                        'platform': problem.platform,
+                        'problem_identifier': problem.problem_id,
+                        'job_id': None,
+                        'status': 'COMPLETED',
+                        'message': 'This problem has already been registered and extraction is complete. View your problem below.',
+                        'already_exists': True
+                    }, status=status.HTTP_200_OK)
+
+                # If extraction is in progress or pending, return existing job info
+                if extraction_status in ['PROCESSING', 'PENDING']:
+                    existing_job_id = problem.metadata.get('extraction_job_id')
+                    if existing_job_id:
+                        try:
+                            existing_job = ScriptGenerationJob.objects.get(id=existing_job_id)
+                            logger.info(f"[ExtractProblemInfoView] Found existing job {existing_job.id} with status {existing_job.status}")
+
+                            # Return existing draft info without creating new job
+                            return Response({
+                                'problem_id': problem.id,
+                                'platform': problem.platform,
+                                'problem_identifier': problem.problem_id,
+                                'job_id': existing_job.id,
+                                'status': existing_job.status,
+                                'message': f'Problem extraction is already in progress. Current status: {existing_job.status}. View your draft below.',
+                                'already_exists': True
+                            }, status=status.HTTP_200_OK)
+                        except ScriptGenerationJob.DoesNotExist:
+                            logger.info(f"[ExtractProblemInfoView] Job {existing_job_id} not found, creating new job")
+                            pass  # Job was deleted, create a new one
+
+                # If extraction failed, allow retry by creating new job
+                logger.info(f"[ExtractProblemInfoView] Extraction status is {extraction_status}, allowing new job creation")
+
+            # Create a job record (only if problem is new or no existing job)
+            job = ProblemExtractionJob.objects.create(
+                platform=platform,
+                problem_id=problem_id,
                 problem_url=problem_url,
-                tags=[],
-                solution_code='',
-                language='cpp',
-                constraints='',
-                status='PENDING',
-                job_type='problem_extraction'
+                problem_identifier=problem_id,  # Use problem_id as identifier
+                status='PENDING'
             )
             logger.info(f"[ExtractProblemInfoView] Created job with ID: {job.id}")
+
+            # Update problem metadata with job_id
+            problem.metadata = {
+                **(problem.metadata or {}),
+                'extraction_job_id': job.id,
+                'extraction_status': 'PENDING'
+            }
+            problem.save(update_fields=['metadata'])
 
             # Enqueue the job to Celery
             task = extract_problem_info_task.delay(problem_url, job.id)
@@ -940,13 +1125,190 @@ class ExtractProblemInfoView(APIView):
             logger.info(f"[ExtractProblemInfoView] Job {job.id} updated with task ID: {task.id}")
 
             return Response({
+                'problem_id': problem.id,
+                'platform': problem.platform,
+                'problem_identifier': problem.problem_id,
                 'job_id': job.id,
                 'status': job.status,
-                'message': 'Extraction job created and queued for processing'
+                'message': 'Problem draft created and extraction job queued for processing'
             }, status=status.HTTP_202_ACCEPTED)
 
         except Exception as e:
+            logger.exception(f"[ExtractProblemInfoView] Error: {str(e)}")
             return Response(
                 {'error': f'Failed to create extraction job: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class JobProgressHistoryView(APIView):
+    """Get progress history for a job"""
+    permission_classes = [AllowAny]
+
+    def get(self, request, job_id):
+        """
+        Get progress history for a specific job
+
+        Query params:
+            job_type: 'extraction' or 'generation' (default: 'extraction')
+
+        Returns:
+            {
+                "job_id": 123,
+                "history": [
+                    {
+                        "id": 1,
+                        "step": "Fetching webpage...",
+                        "message": "Fetching webpage...",
+                        "status": "completed",
+                        "created_at": "2025-10-07T12:00:00Z"
+                    },
+                    ...
+                ]
+            }
+        """
+        try:
+            from ..models import JobProgressHistory
+            from ..serializers import JobProgressHistorySerializer
+            from django.contrib.contenttypes.models import ContentType
+
+            # Determine job type
+            job_type = request.query_params.get('job_type', 'extraction')
+
+            if job_type == 'extraction':
+                content_type = ContentType.objects.get_for_model(ProblemExtractionJob)
+            elif job_type == 'generation':
+                content_type = ContentType.objects.get_for_model(ScriptGenerationJob)
+            else:
+                return Response(
+                    {'error': 'Invalid job_type. Must be "extraction" or "generation"'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Get progress history
+            history = JobProgressHistory.objects.filter(
+                content_type=content_type,
+                object_id=job_id
+            ).order_by('created_at')
+
+            serializer = JobProgressHistorySerializer(history, many=True)
+
+            return Response({
+                'job_id': job_id,
+                'job_type': job_type,
+                'history': serializer.data
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.exception(f"[JobProgressHistoryView] Error: {str(e)}")
+            return Response(
+                {'error': f'Failed to fetch progress history: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class RegenerateSolutionView(APIView):
+    """Regenerate solution code for a draft problem with additional context"""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, problem_id):
+        """
+        Regenerate solution code for a draft problem with additional context
+
+        This endpoint triggers a new problem extraction job with additional context
+        (e.g., counterexamples, edge cases) to generate an improved solution.
+
+        Request body:
+            {
+                "additional_context": "The solution fails for case: n=1000000, expected output: ..."
+            }
+
+        Returns:
+            {
+                "job_id": 1,
+                "status": "PENDING",
+                "message": "Solution regeneration job created and queued"
+            }
+        """
+        # Check if user is admin
+        if not request.user.is_admin():
+            return Response(
+                {'error': 'Admin access required'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            # Get the problem (optimized: only fetch needed fields)
+            problem = Problem.objects.only(
+                'id', 'platform', 'problem_id', 'title', 'problem_url',
+                'tags', 'solution_code', 'language', 'constraints', 'is_completed'
+            ).get(id=problem_id)
+
+            # Verify it's a draft
+            if problem.is_completed:
+                return Response(
+                    {'error': 'Cannot regenerate solution for completed problems. Only drafts can be regenerated.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Get additional context
+            additional_context = request.data.get('additional_context', '')
+
+            # Validate problem URL exists
+            if not problem.problem_url:
+                return Response(
+                    {'error': 'Problem URL is required for solution regeneration'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Create a new extraction job with additional context
+            job = ProblemExtractionJob.objects.create(
+                platform=problem.platform,
+                problem_id=problem.problem_id,
+                problem_url=problem.problem_url,
+                problem_identifier=problem.problem_id,
+                status='PENDING'
+            )
+
+            # Update problem metadata with new job info and additional context
+            problem.metadata = {
+                **(problem.metadata or {}),
+                'extraction_job_id': job.id,
+                'extraction_status': 'PENDING',
+                'additional_context': additional_context,
+                'regeneration_attempt': True
+            }
+            problem.save(update_fields=['metadata'])
+
+            # Enqueue the extraction task with additional context
+            from ..tasks import extract_problem_info_task
+            task = extract_problem_info_task.apply_async(
+                kwargs={
+                    'problem_url': problem.problem_url,
+                    'job_id': job.id,
+                    'additional_context': additional_context
+                },
+                queue='ai'
+            )
+
+            # Update job with task ID
+            job.celery_task_id = task.id
+            job.save(update_fields=['celery_task_id'])
+
+            return Response({
+                'job_id': job.id,
+                'status': job.status,
+                'message': 'Solution regeneration job created and queued for processing'
+            }, status=status.HTTP_202_ACCEPTED)
+
+        except Problem.DoesNotExist:
+            return Response(
+                {'error': 'Problem not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            logger.exception(f"[RegenerateSolutionView] Error: {str(e)}")
+            return Response(
+                {'error': f'Failed to regenerate solution: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )

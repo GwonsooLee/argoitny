@@ -23,10 +23,12 @@ class GoogleOAuthService:
             ValueError: If token is invalid
         """
         try:
+            # Verify token with clock skew tolerance of 60 seconds
             idinfo = id_token.verify_oauth2_token(
                 token,
                 requests.Request(),
-                settings.GOOGLE_OAUTH_CLIENT_ID
+                settings.GOOGLE_OAUTH_CLIENT_ID,
+                clock_skew_in_seconds=60
             )
 
             # Verify issuer

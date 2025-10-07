@@ -126,17 +126,23 @@ function SearchHistory({ onRequestLogin }) {
   };
 
   const handleExecutionClick = async (item) => {
+    // Only allow viewing own execution details
+    if (!isMyExecution(item)) {
+      showSnackbar('You can only view your own execution details', 'warning');
+      return;
+    }
+
     // Fetch full execution details
     try {
       const response = await apiGet(`/history/${item.id}/`, { requireAuth: true });
       if (!response.ok) {
-        throw new Error('Failed to fetch execution details');
+        throw new Error('You can only view details of your own executions');
       }
       const data = await response.json();
       setSelectedExecution(data);
     } catch (error) {
       console.error('Error fetching execution details:', error);
-      showSnackbar('Failed to fetch execution details', 'error');
+      showSnackbar('You can only view details of your own executions', 'error');
     }
   };
 
@@ -223,11 +229,8 @@ function SearchHistory({ onRequestLogin }) {
                     key={item.id}
                     sx={{
                       p: 2,
-                      mb: 2,
-                      cursor: 'pointer',
-                      '&:hover': { boxShadow: 2 }
+                      mb: 2
                     }}
-                    onClick={() => handleExecutionClick(item)}
                   >
                     <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1.5 }}>
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flex: 1 }}>
@@ -297,14 +300,16 @@ function SearchHistory({ onRequestLogin }) {
                           Private Code
                         </Button>
                       )}
-                      <Button
-                        size="small"
-                        variant="contained"
-                        onClick={() => handleExecutionClick(item)}
-                        sx={{ fontSize: '0.75rem' }}
-                      >
-                        Details
-                      </Button>
+                      {isMyExecution(item) && (
+                        <Button
+                          size="small"
+                          variant="contained"
+                          onClick={() => handleExecutionClick(item)}
+                          sx={{ fontSize: '0.75rem' }}
+                        >
+                          Details
+                        </Button>
+                      )}
                     </Box>
                   </Paper>
                 ))
@@ -341,10 +346,8 @@ function SearchHistory({ onRequestLogin }) {
                       <TableRow
                         key={item.id}
                         sx={{
-                          '&:hover': { backgroundColor: 'action.hover' },
-                          cursor: 'pointer'
+                          '&:hover': { backgroundColor: 'action.hover' }
                         }}
-                        onClick={() => handleExecutionClick(item)}
                       >
                         <TableCell>
                           <Typography variant="body2" sx={{ fontSize: '0.875rem' }}>
@@ -399,13 +402,15 @@ function SearchHistory({ onRequestLogin }) {
                           )}
                         </TableCell>
                         <TableCell onClick={(e) => e.stopPropagation()}>
-                          <Button
-                            size="small"
-                            variant="outlined"
-                            onClick={() => handleExecutionClick(item)}
-                          >
-                            View
-                          </Button>
+                          {isMyExecution(item) && (
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              onClick={() => handleExecutionClick(item)}
+                            >
+                              View
+                            </Button>
+                          )}
                         </TableCell>
                       </TableRow>
                     ))

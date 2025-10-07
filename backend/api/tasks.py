@@ -2,7 +2,8 @@
 from celery import shared_task
 from django.db import models, transaction
 from django.core.cache import cache
-from .models import ScriptGenerationJob, Problem, TestCase, SearchHistory, User
+from django.contrib.contenttypes.models import ContentType
+from .models import ScriptGenerationJob, ProblemExtractionJob, Problem, TestCase, SearchHistory, User, JobProgressHistory
 from .services.gemini_service import GeminiService
 from .services.code_execution_service import CodeExecutionService
 import base64
@@ -55,26 +56,40 @@ def generate_script_task(self, job_id):
     Returns:
         dict: Result with job_id and status
     """
+    logger.info(f"[generate_script_task] Task started for job {job_id}")
+    logger.info(f"[generate_script_task] Worker: {self.request.hostname}, Task ID: {self.request.id}")
+
     try:
-        # OPTIMIZATION: Use only() + select_for_update to prevent race conditions
-        job = ScriptGenerationJob.objects.only(
-            'id', 'platform', 'problem_id', 'title', 'solution_code',
-            'language', 'constraints', 'tags', 'problem_url', 'status'
-        ).select_for_update(skip_locked=True).get(id=job_id)
+        # OPTIMIZATION: Use transaction.atomic() with select_for_update to prevent race conditions
+        with transaction.atomic():
+            try:
+                job = ScriptGenerationJob.objects.only(
+                    'id', 'platform', 'problem_id', 'title', 'solution_code',
+                    'language', 'constraints', 'tags', 'problem_url', 'status'
+                ).select_for_update(skip_locked=True).get(id=job_id)
+                logger.info(f"[generate_script_task] Job {job_id} loaded: {job.platform}/{job.problem_id} - {job.title}")
+            except ScriptGenerationJob.DoesNotExist:
+                logger.warning(f"[generate_script_task] Job {job_id} not found, may have been deleted")
+                return {
+                    'job_id': job_id,
+                    'status': 'NOT_FOUND',
+                    'message': 'Job not found in database'
+                }
 
-        # Skip if already processing (another worker grabbed it)
-        if job.status == 'PROCESSING':
-            logger.warning(f"Job {job_id} already processing, skipping")
-            return {
-                'job_id': job_id,
-                'status': 'SKIPPED',
-                'message': 'Job already being processed'
-            }
+            # Skip if already processing (another worker grabbed it)
+            if job.status == 'PROCESSING':
+                logger.warning(f"[generate_script_task] Job {job_id} already processing, skipping")
+                return {
+                    'job_id': job_id,
+                    'status': 'SKIPPED',
+                    'message': 'Job already being processed'
+                }
 
-        # OPTIMIZATION: Update status to PROCESSING (use update_fields)
-        job.status = 'PROCESSING'
-        job.celery_task_id = self.request.id
-        job.save(update_fields=['status', 'celery_task_id'])
+            # OPTIMIZATION: Update status to PROCESSING (use update_fields)
+            logger.info(f"[generate_script_task] Updating job {job_id} status to PROCESSING")
+            job.status = 'PROCESSING'
+            job.celery_task_id = self.request.id
+            job.save(update_fields=['status', 'celery_task_id'])
 
         # Prepare problem info for Gemini
         problem_info = {
@@ -86,12 +101,33 @@ def generate_script_task(self, job_id):
             'constraints': job.constraints,
             'tags': job.tags,
         }
+        logger.info(f"[generate_script_task] Prepared problem info for job {job_id}")
+        logger.info(f"[generate_script_task] Constraints: {job.constraints[:200]}...")
+
+        # Check if there's a previous failure to learn from
+        previous_failure = None
+        if job.generator_code and job.error_message:
+            # This is a retry - provide context about previous failure
+            previous_failure = {
+                'code': job.generator_code,
+                'error': job.error_message
+            }
+            logger.info(f"[generate_script_task] Retry attempt with previous failure context")
+            logger.info(f"[generate_script_task] Previous error: {job.error_message[:200]}...")
 
         # Generate script using Gemini
+        logger.info(f"[generate_script_task] Calling Gemini API to generate test case generator...")
         gemini_service = GeminiService()
-        generator_code = gemini_service.generate_test_case_generator_code(problem_info)
+        generator_code = gemini_service.generate_test_case_generator_code(problem_info, previous_failure=previous_failure)
+        logger.info(f"[generate_script_task] Gemini returned generator code ({len(generator_code)} chars)")
+
+        # VALIDATION: Check for placeholder code
+        if '"""' in generator_code or '"..."' in generator_code or "case_data = '...'" in generator_code:
+            logger.error(f"[generate_script_task] Generated code contains placeholder strings!")
+            raise ValueError("Generated code contains placeholder strings - Gemini did not generate actual test case logic")
 
         # OPTIMIZATION: Update job with result (use update_fields)
+        logger.info(f"[generate_script_task] Updating job {job_id} status to COMPLETED")
         job.status = 'COMPLETED'
         job.generator_code = generator_code
         job.save(update_fields=['status', 'generator_code'])
@@ -176,6 +212,9 @@ def generate_script_task(self, job_id):
                             batch_size=100  # Process in batches for memory efficiency
                         )
                         logger.info(f"Created {len(test_case_objects)} test cases for problem {problem.id}")
+                        logger.info(f"Problem {problem.id} remains in draft state - admin review required")
+                    else:
+                        logger.warning(f"No successful test cases generated for problem {problem.id}")
                 else:
                     # No solution code, create test cases with empty outputs
                     test_case_objects = [
@@ -193,6 +232,7 @@ def generate_script_task(self, job_id):
                             batch_size=100
                         )
                         logger.info(f"Created {len(test_case_objects)} test cases (no outputs) for problem {problem.id}")
+                        logger.info(f"Problem {problem.id} remains in draft state - admin review required")
 
         except Exception as e:
             # Log but don't fail the task if test case generation fails
@@ -581,19 +621,21 @@ def execute_code_task(self, code, language, problem_id, user_id, user_identifier
     retry_backoff_max=300,
     retry_jitter=True,
 )
-def extract_problem_info_task(self, problem_url, job_id=None):
+def extract_problem_info_task(self, problem_url, job_id=None, additional_context=None):
     """
     Async task to extract problem information from URL using Gemini AI
 
     OPTIMIZATIONS:
     - Use only() + update_fields for minimal database updates
-    - Cache problem info for repeated requests
+    - Cache problem info for repeated requests (only if no additional context)
     - Early validation and exit
     - Proper exception handling with logging
 
     Args:
         problem_url: URL of the problem page
         job_id: Optional ScriptGenerationJob ID to update
+        additional_context: Optional additional context (e.g., counterexamples, edge cases)
+                           to help AI generate better solution
 
     Returns:
         dict: {
@@ -605,24 +647,43 @@ def extract_problem_info_task(self, problem_url, job_id=None):
             'problem_id': str
         }
     """
-    logger.info(f"[Worker] extract_problem_info_task received - URL: {problem_url}, Job ID: {job_id}")
+    logger.info(f"[Worker] extract_problem_info_task received - URL: {problem_url}, Job ID: {job_id}, Additional Context: {bool(additional_context)}")
 
     try:
-        # OPTIMIZATION: Check cache first
+        # OPTIMIZATION: Check cache first (skip if additional context provided)
         cache_key = f"problem_info:{problem_url}"
-        cached_info = cache.get(cache_key)
+        cached_info = None
+        if not additional_context:
+            cached_info = cache.get(cache_key)
 
         # Update job status if job_id provided
         if job_id:
             try:
-                job = ScriptGenerationJob.objects.only(
-                    'id', 'status', 'celery_task_id'
+                job = ProblemExtractionJob.objects.only(
+                    'id', 'status', 'celery_task_id', 'platform', 'problem_id'
                 ).get(id=job_id)
                 job.status = 'PROCESSING'
                 job.celery_task_id = self.request.id
                 job.save(update_fields=['status', 'celery_task_id'])
                 logger.info(f"[Worker] Job {job_id} status updated to PROCESSING")
-            except ScriptGenerationJob.DoesNotExist:
+
+                # Update Problem metadata to PROCESSING
+                try:
+                    from api.models import Problem
+                    problem = Problem.objects.get(
+                        platform=job.platform,
+                        problem_id=job.problem_id
+                    )
+                    problem.metadata = {
+                        **(problem.metadata or {}),
+                        'extraction_status': 'PROCESSING',
+                        'extraction_job_id': job_id
+                    }
+                    problem.save(update_fields=['metadata'])
+                    logger.info(f"[Worker] Problem {job.platform}/{job.problem_id} status updated to PROCESSING")
+                except Exception as e:
+                    logger.warning(f"[Worker] Problem not found for {job.platform}/{job.problem_id}: {e}")
+            except ProblemExtractionJob.DoesNotExist:
                 logger.warning(f"[Worker] Job {job_id} not found for problem extraction")
 
         # Extract platform and problem_id from URL
@@ -630,14 +691,56 @@ def extract_problem_info_task(self, problem_url, job_id=None):
         platform, problem_id = _parse_problem_url(problem_url)
         logger.info(f"[Worker] Parsed - Platform: {platform}, Problem ID: {problem_id}")
 
+        # Helper function to update progress
+        def update_progress(progress_message, status='in_progress'):
+            """Update Problem with progress message and save to JobProgressHistory"""
+            logger.info(f"[Progress] {progress_message}")
+
+            if not job_id:
+                return
+
+            try:
+                # Update Problem metadata
+                from api.models import Problem
+                problem = Problem.objects.get(
+                    platform=platform,
+                    problem_id=problem_id
+                )
+                problem.metadata = {
+                    **(problem.metadata or {}),
+                    'extraction_status': 'PROCESSING',
+                    'extraction_job_id': job_id,
+                    'progress': progress_message
+                }
+                problem.save(update_fields=['metadata'])
+
+                # Save to JobProgressHistory
+                job = ProblemExtractionJob.objects.get(id=job_id)
+                content_type = ContentType.objects.get_for_model(ProblemExtractionJob)
+                JobProgressHistory.objects.create(
+                    content_type=content_type,
+                    object_id=job.id,
+                    step=progress_message[:100],  # Limit step name to 100 chars
+                    message=progress_message,
+                    status=status
+                )
+            except Exception as e:
+                logger.error(f"[Progress] Failed to update progress: {e}")
+
         # Use cached info if available
         if cached_info:
             logger.info(f"Using cached problem info for {problem_url}")
+            update_progress("Loading from cache...")
             problem_info = cached_info
         else:
             # Use Gemini to extract problem info
+            update_progress("Fetching webpage...")
             gemini_service = GeminiService()
-            problem_info = gemini_service.extract_problem_info_from_url(problem_url)
+            problem_info = gemini_service.extract_problem_info_from_url(
+                problem_url,
+                progress_callback=update_progress,
+                additional_context=additional_context
+            )
 
             # OPTIMIZATION: Cache the result
             cache.set(cache_key, problem_info, CACHE_TTL_LONG)
@@ -645,23 +748,54 @@ def extract_problem_info_task(self, problem_url, job_id=None):
         # Update job with results if job_id provided
         if job_id:
             try:
-                job = ScriptGenerationJob.objects.only(
-                    'id', 'status', 'title', 'constraints', 'solution_code',
-                    'platform', 'problem_id', 'language', 'problem_url'
+                job = ProblemExtractionJob.objects.only(
+                    'id', 'status'
                 ).get(id=job_id)
                 job.status = 'COMPLETED'
-                job.title = problem_info['title']
-                job.constraints = problem_info['constraints']
-                job.solution_code = problem_info['solution_code']
-                job.platform = platform
-                job.problem_id = problem_id
-                job.language = 'cpp'
-                job.problem_url = problem_url
-                job.save(update_fields=[
-                    'status', 'title', 'constraints', 'solution_code',
-                    'platform', 'problem_id', 'language', 'problem_url'
-                ])
-            except ScriptGenerationJob.DoesNotExist:
+                job.save(update_fields=['status'])
+
+                # Create or update Problem as draft
+                from api.models import Problem
+                problem, created = Problem.objects.get_or_create(
+                    platform=platform,
+                    problem_id=problem_id,
+                    defaults={
+                        'title': problem_info['title'],
+                        'problem_url': problem_url,
+                        'constraints': problem_info['constraints'],
+                        'solution_code': problem_info['solution_code'],
+                        'language': 'cpp',
+                        'tags': [],
+                        'is_completed': False,  # Draft state
+                        'metadata': {
+                            'extraction_job_id': job_id,
+                            'extraction_status': 'COMPLETED'
+                        }
+                    }
+                )
+
+                if not created:
+                    # Update existing problem INCLUDING TITLE
+                    problem.title = problem_info['title']  # Update to real extracted title
+                    problem.problem_url = problem_url
+                    problem.constraints = problem_info['constraints']
+                    problem.solution_code = problem_info['solution_code']
+                    problem.language = 'cpp'
+                    problem.metadata = {
+                        **problem.metadata,
+                        'extraction_job_id': job_id,
+                        'extraction_status': 'COMPLETED',
+                        'extracted_title': problem_info['title']  # Store extracted title in metadata
+                    }
+                    problem.save(update_fields=[
+                        'title', 'problem_url', 'constraints', 'solution_code',
+                        'language', 'metadata'
+                    ])
+                    logger.info(f"Updated problem {problem.id} with extracted title: {problem_info['title']}")
+
+                logger.info(f"Problem {platform}/{problem_id} {'created' if created else 'updated'} from job {job_id}")
+
+            except ProblemExtractionJob.DoesNotExist:
                 logger.warning(f"Job {job_id} not found for final update")
 
         return {
@@ -680,13 +814,31 @@ def extract_problem_info_task(self, problem_url, job_id=None):
         # Update job with error if job_id provided
         if job_id:
             try:
-                job = ScriptGenerationJob.objects.only(
-                    'id', 'status', 'error_message'
+                job = ProblemExtractionJob.objects.only(
+                    'id', 'status', 'error_message', 'platform', 'problem_id'
                 ).get(id=job_id)
                 job.status = 'FAILED'
                 job.error_message = str(e)
                 job.save(update_fields=['status', 'error_message'])
-            except ScriptGenerationJob.DoesNotExist:
+
+                # Update Problem metadata to FAILED
+                try:
+                    from api.models import Problem
+                    problem = Problem.objects.get(
+                        platform=job.platform,
+                        problem_id=job.problem_id
+                    )
+                    problem.metadata = {
+                        **(problem.metadata or {}),
+                        'extraction_status': 'FAILED',
+                        'extraction_job_id': job_id,
+                        'extraction_error': str(e)
+                    }
+                    problem.save(update_fields=['metadata'])
+                    logger.info(f"[Worker] Problem {job.platform}/{job.problem_id} status updated to FAILED")
+                except Exception as ex:
+                    logger.warning(f"[Worker] Problem not found for {job.platform}/{job.problem_id}: {ex}")
+            except ProblemExtractionJob.DoesNotExist:
                 logger.warning(f"Job {job_id} not found for error update")
 
         # Don't retry - handled by autoretry_for
@@ -773,13 +925,17 @@ def generate_hints_task(self, history_id):
     Returns:
         dict: Result with status and hints
     """
+    logger.info(f"[HINTS] Starting hint generation for history {history_id}")
+
     try:
         # OPTIMIZATION: Use select_related + only() to minimize queries
+        logger.info(f"[HINTS] Fetching history record {history_id} from database")
         history = SearchHistory.objects.select_related('problem').only(
             'id', 'code', 'language', 'test_results', 'failed_count', 'hints',
             'problem__id', 'problem__solution_code', 'problem__title',
             'problem__platform', 'problem__problem_id', 'problem__language'
         ).get(id=history_id)
+        logger.info(f"[HINTS] Retrieved history {history_id}: problem={history.problem.title}, failed_count={history.failed_count}, language={history.language}")
 
         # Early validation: Check if there are any failures
         if history.failed_count == 0:
@@ -813,17 +969,21 @@ def generate_hints_task(self, history_id):
         ]
 
         if not failed_tests:
-            logger.warning(f"History {history_id} has no failed test case details")
+            logger.warning(f"[HINTS] History {history_id} has no failed test case details")
             return {
                 'status': 'FAILED',
                 'error': 'No failed test case details available'
             }
 
+        logger.info(f"[HINTS] History {history_id}: Found {len(failed_tests)} failed tests")
+
         # Decode solution code (it's stored as base64)
         try:
             solution_code = base64.b64decode(history.problem.solution_code).decode('utf-8')
-        except Exception:
+            logger.info(f"[HINTS] History {history_id}: Successfully decoded solution code")
+        except Exception as e:
             # If decoding fails, use as-is (for backwards compatibility)
+            logger.warning(f"[HINTS] History {history_id}: Failed to decode solution code, using as-is: {e}")
             solution_code = history.problem.solution_code
 
         # Prepare problem info
@@ -835,6 +995,7 @@ def generate_hints_task(self, history_id):
         }
 
         # Generate hints using Gemini
+        logger.info(f"[HINTS] History {history_id}: Calling Gemini API to generate hints")
         gemini_service = GeminiService()
         hints = gemini_service.generate_hints(
             user_code=history.code,
@@ -842,12 +1003,15 @@ def generate_hints_task(self, history_id):
             test_failures=failed_tests,
             problem_info=problem_info
         )
+        logger.info(f"[HINTS] History {history_id}: Gemini API returned {len(hints) if hints else 0} hints")
 
         # OPTIMIZATION: Save hints to history record (use update_fields)
+        logger.info(f"[HINTS] History {history_id}: Saving hints to database")
         history.hints = hints
         history.save(update_fields=['hints'])
+        logger.info(f"[HINTS] History {history_id}: Successfully saved {len(hints)} hints to database")
 
-        logger.info(f"Generated {len(hints)} hints for history {history_id}")
+        logger.info(f"[HINTS] History {history_id}: Task completed successfully with {len(hints)} hints")
 
         return {
             'status': 'COMPLETED',
@@ -856,14 +1020,14 @@ def generate_hints_task(self, history_id):
         }
 
     except SearchHistory.DoesNotExist:
-        logger.error(f"SearchHistory {history_id} not found")
+        logger.error(f"[HINTS] History {history_id}: SearchHistory not found in database")
         return {
             'status': 'FAILED',
             'error': 'Search history not found'
         }
 
     except Exception as e:
-        logger.error(f"Error in generate_hints_task for history {history_id}: {str(e)}", exc_info=True)
+        logger.error(f"[HINTS] History {history_id}: Task failed with error: {str(e)}", exc_info=True)
         # Don't retry - handled by autoretry_for
         raise
 
@@ -1116,4 +1280,127 @@ def invalidate_cache_task(self, cache_pattern):
 
     except Exception as e:
         logger.error(f"Error in invalidate_cache_task: {str(e)}", exc_info=True)
+        raise
+
+
+# ============================================================================
+# ORPHANED JOB RECOVERY TASK (Maintenance)
+# ============================================================================
+@shared_task(
+    bind=True,
+    name='api.tasks.recover_orphaned_jobs_task',
+    max_retries=1,
+    time_limit=300,  # 5 minutes hard limit
+    soft_time_limit=240,  # 4 minutes soft limit
+)
+def recover_orphaned_jobs_task(self, timeout_minutes=30):
+    """
+    Periodic task to recover orphaned jobs stuck in PROCESSING state
+
+    This task should be scheduled to run periodically (e.g., every 15 minutes)
+    using Celery Beat to automatically detect and recover jobs that have
+    been stuck in PROCESSING state due to worker crashes or restarts.
+
+    Args:
+        timeout_minutes: Jobs in PROCESSING state for longer than this will be marked as FAILED
+
+    Returns:
+        Dict with recovery statistics
+    """
+    from django.utils import timezone
+    from datetime import timedelta
+
+    logger.info(f"[Orphaned Job Recovery] Starting recovery task (timeout: {timeout_minutes} min)")
+
+    try:
+        cutoff_time = timezone.now() - timedelta(minutes=timeout_minutes)
+
+        # Find orphaned extraction jobs
+        orphaned_extraction = ProblemExtractionJob.objects.filter(
+            status='PROCESSING',
+            updated_at__lt=cutoff_time
+        )
+
+        # Find orphaned generation jobs
+        orphaned_generation = ScriptGenerationJob.objects.filter(
+            status='PROCESSING',
+            updated_at__lt=cutoff_time
+        )
+
+        extraction_count = orphaned_extraction.count()
+        generation_count = orphaned_generation.count()
+        total_count = extraction_count + generation_count
+
+        if total_count == 0:
+            logger.info("[Orphaned Job Recovery] No orphaned jobs found")
+            return {
+                'status': 'SUCCESS',
+                'found_count': 0,
+                'recovered_count': 0
+            }
+
+        logger.warning(f"[Orphaned Job Recovery] Found {total_count} orphaned job(s): "
+                      f"{extraction_count} extraction, {generation_count} generation")
+
+        # Process extraction jobs: delete if Problem doesn't exist, otherwise mark as FAILED
+        deleted_count = 0
+        failed_count = 0
+        updated_problems = 0
+
+        for job in orphaned_extraction:
+            try:
+                problem = Problem.objects.get(
+                    platform=job.platform,
+                    problem_id=job.problem_id
+                )
+                # Problem exists - mark job as FAILED
+                job.status = 'FAILED'
+                job.error_message = f'Job orphaned: No updates received for more than {timeout_minutes} minutes. Worker may have crashed or restarted.'
+                job.save(update_fields=['status', 'error_message'])
+                failed_count += 1
+
+                # Update Problem metadata
+                problem.metadata = {
+                    **(problem.metadata or {}),
+                    'extraction_status': 'FAILED',
+                    'extraction_job_id': job.id,
+                    'error_message': 'Job orphaned and automatically recovered'
+                }
+                problem.save(update_fields=['metadata'])
+                updated_problems += 1
+                logger.info(f"[Orphaned Job Recovery] Marked job #{job.id} as FAILED and updated Problem {job.platform}/{job.problem_id}")
+
+            except Problem.DoesNotExist:
+                # Problem doesn't exist - delete the job
+                job_id = job.id
+                platform = job.platform
+                problem_id = job.problem_id
+                job.delete()
+                deleted_count += 1
+                logger.info(f"[Orphaned Job Recovery] Deleted orphaned job #{job_id} (Problem {platform}/{problem_id} not found)")
+
+        # Mark generation jobs as failed
+        updated_generation = orphaned_generation.update(
+            status='FAILED',
+            error_message=f'Job orphaned: No updates received for more than {timeout_minutes} minutes. Worker may have crashed or restarted.'
+        )
+
+        total_recovered = failed_count + updated_generation
+
+        logger.info(f"[Orphaned Job Recovery] Successfully processed {total_count} job(s): "
+                   f"{deleted_count} deleted, {failed_count} marked FAILED, {updated_generation} generation jobs FAILED, "
+                   f"{updated_problems} problems updated")
+
+        return {
+            'status': 'SUCCESS',
+            'found_count': total_count,
+            'recovered_count': total_recovered,
+            'deleted_count': deleted_count,
+            'extraction_jobs_failed': failed_count,
+            'generation_jobs_failed': updated_generation,
+            'problems_updated': updated_problems
+        }
+
+    except Exception as e:
+        logger.error(f"[Orphaned Job Recovery] Error: {str(e)}", exc_info=True)
         raise

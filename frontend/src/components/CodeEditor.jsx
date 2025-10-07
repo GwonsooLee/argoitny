@@ -50,7 +50,7 @@ function detectLanguage(code) {
   return Object.keys(scores).find(key => scores[key] === maxScore);
 }
 
-function CodeEditor({ problemId, onTestResults }) {
+function CodeEditor({ problemId, onTestResults, hintsLoading = false }) {
   const [code, setCode] = useState('');
   const [language, setLanguage] = useState('python');
   const [loading, setLoading] = useState(false);
@@ -243,7 +243,7 @@ function CodeEditor({ problemId, onTestResults }) {
         variant="contained"
         size="large"
         onClick={handleExecute}
-        disabled={loading}
+        disabled={loading || hintsLoading}
         startIcon={loading ? <CircularProgress size={20} /> : <PlayArrowIcon />}
         sx={{
           backgroundColor: 'primary.main',
@@ -252,7 +252,7 @@ function CodeEditor({ problemId, onTestResults }) {
           '&:hover': { backgroundColor: 'primary.dark' }
         }}
       >
-        {loading ? (progress.total > 0 ? `Testing ${progress.current}/${progress.total}...` : 'Executing...') : 'Run Code'}
+        {hintsLoading ? 'Generating Hints...' : (loading ? (progress.total > 0 ? `Testing ${progress.current}/${progress.total}...` : 'Executing...') : 'Run Code')}
       </Button>
 
       <Snackbar

@@ -1,7 +1,9 @@
 """Rate limiting utilities"""
 from django.utils import timezone
+from django.core.cache import cache
 from datetime import timedelta
 from api.models import UsageLog
+from api.utils.cache import CacheKeyGenerator
 
 
 def check_rate_limit(user, action):
@@ -55,7 +57,7 @@ def check_rate_limit(user, action):
 
 def log_usage(user, action, problem=None, metadata=None):
     """
-    Log usage for rate limiting
+    Log usage for rate limiting and invalidate related caches
 
     Args:
         user: User instance
@@ -69,3 +71,7 @@ def log_usage(user, action, problem=None, metadata=None):
         problem=problem,
         metadata=metadata or {}
     )
+
+    # Invalidate user's usage cache to reflect real-time updates
+    usage_cache_key = CacheKeyGenerator.user_stats_key(user.id) + ':usage'
+    cache.delete(usage_cache_key)

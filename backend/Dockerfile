@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     default-libmysqlclient-dev \
     pkg-config \
+    libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
@@ -44,6 +45,7 @@ ENV PYTHONUNBUFFERED=1 \
 # Install runtime dependencies only (minimal set)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libmariadb3 \
+    g++ \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 

@@ -16,9 +16,11 @@ import {
   Dialog,
   DialogTitle,
   DialogContent,
+  DialogActions,
   IconButton,
   Snackbar,
-  Alert
+  Alert,
+  TextField
 } from '@mui/material';
 import {
   ArrowBack as ArrowBackIcon,
@@ -32,10 +34,26 @@ import {
   Close as CloseIcon,
   Download as DownloadIcon,
   Delete as DeleteIcon,
-  ContentCopy as ContentCopyIcon
+  ContentCopy as ContentCopyIcon,
+  Refresh as RefreshIcon
 } from '@mui/icons-material';
 import { apiGet, apiPost } from '../utils/api-client';
 import { API_ENDPOINTS } from '../config/api';
+
+// Status enums
+const ExtractionStatus = {
+  PENDING: 'PENDING',
+  PROCESSING: 'PROCESSING',
+  COMPLETED: 'COMPLETED',
+  FAILED: 'FAILED'
+};
+
+const JobStatus = {
+  PENDING: 'PENDING',
+  PROCESSING: 'PROCESSING',
+  COMPLETED: 'COMPLETED',
+  FAILED: 'FAILED'
+};
 
 function ProblemDetail({ platform, problemId, onBack }) {
   const [problem, setProblem] = useState(null);
@@ -53,22 +71,40 @@ function ProblemDetail({ platform, problemId, onBack }) {
   const [jobToDelete, setJobToDelete] = useState(null);
   const [deletingJob, setDeletingJob] = useState(false);
   const [deletingJobIds, setDeletingJobIds] = useState(new Set());
+  const [retryingExtraction, setRetryingExtraction] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [progressHistory, setProgressHistory] = useState([]);
+  const [redirecting, setRedirecting] = useState(false);
+  const [regenerateDialogOpen, setRegenerateDialogOpen] = useState(false);
+  const [additionalContext, setAdditionalContext] = useState('');
+  const [regenerating, setRegenerating] = useState(false);
 
   const fetchProblemAndJobs = async () => {
+    // Don't show refreshing indicator on initial load
+    if (!loading) {
+      setRefreshing(true);
+    }
+
     try {
       // Fetch problem by platform and problem_id
-      const problemResponse = await apiGet(`${API_ENDPOINTS.problems}${platform}/${problemId}/`);
+      const problemResponse = await apiGet(`${API_ENDPOINTS.problems}${platform}/${problemId}/`, { requireAuth: true });
+      let problemData = null;
+
       if (problemResponse.ok) {
-        const data = await problemResponse.json();
+        problemData = await problemResponse.json();
         // Decode base64 solution code
-        if (data.solution_code) {
+        if (problemData.solution_code) {
           try {
-            data.solution_code = atob(data.solution_code);
+            problemData.solution_code = atob(problemData.solution_code);
           } catch (e) {
-            console.error('Failed to decode solution code:', e);
+            console.error('[ProblemDetail] Failed to decode solution code:', e);
           }
         }
-        setProblem(data);
+        setProblem(problemData);
+      } else if (problemResponse.status === 403) {
+        // Access denied - redirect immediately
+        onBack();
+        return; // Don't continue with other requests
       } else {
         setProblem(null);
       }
@@ -79,17 +115,39 @@ function ProblemDetail({ platform, problemId, onBack }) {
         const data = await jobsResponse.json();
         setJobs(data.jobs || []);
       }
+
+      // Fetch progress history if extraction job is processing
+      if (problemData) {
+        const extractionJobId = problemData?.metadata?.extraction_job_id;
+        const extractionStatus = problemData?.metadata?.extraction_status;
+
+        if (extractionJobId && extractionStatus === 'PROCESSING') {
+          try {
+            const progressResponse = await apiGet(API_ENDPOINTS.jobProgress(extractionJobId, 'extraction'));
+            if (progressResponse.ok) {
+              const progressData = await progressResponse.json();
+              setProgressHistory(progressData.history || []);
+            }
+          } catch (progressError) {
+            console.error('Error fetching progress history:', progressError);
+          }
+        } else {
+          setProgressHistory([]);
+        }
+      }
     } catch (error) {
       console.error('Error fetching data:', error);
       setProblem(null);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
   useEffect(() => {
     fetchProblemAndJobs();
-    const interval = setInterval(fetchProblemAndJobs, 5000);
+    // Auto-refresh every 10 seconds to avoid rate limiting
+    const interval = setInterval(fetchProblemAndJobs, 10000);
     return () => clearInterval(interval);
   }, [platform, problemId]);
 
@@ -240,12 +298,12 @@ function ProblemDetail({ platform, problemId, onBack }) {
 
           const statusData = await statusResponse.json();
 
-          if (statusData.status === 'COMPLETED') {
+          if (statusData.status === JobStatus.COMPLETED) {
             clearInterval(pollInterval);
             setGeneratingOutputs(false);
             showSnackbar(`Outputs generated successfully for ${statusData.result.count} test cases`, 'success');
             fetchProblemAndJobs();
-          } else if (statusData.status === 'FAILED') {
+          } else if (statusData.status === JobStatus.FAILED) {
             clearInterval(pollInterval);
             setGeneratingOutputs(false);
             showSnackbar(`Failed to generate outputs: ${statusData.error}`, 'error');
@@ -351,6 +409,63 @@ function ProblemDetail({ platform, problemId, onBack }) {
     } catch (error) {
       console.error('Error making draft:', error);
       showSnackbar('Failed to make draft: ' + error.message, 'error');
+    }
+  };
+
+  const handleRetryExtraction = async () => {
+    if (!problem.metadata || !problem.metadata.extraction_job_id) {
+      showSnackbar('No extraction job to retry', 'warning');
+      return;
+    }
+
+    setRetryingExtraction(true);
+    try {
+      const response = await apiPost(API_ENDPOINTS.jobRetry(problem.metadata.extraction_job_id), {});
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to retry extraction');
+      }
+
+      showSnackbar('Extraction job retry initiated successfully!', 'success');
+      fetchProblemAndJobs();
+    } catch (error) {
+      console.error('Error retrying extraction:', error);
+      showSnackbar('An error occurred while retrying extraction: ' + error.message, 'error');
+    } finally {
+      setRetryingExtraction(false);
+    }
+  };
+
+  const handleRegenerateSolution = async () => {
+    if (!additionalContext.trim()) {
+      showSnackbar('Please provide additional context for solution regeneration', 'warning');
+      return;
+    }
+
+    setRegenerating(true);
+    try {
+      const response = await apiPost(`/register/problems/${problem.id}/regenerate-solution/`, {
+        additional_context: additionalContext
+      }, { requireAuth: true });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to regenerate solution');
+      }
+
+      const data = await response.json();
+      showSnackbar('Solution regeneration started! Job ID: ' + data.job_id, 'success');
+      setRegenerateDialogOpen(false);
+      setAdditionalContext('');
+
+      // Refresh to show new job
+      fetchProblemAndJobs();
+    } catch (error) {
+      console.error('Error regenerating solution:', error);
+      showSnackbar('Failed to regenerate solution: ' + error.message, 'error');
+    } finally {
+      setRegenerating(false);
     }
   };
 
@@ -480,11 +595,11 @@ function ProblemDetail({ platform, problemId, onBack }) {
 
   const getStatusIcon = (status) => {
     switch (status) {
-      case 'COMPLETED':
+      case JobStatus.COMPLETED:
         return <CheckCircleIcon color="success" />;
-      case 'FAILED':
+      case JobStatus.FAILED:
         return <ErrorIcon color="error" />;
-      case 'PROCESSING':
+      case JobStatus.PROCESSING:
         return <CircularProgress size={20} />;
       default:
         return <ScheduleIcon color="warning" />;
@@ -497,6 +612,11 @@ function ProblemDetail({ platform, problemId, onBack }) {
         <CircularProgress />
       </Box>
     );
+  }
+
+  // If redirecting due to access denied, don't show anything
+  if (redirecting) {
+    return null;
   }
 
   if (!problem) {
@@ -512,8 +632,92 @@ function ProblemDetail({ platform, problemId, onBack }) {
   const isDraft = !problem.test_case_count || problem.test_case_count === 0;
   const isCompleted = problem.is_completed;
 
+  // Helper to get extraction stages
+  const getExtractionStages = () => {
+    const stages = [
+      { key: 'queued', label: 'Queued', description: 'Waiting to start' },
+      { key: 'fetching', label: 'Fetching Web Content', description: 'Downloading problem page from website' },
+      { key: 'analyzing', label: 'AI Processing', description: 'Analyzing problem and generating solution' },
+      { key: 'validating', label: 'Validating Solution', description: 'Testing solution with sample test cases' },
+      { key: 'completed', label: 'Completed', description: 'Extraction successful' }
+    ];
+
+    const extractionStatus = problem?.metadata?.extraction_status;
+    const progress = problem?.metadata?.progress || '';
+
+    if (extractionStatus === ExtractionStatus.FAILED) {
+      return { stages, currentStage: 'failed', allCompleted: false, progressMessage: progress };
+    }
+
+    // Check if extraction is completed - only if status is explicitly COMPLETED
+    // Don't consider constraints alone, as they may exist during regeneration
+    if (extractionStatus === ExtractionStatus.COMPLETED) {
+      return { stages, currentStage: 4, allCompleted: true, progressMessage: 'Extraction completed' };
+    }
+
+    // Determine current stage based on progress message
+    let currentStageIndex = 0;
+    let progressMessage = progress;
+
+    // Extract attempt number if present
+    const attemptMatch = progress.match(/attempt (\d+)\/(\d+)/i);
+    const attemptInfo = attemptMatch ? ` (Attempt ${attemptMatch[1]}/${attemptMatch[2]})` : '';
+
+    if (progress.includes('Loading from cache')) {
+      currentStageIndex = 2;
+      progressMessage = 'Loading cached data...';
+    } else if (progress.includes('Fetching webpage') || progress.includes('Retrying fetch')) {
+      currentStageIndex = 1;
+      progressMessage = progress.includes('Retrying') ? `Retrying web fetch...${attemptInfo}` : 'Fetching web content...';
+    } else if (progress.includes('Analyzing problem') || progress.includes('Generating solution') || progress.includes('Regenerating solution')) {
+      currentStageIndex = 2;
+      progressMessage = progress.includes('Regenerating')
+        ? `AI is retrying...${attemptInfo}`
+        : `AI is processing the problem...${attemptInfo}`;
+    } else if (progress.includes('Testing solution') || progress.includes('Sample test failed')) {
+      currentStageIndex = 3;
+      progressMessage = progress.includes('failed')
+        ? `Solution validation failed, retrying...${attemptInfo}`
+        : `Validating solution...${attemptInfo}`;
+    } else if (progress.includes('verified with')) {
+      currentStageIndex = 3;
+      progressMessage = progress;
+    } else if (extractionStatus === ExtractionStatus.PENDING) {
+      currentStageIndex = 0;
+      progressMessage = 'Queued for processing...';
+    }
+
+    return { stages, currentStage: currentStageIndex, allCompleted: false, progressMessage };
+  };
+
+  const extractionInfo = getExtractionStages();
+  const isExtracting = problem?.metadata?.extraction_status === ExtractionStatus.PROCESSING || problem?.metadata?.extraction_status === ExtractionStatus.PENDING;
+
   return (
     <Box>
+      {/* Refresh indicator */}
+      {refreshing && (
+        <Box sx={{
+          position: 'fixed',
+          top: 16,
+          right: 16,
+          zIndex: 1000,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 1,
+          bgcolor: 'background.paper',
+          px: 2,
+          py: 1,
+          borderRadius: 2,
+          boxShadow: 2
+        }}>
+          <CircularProgress size={16} />
+          <Typography variant="caption" color="text.secondary">
+            Refreshing...
+          </Typography>
+        </Box>
+      )}
+
       <Box sx={{
         display: 'flex',
         flexDirection: { xs: 'column', sm: 'row' },
@@ -532,6 +736,7 @@ function ProblemDetail({ platform, problemId, onBack }) {
             variant="outlined"
             startIcon={<EditIcon sx={{ fontSize: { xs: '1.125rem', sm: '1.25rem' } }} />}
             onClick={() => window.location.href = `/register?draft_id=${problem.id}`}
+            disabled={isCompleted}
             sx={{
               fontSize: { xs: '0.813rem', sm: '0.875rem' },
               py: { xs: 1, sm: 0.75 }
@@ -544,6 +749,7 @@ function ProblemDetail({ platform, problemId, onBack }) {
             color="error"
             startIcon={<DeleteIcon sx={{ fontSize: { xs: '1.125rem', sm: '1.25rem' } }} />}
             onClick={() => setDeleteDialogOpen(true)}
+            disabled={isCompleted}
             sx={{
               fontSize: { xs: '0.813rem', sm: '0.875rem' },
               py: { xs: 1, sm: 0.75 }
@@ -551,6 +757,21 @@ function ProblemDetail({ platform, problemId, onBack }) {
           >
             Delete
           </Button>
+          {problem.metadata && (problem.metadata.extraction_status === 'FAILED' || problem.metadata.extraction_status === 'PROCESSING') && problem.metadata.extraction_job_id && (
+            <Button
+              variant="contained"
+              color={problem.metadata.extraction_status === 'FAILED' ? 'warning' : 'info'}
+              startIcon={<RefreshIcon sx={{ fontSize: { xs: '1.125rem', sm: '1.25rem' } }} />}
+              onClick={handleRetryExtraction}
+              disabled={retryingExtraction}
+              sx={{
+                fontSize: { xs: '0.813rem', sm: '0.875rem' },
+                py: { xs: 1, sm: 0.75 }
+              }}
+            >
+              {retryingExtraction ? 'Retrying...' : (problem.metadata.extraction_status === 'PROCESSING' ? 'Cancel & Retry' : 'Retry Extraction')}
+            </Button>
+          )}
           {!isDraft && !isCompleted && (
             <Button
               variant="outlined"
@@ -617,8 +838,138 @@ function ProblemDetail({ platform, problemId, onBack }) {
               Make Draft
             </Button>
           )}
+          {isDraft && !isCompleted && (
+            <Button
+              variant="contained"
+              color="warning"
+              onClick={() => setRegenerateDialogOpen(true)}
+              sx={{
+                fontSize: { xs: '0.813rem', sm: '0.875rem' },
+                py: { xs: 1, sm: 0.75 }
+              }}
+            >
+              Regenerate Solution
+            </Button>
+          )}
         </Box>
       </Box>
+
+      {/* Extraction Progress Stages */}
+      {isExtracting && (
+        <Paper sx={{
+          p: 2.5,
+          mb: 3,
+          bgcolor: 'grey.50',
+          borderLeft: '3px solid',
+          borderColor: 'grey.400',
+          position: 'relative'
+        }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2.5 }}>
+            <CircularProgress size={18} thickness={4} sx={{ color: 'grey.600' }} />
+            <Typography variant="subtitle1" sx={{ fontWeight: 600, color: 'text.primary' }}>
+              Extraction in Progress
+            </Typography>
+          </Box>
+
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5, pl: 4.5 }}>
+            {extractionInfo.progressMessage}
+          </Typography>
+
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, pl: 4.5 }}>
+            {extractionInfo.stages.map((stage, index) => {
+              const isCompleted = typeof extractionInfo.currentStage === 'number' && index < extractionInfo.currentStage;
+              const isCurrent = extractionInfo.currentStage === index;
+              const isPending = typeof extractionInfo.currentStage === 'number' && index > extractionInfo.currentStage;
+
+              return (
+                <Box
+                  key={stage.key}
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 1.5,
+                    opacity: isPending ? 0.35 : 1
+                  }}
+                >
+                  <Box sx={{ minWidth: 20, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    {isCompleted && <CheckCircleIcon sx={{ fontSize: 20, color: 'success.main' }} />}
+                    {isCurrent && <CircularProgress size={20} thickness={5} />}
+                    {isPending && <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'grey.300' }} />}
+                  </Box>
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      fontWeight: isCurrent ? 600 : 400,
+                      color: isCurrent ? 'text.primary' : isCompleted ? 'success.dark' : 'text.secondary'
+                    }}
+                  >
+                    {stage.label}
+                  </Typography>
+                </Box>
+              );
+            })}
+          </Box>
+
+          {/* Progress History Details */}
+          {progressHistory.length > 0 && (
+            <Box sx={{ mt: 2.5, pl: 4.5 }}>
+              <Accordion sx={{ boxShadow: 'none', '&:before': { display: 'none' } }}>
+                <AccordionSummary
+                  expandIcon={<ExpandMoreIcon />}
+                  sx={{
+                    minHeight: 40,
+                    '&.Mui-expanded': { minHeight: 40 },
+                    px: 1.5
+                  }}
+                >
+                  <Typography variant="caption" color="text.secondary">
+                    Detailed log ({progressHistory.length} steps)
+                  </Typography>
+                </AccordionSummary>
+                <AccordionDetails sx={{ px: 1.5 }}>
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                    {progressHistory.map((item, index) => (
+                      <Box
+                        key={item.id}
+                        sx={{
+                          pb: 1,
+                          borderBottom: index < progressHistory.length - 1 ? '1px solid' : 'none',
+                          borderColor: 'divider'
+                        }}
+                      >
+                        <Typography variant="caption" sx={{ fontWeight: 600, display: 'block', mb: 0.5 }}>
+                          {item.step}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontSize: '0.7rem' }}>
+                          {item.message}
+                        </Typography>
+                        <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mt: 0.5, fontSize: '0.65rem' }}>
+                          {new Date(item.created_at).toLocaleTimeString()}
+                        </Typography>
+                      </Box>
+                    ))}
+                  </Box>
+                </AccordionDetails>
+              </Accordion>
+            </Box>
+          )}
+        </Paper>
+      )}
+
+      {/* Failed extraction message */}
+      {problem?.metadata?.extraction_status === ExtractionStatus.FAILED && (
+        <Paper sx={{ p: 3, mb: 3, bgcolor: 'error.light', borderLeft: '4px solid', borderColor: 'error.main' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+            <ErrorIcon color="error" />
+            <Typography variant="h6" sx={{ fontWeight: 600 }}>
+              Extraction Failed
+            </Typography>
+          </Box>
+          <Typography variant="body2" color="text.secondary">
+            The problem extraction process encountered an error. You can retry the extraction using the "Retry Extraction" button above.
+          </Typography>
+        </Paper>
+      )}
 
       <Paper sx={{ p: { xs: 2, sm: 3 }, mb: 3 }}>
         <Typography variant="h4" gutterBottom sx={{
@@ -669,10 +1020,12 @@ function ProblemDetail({ platform, problemId, onBack }) {
             </Typography>
           </Grid>
           <Grid item xs={12} md={6}>
-            <Typography variant="body2" color="text.secondary">
-              <strong>Test Cases:</strong> {problem.test_case_count || 0}
-              {isDraft && <Chip label="Draft" size="small" color="warning" sx={{ ml: 1 }} />}
-            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Typography variant="body2" color="text.secondary" component="span">
+                <strong>Test Cases:</strong> {problem.test_case_count || 0}
+              </Typography>
+              {isDraft && <Chip label="Draft" size="small" color="warning" />}
+            </Box>
           </Grid>
         </Grid>
 
@@ -691,9 +1044,25 @@ function ProblemDetail({ platform, problemId, onBack }) {
         {problem.solution_code && (
           <>
             <Divider sx={{ my: 2 }} />
-            <Typography variant="subtitle2" gutterBottom sx={{ fontWeight: 600, color: 'text.primary' }}>
-              Solution Code:
-            </Typography>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'text.primary' }}>
+                Solution Code:
+              </Typography>
+              <IconButton
+                size="small"
+                onClick={() => {
+                  navigator.clipboard.writeText(problem.solution_code).then(() => {
+                    showSnackbar('Solution code copied to clipboard!', 'success');
+                  }).catch((error) => {
+                    console.error('Failed to copy solution code:', error);
+                    showSnackbar('Failed to copy solution code to clipboard', 'error');
+                  });
+                }}
+                title="Copy Solution Code"
+              >
+                <ContentCopyIcon fontSize="small" />
+              </IconButton>
+            </Box>
             <Paper
               sx={{
                 p: 2,
@@ -734,9 +1103,10 @@ function ProblemDetail({ platform, problemId, onBack }) {
                     <Box sx={{
                       display: 'flex',
                       flexDirection: { xs: 'column', md: 'row' },
-                      gap: 2
+                      gap: 2,
+                      alignItems: 'stretch'
                     }}>
-                      <Box sx={{ flex: { xs: '1 1 100%', md: '1 1 50%' }, minWidth: 0 }}>
+                      <Box sx={{ flex: { xs: '1 1 100%', md: '1 1 50%' }, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
                         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
                           <Typography variant="subtitle2" color="text.primary" sx={{
                             fontSize: { xs: '0.813rem', sm: '0.875rem' }
@@ -754,9 +1124,9 @@ function ProblemDetail({ platform, problemId, onBack }) {
                           backgroundColor: '#f5f5f5',
                           border: '1px solid',
                           borderColor: 'divider',
-                          maxHeight: '200px',
-                          minHeight: '100px',
-                          overflow: 'auto'
+                          height: '200px',
+                          overflow: 'auto',
+                          flex: 1
                         }}>
                           <pre style={{
                             margin: 0,
@@ -779,7 +1149,7 @@ function ProblemDetail({ platform, problemId, onBack }) {
                           )}
                         </Paper>
                       </Box>
-                      <Box sx={{ flex: { xs: '1 1 100%', md: '1 1 50%' }, minWidth: 0 }}>
+                      <Box sx={{ flex: { xs: '1 1 100%', md: '1 1 50%' }, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
                         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
                           <Typography variant="subtitle2" color="text.primary" sx={{
                             fontSize: { xs: '0.813rem', sm: '0.875rem' }
@@ -797,9 +1167,9 @@ function ProblemDetail({ platform, problemId, onBack }) {
                           backgroundColor: '#f5f5f5',
                           border: '1px solid',
                           borderColor: 'divider',
-                          maxHeight: '200px',
-                          minHeight: '100px',
-                          overflow: 'auto'
+                          height: '200px',
+                          overflow: 'auto',
+                          flex: 1
                         }}>
                           <pre style={{
                             margin: 0,
@@ -856,7 +1226,7 @@ function ProblemDetail({ platform, problemId, onBack }) {
                       </Typography>
                     </Box>
                     <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-                      {job.status === 'COMPLETED' && (
+                      {job.status === JobStatus.COMPLETED && (
                         <Button
                           variant="outlined"
                           size="small"
@@ -1003,6 +1373,63 @@ function ProblemDetail({ platform, problemId, onBack }) {
             </Button>
           </Box>
         </DialogContent>
+      </Dialog>
+
+      {/* Regenerate Solution Dialog */}
+      <Dialog
+        open={regenerateDialogOpen}
+        onClose={() => !regenerating && setRegenerateDialogOpen(false)}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>
+          Regenerate Solution with Additional Context
+          <IconButton
+            onClick={() => setRegenerateDialogOpen(false)}
+            disabled={regenerating}
+            sx={{ position: 'absolute', right: 8, top: 8 }}
+          >
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent>
+          <Typography variant="body1" sx={{ mb: 2 }}>
+            Provide additional context to help AI generate a better solution. For example:
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            - Counterexamples where the current solution fails
+            <br />
+            - Edge cases that need to be handled
+            <br />
+            - Specific requirements or constraints
+            <br />
+            - Expected behavior for certain inputs
+          </Typography>
+          <TextField
+            fullWidth
+            multiline
+            rows={8}
+            label="Additional Context"
+            placeholder="Example: The solution fails for n=1000000. Expected output should be 500000 but got timeout. Please optimize for large inputs and handle edge case when n=1."
+            value={additionalContext}
+            onChange={(e) => setAdditionalContext(e.target.value)}
+            disabled={regenerating}
+            sx={{ mb: 2 }}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRegenerateDialogOpen(false)} disabled={regenerating}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleRegenerateSolution}
+            variant="contained"
+            color="warning"
+            disabled={regenerating || !additionalContext.trim()}
+          >
+            {regenerating ? 'Regenerating...' : 'Regenerate Solution'}
+          </Button>
+        </DialogActions>
       </Dialog>
 
       {/* Delete Job Confirmation Dialog */}

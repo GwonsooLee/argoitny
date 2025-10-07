@@ -9,7 +9,7 @@ echo "========================================="
 echo "📍 Environment Variables:"
 echo "  DJANGO_SETTINGS_MODULE=${DJANGO_SETTINGS_MODULE:-not set}"
 echo "  DB_HOST=${DB_HOST:-not set}"
-echo "  REDIS_HOST=${REDIS_HOST:-not set}"
+echo "  LOCALSTACK_URL=${LOCALSTACK_URL:-not set}"
 echo "  DB_NAME=${DB_NAME:-not set}"
 
 # Set Django settings module if not set
@@ -68,21 +68,28 @@ except Exception as e:
     exit(1)
 "
 
-# Test Redis connection
+# Test LocalStack SQS connection
 echo ""
-echo "🔍 Testing Redis connection..."
+echo "🔍 Testing LocalStack SQS connection..."
 python -c "
-import redis
 import os
+import boto3
 
-redis_host = os.environ.get('REDIS_HOST', 'redis')
+localstack_url = os.environ.get('LOCALSTACK_URL', 'http://localstack:4566')
 try:
-    r = redis.Redis(host=redis_host, port=6379, db=0)
-    r.ping()
-    print(f'  ✅ Redis connection successful to {redis_host}:6379')
+    sqs = boto3.client(
+        'sqs',
+        endpoint_url=localstack_url,
+        region_name='us-east-1',
+        aws_access_key_id='test',
+        aws_secret_access_key='test'
+    )
+    # Try to list queues to test connection
+    sqs.list_queues()
+    print(f'  ✅ LocalStack SQS connection successful to {localstack_url}')
 except Exception as e:
-    print(f'  ❌ Failed to connect to Redis: {e}')
-    exit(1)
+    print(f'  ⚠️ Could not connect to LocalStack SQS: {e}')
+    print('  ⚠️ Continuing anyway - queues will be created on first use')
 "
 
 # Start Celery Worker
@@ -90,9 +97,9 @@ echo ""
 echo "========================================="
 echo "🚀 Starting Celery Worker"
 echo "========================================="
-echo "Command: celery -A config worker --loglevel=INFO --concurrency=1 --pool=threads"
+echo "Command: celery -A config worker --loglevel=INFO --concurrency=4 --pool=threads --queues=celery,ai,generation,execution,maintenance"
 echo ""
 
-# Run celery with explicit settings
+# Run celery with explicit settings and all queues
 export DJANGO_SETTINGS_MODULE=config.settings
-exec celery -A config worker --loglevel=INFO --concurrency=1 --pool=threads
+exec celery -A config worker --loglevel=INFO --concurrency=4 --pool=threads --queues=celery,ai,generation,execution,maintenance

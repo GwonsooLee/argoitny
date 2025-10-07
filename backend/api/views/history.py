@@ -113,12 +113,12 @@ class SearchHistoryListView(APIView):
 
 
 class SearchHistoryDetailView(APIView):
-    """Search history detail endpoint"""
-    permission_classes = [AllowAny]
+    """Search history detail endpoint - Owner only"""
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, history_id):
         """
-        Get detailed search history with full code
+        Get detailed search history with full code (Owner only)
 
         Returns:
             {
@@ -145,6 +145,20 @@ class SearchHistoryDetailView(APIView):
 
             # Optimize: Use select_related to join user in a single query
             history = SearchHistory.objects.select_related('user').get(id=history_id)
+
+            # Verify ownership: Only the owner can view detailed history
+            is_owner = False
+            if history.user:
+                is_owner = history.user == request.user
+            elif history.user_identifier:
+                is_owner = history.user_identifier == request.user.email
+
+            if not is_owner:
+                return Response(
+                    {'error': 'Access denied. You can only view your own execution details.'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
             serializer = SearchHistorySerializer(history)
             data = serializer.data
 
@@ -209,7 +223,7 @@ class GenerateHintsView(APIView):
 
         try:
             # Verify the history record exists and has failures (optimized: only fetch needed fields)
-            history = SearchHistory.objects.only(
+            history = SearchHistory.objects.select_related('problem').only(
                 'id', 'failed_count', 'hints', 'problem_id'
             ).get(id=history_id)
 
@@ -235,7 +249,7 @@ class GenerateHintsView(APIView):
             log_usage(
                 user=request.user,
                 action='hint',
-                problem_id=history.problem_id,
+                problem=history.problem,
                 metadata={'history_id': history_id, 'task_id': task.id}
             )
 

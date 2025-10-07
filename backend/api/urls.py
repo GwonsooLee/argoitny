@@ -26,13 +26,17 @@ from .views import (
     JobListView,
     JobDetailView,
     ExtractProblemInfoView,
+    RetryExtractionView,
+    JobProgressHistoryView,
+    RegenerateSolutionView,
 )
 from .views.account import AccountStatsView, UpdatePlanView, PlanUsageView
 from .views.health import health_check, readiness_check, liveness_check
 from .views.admin import (
     UserManagementView,
     SubscriptionPlanManagementView,
-    UsageStatsView
+    UsageStatsView,
+    ProblemReviewView
 )
 
 urlpatterns = [
@@ -77,9 +81,14 @@ urlpatterns = [
     # Script Generation Jobs
     path('register/jobs/', JobListView.as_view(), name='register-job-list'),
     path('register/jobs/<int:job_id>/', JobDetailView.as_view(), name='register-job-detail'),
+    path('register/jobs/<int:job_id>/retry/', RetryExtractionView.as_view(), name='register-job-retry'),
+    path('register/jobs/<int:job_id>/progress/', JobProgressHistoryView.as_view(), name='register-job-progress'),
 
     # Extract Problem Info
     path('register/extract-problem-info/', ExtractProblemInfoView.as_view(), name='extract-problem-info'),
+
+    # Regenerate Solution
+    path('register/problems/<int:problem_id>/regenerate-solution/', RegenerateSolutionView.as_view(), name='regenerate-solution'),
 
     # Task Status
     path('register/task-status/<str:task_id>/', CheckTaskStatusView.as_view(), name='register-task-status'),
@@ -98,4 +107,6 @@ urlpatterns = [
     path('admin/plans/', SubscriptionPlanManagementView.as_view(), name='admin-plans'),
     path('admin/plans/<int:plan_id>/', SubscriptionPlanManagementView.as_view(), name='admin-plan-detail'),
     path('admin/usage-stats/', UsageStatsView.as_view(), name='admin-usage-stats'),
+    path('admin/problems/review/', ProblemReviewView.as_view(), name='admin-problem-review'),
+    path('admin/problems/review/<int:problem_id>/', ProblemReviewView.as_view(), name='admin-problem-review-detail'),
 ]
