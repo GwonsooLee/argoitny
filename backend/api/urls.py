@@ -84,11 +84,11 @@ urlpatterns = [
     path('register/generate-outputs/', GenerateOutputsView.as_view(), name='generate-outputs'),
     path('register/toggle-completion/', ToggleCompletionView.as_view(), name='register-toggle-completion'),
 
-    # Script Generation Jobs
+    # Script Generation Jobs (UUID-based job IDs)
     path('register/jobs/', JobListView.as_view(), name='register-job-list'),
-    path('register/jobs/<int:job_id>/', JobDetailView.as_view(), name='register-job-detail'),
-    path('register/jobs/<int:job_id>/retry/', RetryExtractionView.as_view(), name='register-job-retry'),
-    path('register/jobs/<int:job_id>/progress/', JobProgressHistoryView.as_view(), name='register-job-progress'),
+    path('register/jobs/<str:job_id>/', JobDetailView.as_view(), name='register-job-detail'),
+    path('register/jobs/<str:job_id>/retry/', RetryExtractionView.as_view(), name='register-job-retry'),
+    path('register/jobs/<str:job_id>/progress/', JobProgressHistoryView.as_view(), name='register-job-progress'),
 
     # Extract Problem Info
     path('register/extract-problem-info/', ExtractProblemInfoView.as_view(), name='extract-problem-info'),

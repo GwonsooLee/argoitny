@@ -193,7 +193,6 @@ function App() {
       if (isAuthenticated()) {
         try {
           await refreshToken();
-          console.log('Token refreshed successfully');
         } catch (error) {
           console.error('Failed to refresh token:', error);
           handleForceLogout();

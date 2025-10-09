@@ -7,12 +7,10 @@ from ..authentication import CustomJWTAuthentication
 from django.conf import settings
 from ..utils.serializer_helper import serialize_dynamodb_user
 from ..dynamodb.client import DynamoDBClient
-from ..dynamodb.repositories import UserRepository
+from ..dynamodb.repositories import UserRepository, UsageLogRepository, SearchHistoryRepository
 from django.core.cache import cache
-from django.db.models import Count, Q
 from django.utils import timezone
-from datetime import timedelta
-from ..models import SearchHistory, SubscriptionPlan, Problem, UsageLog
+from datetime import datetime, timedelta
 from ..serializers import UserSerializer
 from ..utils.cache import CacheKeyGenerator
 import logging
@@ -100,7 +98,8 @@ class AccountStatsView(APIView):
 
         # OPTIMIZATION: Use only() to fetch minimal fields for counting
         # This significantly reduces data transfer from database
-        user_history = SearchHistory.objects.filter(user=user).only(
+        # Use user_id for compatibility with DynamoDB user objects
+        user_history = SearchHistory.objects.filter(user_id=user.id).only(
             'id', 'platform', 'language', 'problem_id', 'failed_count'
         )
 
@@ -269,14 +268,11 @@ class PlanUsageView(APIView):
 
         # Calculate today's usage from DynamoDB
         try:
-            from ..dynamodb.repositories import UsageLogRepository, SearchHistoryRepository
-
             table = DynamoDBClient.get_table()
             usage_repo = UsageLogRepository(table)
             history_repo = SearchHistoryRepository(table)
 
             # Get today's date string
-            from datetime import datetime
             today_str = datetime.utcnow().strftime('%Y%m%d')
 
             # Count hints and executions today

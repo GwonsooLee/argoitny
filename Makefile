@@ -105,7 +105,7 @@ start:
 
 restart:
 	@echo "🔄 프론트엔드, 백엔드, 워커를 재시작합니다..."
-	docker-compose restart frontend backend celery-worker-1 celery-worker-2 celery-worker-3
+	docker-compose restart frontend backend celery-worker
 	@echo "✅ 모든 서비스가 재시작되었습니다!"
 
 restart-backend:

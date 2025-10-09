@@ -59,8 +59,6 @@ function Problems({ onViewProblem }) {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 5000);
-    return () => clearInterval(interval);
   }, []);
 
   const handleTabChange = (event, newValue) => {
@@ -155,7 +153,6 @@ function Problems({ onViewProblem }) {
 
     return (
       <Card
-        key={problem.id}
         sx={{
           mb: 2,
           '&:hover': {
@@ -513,7 +510,11 @@ function Problems({ onViewProblem }) {
               </Typography>
             </Box>
           ) : (
-            filteredDrafts.map(draft => renderProblemCard(draft, true))
+            filteredDrafts.map(draft => (
+              <div key={`${draft.platform}-${draft.problem_id}`}>
+                {renderProblemCard(draft, true)}
+              </div>
+            ))
           )}
         </Box>
       )}
@@ -528,7 +529,11 @@ function Problems({ onViewProblem }) {
               </Typography>
             </Box>
           ) : (
-            filteredRegistered.map(problem => renderProblemCard(problem, false))
+            filteredRegistered.map(problem => (
+              <div key={`${problem.platform}-${problem.problem_id}`}>
+                {renderProblemCard(problem, false)}
+              </div>
+            ))
           )}
         </Box>
       )}

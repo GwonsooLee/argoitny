@@ -2,6 +2,7 @@
 import pytest
 from rest_framework import status
 from api.models import Problem, TestCase
+from django.test import override_settings
 
 
 @pytest.mark.django_db
@@ -46,8 +47,8 @@ class TestProblemList:
         # Should only return problems with test cases
         assert len(response.data) == 3
         # Draft problem should not be in the list
-        problem_ids = [p['id'] for p in response.data]
-        assert draft_problem.id not in problem_ids
+        problem_keys = [(p['platform'], p['problem_id']) for p in response.data]
+        assert (draft_problem['platform'], draft_problem['problem_id']) not in problem_keys
 
     def test_list_problems_filter_by_platform(self, api_client, sample_problems):
         """Test filtering problems by platform"""
@@ -113,45 +114,57 @@ class TestProblemList:
 class TestProblemDetail:
     """Test problem detail endpoint"""
 
-    def test_get_problem_by_id_success(self, api_client, sample_problem, sample_test_cases):
-        """Test successful problem retrieval by ID"""
-        response = api_client.get(f'/api/problems/{sample_problem.id}/')
+    @override_settings(ADMIN_EMAILS=['test@example.com'])
+    def test_get_problem_by_id_success(self, authenticated_client, sample_user, sample_problem, sample_test_cases):
+        """Test successful problem retrieval by ID (admin only)"""
+        client = authenticated_client(sample_user)
+        response = client.get(f'/api/problems/{sample_problem["platform"]}/{sample_problem["problem_id"]}/')
 
         assert response.status_code == status.HTTP_200_OK
-        assert response.data['id'] == sample_problem.id
-        assert response.data['title'] == sample_problem.title
-        assert response.data['platform'] == sample_problem.platform
+        assert response.data['platform'] == sample_problem['platform']
+        assert response.data['problem_id'] == sample_problem['problem_id']
+        assert response.data['title'] == sample_problem['title']
         assert 'test_cases' in response.data
         assert len(response.data['test_cases']) == 3
 
-    def test_get_problem_by_platform_and_id_success(self, api_client, sample_problem, sample_test_cases):
-        """Test successful problem retrieval by platform and problem_id"""
-        response = api_client.get(
-            f'/api/problems/{sample_problem.platform}/{sample_problem.problem_id}/'
+    @override_settings(ADMIN_EMAILS=['test@example.com'])
+    def test_get_problem_by_platform_and_id_success(self, authenticated_client, sample_user, sample_problem, sample_test_cases):
+        """Test successful problem retrieval by platform and problem_id (admin only)"""
+        client = authenticated_client(sample_user)
+        response = client.get(
+            f'/api/problems/{sample_problem["platform"]}/{sample_problem["problem_id"]}/'
         )
 
         assert response.status_code == status.HTTP_200_OK
-        assert response.data['platform'] == sample_problem.platform
-        assert response.data['problem_id'] == sample_problem.problem_id
+        assert response.data['platform'] == sample_problem['platform']
+        assert response.data['problem_id'] == sample_problem['problem_id']
         assert 'test_cases' in response.data
 
-    def test_get_problem_not_found_by_id(self, api_client):
-        """Test getting non-existent problem by ID"""
-        response = api_client.get('/api/problems/99999/')
+    @override_settings(ADMIN_EMAILS=['test@example.com'])
+    def test_get_problem_not_found_by_id(self, authenticated_client, sample_user):
+        """Test getting non-existent problem by ID (admin only)"""
+        client = authenticated_client(sample_user)
+        response = client.get('/api/problems/baekjoon/99999/')
 
+        # Should return 404
         assert response.status_code == status.HTTP_404_NOT_FOUND
         assert 'error' in response.data
 
-    def test_get_problem_not_found_by_platform_id(self, api_client):
-        """Test getting non-existent problem by platform and problem_id"""
-        response = api_client.get('/api/problems/baekjoon/99999/')
+    @override_settings(ADMIN_EMAILS=['test@example.com'])
+    def test_get_problem_not_found_by_platform_id(self, authenticated_client, sample_user):
+        """Test getting non-existent problem by platform and problem_id (admin only)"""
+        client = authenticated_client(sample_user)
+        response = client.get('/api/problems/baekjoon/99999/')
 
+        # Should return 404
         assert response.status_code == status.HTTP_404_NOT_FOUND
         assert 'error' in response.data
 
-    def test_get_problem_includes_test_cases(self, api_client, sample_problem, sample_test_cases):
-        """Test that problem detail includes test cases"""
-        response = api_client.get(f'/api/problems/{sample_problem.id}/')
+    @override_settings(ADMIN_EMAILS=['test@example.com'])
+    def test_get_problem_includes_test_cases(self, authenticated_client, sample_user, sample_problem, sample_test_cases):
+        """Test that problem detail includes test cases (admin only)"""
+        client = authenticated_client(sample_user)
+        response = client.get(f'/api/problems/{sample_problem["platform"]}/{sample_problem["problem_id"]}/')
 
         assert response.status_code == status.HTTP_200_OK
         assert 'test_cases' in response.data
@@ -164,16 +177,20 @@ class TestProblemDetail:
             assert 'input' in tc
             assert 'output' in tc
 
-    def test_get_problem_with_no_test_cases(self, api_client, draft_problem):
-        """Test getting a problem with no test cases"""
-        response = api_client.get(f'/api/problems/{draft_problem.id}/')
+    @override_settings(ADMIN_EMAILS=['test@example.com'])
+    def test_get_problem_with_no_test_cases(self, authenticated_client, sample_user, draft_problem):
+        """Test getting a problem with no test cases (admin only)"""
+        client = authenticated_client(sample_user)
+        response = client.get(f'/api/problems/{draft_problem["platform"]}/{draft_problem["problem_id"]}/')
 
         assert response.status_code == status.HTTP_200_OK
         assert response.data['test_cases'] == []
 
-    def test_get_problem_includes_metadata(self, api_client, sample_problem):
-        """Test that problem detail includes all metadata"""
-        response = api_client.get(f'/api/problems/{sample_problem.id}/')
+    @override_settings(ADMIN_EMAILS=['test@example.com'])
+    def test_get_problem_includes_metadata(self, authenticated_client, sample_user, sample_problem):
+        """Test that problem detail includes all metadata (admin only)"""
+        client = authenticated_client(sample_user)
+        response = client.get(f'/api/problems/{sample_problem["platform"]}/{sample_problem["problem_id"]}/')
 
         assert response.status_code == status.HTTP_200_OK
         assert 'tags' in response.data

@@ -2,6 +2,7 @@
 import pytest
 from rest_framework import status
 from api.models import SearchHistory
+from api.dynamodb.repositories import SearchHistoryRepository
 
 
 @pytest.mark.django_db
@@ -10,6 +11,8 @@ class TestAccountStats:
 
     def test_get_account_stats_success(self, authenticated_client, sample_user, sample_problem):
         """Test successful retrieval of account statistics"""
+        client = authenticated_client(sample_user)
+
         # Create some search history for the user
         SearchHistory.objects.create(
             user=sample_user,
@@ -42,7 +45,7 @@ class TestAccountStats:
             is_code_public=False
         )
 
-        response = authenticated_client.get('/api/account/stats/')
+        response = client.get('/api/account/stats/')
 
         assert response.status_code == status.HTTP_200_OK
         assert 'total_executions' in response.data
@@ -64,6 +67,8 @@ class TestAccountStats:
 
     def test_get_account_stats_by_platform(self, authenticated_client, sample_user, sample_problem):
         """Test that stats correctly group by platform"""
+        client = authenticated_client(sample_user)
+
         # Create history for different platforms
         SearchHistory.objects.create(
             user=sample_user,
@@ -96,7 +101,7 @@ class TestAccountStats:
             is_code_public=True
         )
 
-        response = authenticated_client.get('/api/account/stats/')
+        response = client.get('/api/account/stats/')
 
         assert response.status_code == status.HTTP_200_OK
         assert 'baekjoon' in response.data['by_platform']
@@ -106,6 +111,8 @@ class TestAccountStats:
 
     def test_get_account_stats_by_language(self, authenticated_client, sample_user, sample_problem):
         """Test that stats correctly group by language"""
+        client = authenticated_client(sample_user)
+
         # Create history for different languages
         languages = ['python', 'cpp', 'java', 'python', 'python']
         for lang in languages:
@@ -125,7 +132,7 @@ class TestAccountStats:
                 is_code_public=True
             )
 
-        response = authenticated_client.get('/api/account/stats/')
+        response = client.get('/api/account/stats/')
 
         assert response.status_code == status.HTTP_200_OK
         assert response.data['by_language']['python'] == 3
@@ -134,6 +141,8 @@ class TestAccountStats:
 
     def test_get_account_stats_total_problems(self, authenticated_client, sample_user, sample_problems):
         """Test that stats correctly count unique problems"""
+        client = authenticated_client(sample_user)
+
         # Create history for same problem multiple times
         for i in range(5):
             SearchHistory.objects.create(
@@ -169,7 +178,7 @@ class TestAccountStats:
             is_code_public=True
         )
 
-        response = authenticated_client.get('/api/account/stats/')
+        response = client.get('/api/account/stats/')
 
         assert response.status_code == status.HTTP_200_OK
         # Should count only 2 unique problems
@@ -179,6 +188,8 @@ class TestAccountStats:
 
     def test_get_account_stats_passed_vs_failed(self, authenticated_client, sample_user, sample_problem):
         """Test that stats correctly count passed vs failed executions"""
+        client = authenticated_client(sample_user)
+
         # Create passed executions
         for i in range(3):
             SearchHistory.objects.create(
@@ -215,15 +226,16 @@ class TestAccountStats:
                 is_code_public=True
             )
 
-        response = authenticated_client.get('/api/account/stats/')
+        response = client.get('/api/account/stats/')
 
         assert response.status_code == status.HTTP_200_OK
         assert response.data['passed_executions'] == 3
         assert response.data['failed_executions'] == 2
 
-    def test_get_account_stats_empty_history(self, authenticated_client):
+    def test_get_account_stats_empty_history(self, authenticated_client, sample_user):
         """Test account stats with no execution history"""
-        response = authenticated_client.get('/api/account/stats/')
+        client = authenticated_client(sample_user)
+        response = client.get('/api/account/stats/')
 
         assert response.status_code == status.HTTP_200_OK
         assert response.data['total_executions'] == 0
@@ -235,6 +247,8 @@ class TestAccountStats:
 
     def test_get_account_stats_only_own_history(self, authenticated_client, sample_user, another_user, sample_problem):
         """Test that stats only include user's own history"""
+        client = authenticated_client(sample_user)
+
         # Create history for authenticated user
         SearchHistory.objects.create(
             user=sample_user,
@@ -269,7 +283,7 @@ class TestAccountStats:
             is_code_public=True
         )
 
-        response = authenticated_client.get('/api/account/stats/')
+        response = client.get('/api/account/stats/')
 
         assert response.status_code == status.HTTP_200_OK
         # Should only count own history
@@ -282,6 +296,7 @@ class TestAccountStatsEdgeCases:
 
     def test_account_stats_with_multiple_platforms(self, authenticated_client, sample_user, sample_problem):
         """Test stats with many different platforms"""
+        client = authenticated_client(sample_user)
         platforms = ['baekjoon', 'codeforces', 'leetcode', 'atcoder', 'hackerrank']
 
         for platform in platforms:
@@ -301,7 +316,7 @@ class TestAccountStatsEdgeCases:
                 is_code_public=True
             )
 
-        response = authenticated_client.get('/api/account/stats/')
+        response = client.get('/api/account/stats/')
 
         assert response.status_code == status.HTTP_200_OK
         assert len(response.data['by_platform']) == 5
@@ -311,6 +326,7 @@ class TestAccountStatsEdgeCases:
 
     def test_account_stats_with_multiple_languages(self, authenticated_client, sample_user, sample_problem):
         """Test stats with many different languages"""
+        client = authenticated_client(sample_user)
         languages = ['python', 'cpp', 'java', 'javascript', 'go', 'rust']
 
         for language in languages:
@@ -330,7 +346,7 @@ class TestAccountStatsEdgeCases:
                 is_code_public=True
             )
 
-        response = authenticated_client.get('/api/account/stats/')
+        response = client.get('/api/account/stats/')
 
         assert response.status_code == status.HTTP_200_OK
         assert len(response.data['by_language']) == 6
@@ -339,6 +355,8 @@ class TestAccountStatsEdgeCases:
 
     def test_account_stats_with_partial_failures(self, authenticated_client, sample_user, sample_problem):
         """Test stats with partially failed executions"""
+        client = authenticated_client(sample_user)
+
         # Execution with some failed test cases (failed_count > 0)
         SearchHistory.objects.create(
             user=sample_user,
@@ -356,7 +374,7 @@ class TestAccountStatsEdgeCases:
             is_code_public=True
         )
 
-        response = authenticated_client.get('/api/account/stats/')
+        response = client.get('/api/account/stats/')
 
         assert response.status_code == status.HTTP_200_OK
         # Should count as failed (failed_count > 0)
@@ -365,6 +383,8 @@ class TestAccountStatsEdgeCases:
 
     def test_account_stats_performance_with_many_records(self, authenticated_client, sample_user, sample_problem):
         """Test stats performance with many execution records"""
+        client = authenticated_client(sample_user)
+
         # Create 100 execution records
         for i in range(100):
             SearchHistory.objects.create(
@@ -383,7 +403,7 @@ class TestAccountStatsEdgeCases:
                 is_code_public=True
             )
 
-        response = authenticated_client.get('/api/account/stats/')
+        response = client.get('/api/account/stats/')
 
         assert response.status_code == status.HTTP_200_OK
         assert response.data['total_executions'] == 100

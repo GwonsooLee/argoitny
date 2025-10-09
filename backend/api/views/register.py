@@ -5,12 +5,8 @@ from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from django.db import transaction
 from ..services.gemini_service import GeminiService
-from ..services.code_executor import CodeExecutor
-from ..services.test_case_generator import TestCaseGenerator
-from ..services.code_execution_service import CodeExecutionService
 from ..serializers import (
     ProblemRegisterSerializer,
-    GenerateTestCasesSerializer,
     ProblemSerializer,
     ProblemSaveSerializer,
     ScriptGenerationJobSerializer,
@@ -18,7 +14,7 @@ from ..serializers import (
 )
 from ..tasks import generate_script_task, extract_problem_info_task
 from ..dynamodb.client import DynamoDBClient
-from ..dynamodb.repositories import ProblemRepository
+from ..dynamodb.repositories import ProblemRepository, ProblemExtractionJobRepository, ScriptGenerationJobRepository
 from ..utils.job_helper import JobHelper
 import logging
 
@@ -76,7 +72,6 @@ class GenerateTestCasesView(APIView):
                 title=serializer.validated_data['title'],
                 problem_url=serializer.validated_data.get('problem_url', ''),
                 tags=serializer.validated_data.get('tags', []),
-                solution_code=serializer.validated_data.get('solution_code', ''),
                 language=serializer.validated_data['language'],
                 constraints=serializer.validated_data['constraints'],
                 status='PENDING'
@@ -388,7 +383,7 @@ class DraftProblemsView(APIView):
             # Get both PENDING and PROCESSING jobs
             pending_jobs = []
             for job_status in ['PENDING', 'PROCESSING']:
-                jobs = JobHelper.list_problem_extraction_jobs(status=job_status)
+                jobs, _ = JobHelper.list_problem_extraction_jobs(status=job_status)
                 pending_jobs.extend(jobs)
 
             # Get job IDs that are already in draft_data
@@ -468,7 +463,7 @@ class JobListView(APIView):
             problem_id = request.query_params.get('problem_id')
 
             # List jobs using JobHelper
-            jobs = JobHelper.list_script_generation_jobs(
+            jobs, _ = JobHelper.list_script_generation_jobs(
                 status=status_filter.upper() if status_filter else None,
                 platform=platform,
                 problem_id=problem_id
@@ -595,7 +590,7 @@ class RetryExtractionView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            # Get the problem URL
+            # Get the problem URL and other info from old job
             problem_url = job.get('problem_url')
             if not problem_url:
                 return Response(
@@ -603,11 +598,29 @@ class RetryExtractionView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            # Reset job status
+            platform = job.get('platform')
+            problem_id = job.get('problem_id')
+            problem_identifier = job.get('problem_identifier')
+            title = job.get('title', '')
+
+            # Cancel the old job (mark as CANCELLED to prevent race conditions)
             JobHelper.update_problem_extraction_job(job_id, {
-                'status': 'PENDING',
-                'error_message': None
+                'status': 'CANCELLED',
+                'error_message': 'Cancelled for retry'
             })
+            logger.info(f"Cancelled old job {job_id}")
+
+            # Create a NEW job for the retry
+            new_job = JobHelper.create_problem_extraction_job(
+                platform=platform,
+                problem_id=problem_id,
+                problem_url=problem_url,
+                problem_identifier=problem_identifier,
+                title=title,
+                status='PENDING'
+            )
+            new_job_id = new_job['id']
+            logger.info(f"Created new retry job {new_job_id}")
 
             # Update Problem metadata to reflect retry in DynamoDB
             try:
@@ -616,15 +629,13 @@ class RetryExtractionView(APIView):
 
                 table = DynamoDBClient.get_table()
                 problem_repo = ProblemRepository(table)
-                platform = job.get('platform')
-                problem_id = job.get('problem_id')
                 problem = problem_repo.get_problem(platform, problem_id)
 
                 if problem:
                     metadata = problem.get('metadata', {})
                     metadata.update({
                         'extraction_status': 'PENDING',
-                        'extraction_job_id': job_id,
+                        'extraction_job_id': new_job_id,
                         'progress': 'Retry initiated...',
                         'error_message': None
                     })
@@ -633,25 +644,26 @@ class RetryExtractionView(APIView):
                         problem_id=problem_id,
                         updates={'metadata': metadata}
                     )
-                    logger.info(f"Updated Problem {platform}/{problem_id} to PENDING")
+                    logger.info(f"Updated Problem {platform}/{problem_id} to PENDING with new job {new_job_id}")
                 else:
                     logger.warning(f"Problem {platform}/{problem_id} not found in DynamoDB")
             except Exception as e:
                 logger.warning(f"Failed to update problem metadata: {str(e)}")
 
-            # Trigger the extraction task again
+            # Trigger the extraction task with NEW job_id
             from ..tasks import extract_problem_info_task
             extract_problem_info_task.apply_async(
                 kwargs={
                     'problem_url': problem_url,
-                    'job_id': job_id
+                    'job_id': new_job_id
                 },
                 queue='ai'
             )
 
             return Response({
                 'message': 'Extraction job retry initiated',
-                'job_id': job_id,
+                'old_job_id': job_id,
+                'job_id': new_job_id,
                 'status': 'PENDING'
             }, status=status.HTTP_200_OK)
 
@@ -1288,7 +1300,7 @@ class JobProgressHistoryView(APIView):
             history_data = []
             for item in history_items:
                 # Convert Unix timestamp to ISO format
-                created_timestamp = item.get('created_at', 0)
+                created_timestamp = int(item.get('created_at', 0))
                 created_at_iso = datetime.fromtimestamp(created_timestamp, tz=timezone.utc).isoformat() if created_timestamp else None
 
                 history_data.append({
@@ -1302,6 +1314,18 @@ class JobProgressHistoryView(APIView):
             # Encode next cursor if available
             next_cursor = None
             if next_key:
+                # Convert Decimal to int/float for JSON serialization
+                from decimal import Decimal
+                def convert_decimals(obj):
+                    if isinstance(obj, dict):
+                        return {k: convert_decimals(v) for k, v in obj.items()}
+                    elif isinstance(obj, list):
+                        return [convert_decimals(item) for item in obj]
+                    elif isinstance(obj, Decimal):
+                        return int(obj) if obj % 1 == 0 else float(obj)
+                    return obj
+
+                next_key = convert_decimals(next_key)
                 next_cursor = base64.b64encode(json.dumps(next_key).encode('utf-8')).decode('utf-8')
 
             return Response({

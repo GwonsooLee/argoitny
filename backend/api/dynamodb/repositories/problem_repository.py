@@ -2,22 +2,32 @@
 from typing import Dict, Optional, List, Any
 from boto3.dynamodb.conditions import Key, Attr
 from .base_repository import BaseRepository
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class ProblemRepository(BaseRepository):
     """Repository for Problem and TestCase operations"""
 
-    def __init__(self, table=None):
+    def __init__(self, table=None, s3_service=None):
         """
         Initialize ProblemRepository
 
         Args:
             table: DynamoDB table resource. If None, will be fetched from DynamoDBClient
+            s3_service: S3TestCaseService instance. If None, will be created
         """
         if table is None:
             from ..client import DynamoDBClient
             table = DynamoDBClient.get_table()
         super().__init__(table)
+
+        # Initialize S3 service for large test cases
+        if s3_service is None:
+            from api.services.s3_testcase_service import S3TestCaseService
+            s3_service = S3TestCaseService()
+        self.s3_service = s3_service
 
     def create_problem(
         self,
@@ -213,18 +223,11 @@ class ProblemRepository(BaseRepository):
                     'created_at': item.get('crt'),
                     'updated_at': item.get('upd')
                 }
-            elif item.get('SK', '').startswith('TC#'):
-                # Test case
-                testcase_id = item['SK'].split('#')[1]
-                test_cases.append({
-                    'testcase_id': testcase_id,
-                    'input': item['dat'].get('inp', ''),
-                    'output': item['dat'].get('out', ''),
-                    'created_at': item.get('crt')
-                })
-
+        # Test cases are now stored in S3, load them separately if needed
         if problem:
-            problem['test_cases'] = sorted(test_cases, key=lambda x: x['testcase_id'])
+            # Don't load test cases by default for performance
+            # Consumers should call get_testcases() separately if needed
+            problem['test_cases'] = []
             return problem
 
         return None
@@ -327,7 +330,7 @@ class ProblemRepository(BaseRepository):
         problem_id: str
     ) -> bool:
         """
-        Delete problem and all associated test cases
+        Delete problem and all associated test cases (including S3 data)
 
         Args:
             platform: Platform name
@@ -343,11 +346,19 @@ class ProblemRepository(BaseRepository):
             key_condition_expression=Key('PK').eq(pk)
         )
 
-        # Delete all items
+        # Delete all items from DynamoDB
         success = True
         for item in items:
             if not self.delete_item(item['PK'], item['SK']):
                 success = False
+
+        # Delete S3 test cases
+        try:
+            self.s3_service.delete_testcases(platform, problem_id)
+            logger.info(f"Deleted S3 test cases for {platform}/{problem_id}")
+        except Exception as e:
+            logger.error(f"Failed to delete S3 test cases: {e}")
+            success = False
 
         return success
 
@@ -361,6 +372,7 @@ class ProblemRepository(BaseRepository):
     ) -> Dict[str, Any]:
         """
         Add a test case to a problem and update test case count
+        Automatically routes to S3 if test case is large (>50KB)
 
         Args:
             platform: Platform name
@@ -374,16 +386,65 @@ class ProblemRepository(BaseRepository):
         """
         timestamp = self.get_timestamp()
 
-        item = {
-            'PK': f'PROB#{platform}#{problem_id}',
-            'SK': f'TC#{testcase_id}',
-            'tp': 'tc',
-            'dat': {
-                'inp': input_str,
-                'out': output_str
-            },
-            'crt': timestamp
-        }
+        # Check if test case should be stored in S3
+        use_s3 = self.s3_service.should_use_s3(input_str, output_str)
+
+        if use_s3:
+            # Store in S3 and save reference in DynamoDB
+            try:
+                s3_metadata = self.s3_service.store_testcase(
+                    platform=platform,
+                    problem_id=problem_id,
+                    testcase_id=testcase_id,
+                    input_str=input_str,
+                    output_str=output_str
+                )
+
+                item = {
+                    'PK': f'PROB#{platform}#{problem_id}',
+                    'SK': f'TC#{testcase_id}',
+                    'tp': 'tc',
+                    'dat': {
+                        's3_key': s3_metadata['s3_key'],
+                        'size': s3_metadata['size'],
+                        'compressed_size': s3_metadata['compressed_size'],
+                        'storage': 's3'
+                    },
+                    'crt': timestamp
+                }
+
+                logger.info(
+                    f"Stored large test case in S3: {platform}/{problem_id}/{testcase_id} "
+                    f"({s3_metadata['size']} bytes)"
+                )
+
+            except Exception as e:
+                logger.error(f"Failed to store test case in S3, falling back to DynamoDB: {e}")
+                # Fallback to DynamoDB (will likely fail if too large, but try anyway)
+                item = {
+                    'PK': f'PROB#{platform}#{problem_id}',
+                    'SK': f'TC#{testcase_id}',
+                    'tp': 'tc',
+                    'dat': {
+                        'inp': input_str,
+                        'out': output_str,
+                        'storage': 'dynamodb'
+                    },
+                    'crt': timestamp
+                }
+        else:
+            # Store directly in DynamoDB
+            item = {
+                'PK': f'PROB#{platform}#{problem_id}',
+                'SK': f'TC#{testcase_id}',
+                'tp': 'tc',
+                'dat': {
+                    'inp': input_str,
+                    'out': output_str,
+                    'storage': 'dynamodb'
+                },
+                'crt': timestamp
+            }
 
         result = self.put_item(item)
 
@@ -405,7 +466,7 @@ class ProblemRepository(BaseRepository):
         problem_id: str
     ) -> List[Dict[str, Any]]:
         """
-        Get all test cases for a problem
+        Get all test cases for a problem from S3
 
         Args:
             platform: Platform name
@@ -414,23 +475,17 @@ class ProblemRepository(BaseRepository):
         Returns:
             List of test case dictionaries
         """
-        pk = f'PROB#{platform}#{problem_id}'
+        try:
+            # All test cases are stored in S3
+            test_cases = self.s3_service.retrieve_testcases(
+                platform=platform,
+                problem_id=problem_id
+            )
+            return test_cases
 
-        items = self.query(
-            key_condition_expression=Key('PK').eq(pk) & Key('SK').begins_with('TC#')
-        )
-
-        test_cases = []
-        for item in items:
-            testcase_id = item['SK'].split('#')[1]
-            test_cases.append({
-                'testcase_id': testcase_id,
-                'input': item['dat'].get('inp', ''),
-                'output': item['dat'].get('out', ''),
-                'created_at': item.get('crt')
-            })
-
-        return sorted(test_cases, key=lambda x: x['testcase_id'])
+        except Exception as e:
+            logger.error(f"Failed to retrieve test cases from S3: {e}")
+            return []
 
     def list_completed_problems(
         self,

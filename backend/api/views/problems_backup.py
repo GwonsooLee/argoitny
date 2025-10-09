@@ -4,8 +4,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from django.db.models import Q, Count
-from ..models import Problem
-from ..serializers import ProblemSerializer, ProblemListSerializer
+# DISABLED: from ..models import Problem
+# DISABLED: from ..serializers import ProblemSerializer, ProblemListSerializer
 
 
 class ProblemListView(APIView):

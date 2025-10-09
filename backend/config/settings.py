@@ -69,8 +69,9 @@ if config.get_bool('middleware.enable_debug_toolbar', env_var='ENABLE_DEBUG_TOOL
     INSTALLED_APPS.append('debug_toolbar')
     INTERNAL_IPS = ['127.0.0.1', 'localhost']
 
-# Custom user model
-AUTH_USER_MODEL = 'api.User'
+# Custom user model removed - using DynamoDB with custom authentication backend
+# AUTH_USER_MODEL = 'api.User'  # REMOVED - now using DynamoDB
+# See: api/authentication.py (CustomJWTAuthentication)
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -330,6 +331,17 @@ GOOGLE_OAUTH_REDIRECT_URI = config.get(
 GEMINI_API_KEY = secrets.get('GEMINI_API_KEY', default='')
 
 # ============================================
+# S3 Test Case Storage Configuration
+# ============================================
+
+# S3 bucket for storing large test cases
+TESTCASE_S3_BUCKET = config.get(
+    'aws.testcase_bucket',
+    env_var='TESTCASE_S3_BUCKET',
+    default='algoitny-testcases-zteapne2'
+)
+
+# ============================================
 # Code Execution Configuration
 # ============================================
 
@@ -426,11 +438,14 @@ CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = config.get_int('celery.task_time_limit', default=1800)
 CELERY_TASK_SOFT_TIME_LIMIT = config.get_int('celery.task_soft_time_limit', default=1680)
-CELERY_TASK_ACKS_LATE = config.get_bool('celery.task_acks_late', default=False)
+# CRITICAL: Set to True to prevent duplicate task execution across multiple workers
+# With acks_late=True, SQS visibility timeout prevents other workers from picking up the same task
+CELERY_TASK_ACKS_LATE = config.get_bool('celery.task_acks_late', default=True)
 CELERY_TASK_REJECT_ON_WORKER_LOST = config.get_bool('celery.task_reject_on_worker_lost', default=True)
 
 # Worker optimization
-CELERY_WORKER_PREFETCH_MULTIPLIER = config.get_int('celery.worker_prefetch_multiplier', default=4)
+# CRITICAL: Set to 1 to prevent workers from prefetching multiple tasks (reduces duplicate risk)
+CELERY_WORKER_PREFETCH_MULTIPLIER = config.get_int('celery.worker_prefetch_multiplier', default=1)
 CELERY_WORKER_MAX_TASKS_PER_CHILD = config.get_int('celery.worker_max_tasks_per_child', default=1000)
 CELERY_WORKER_DISABLE_RATE_LIMITS = False
 CELERY_WORKER_SEND_TASK_EVENTS = True

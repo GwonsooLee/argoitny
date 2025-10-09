@@ -4,9 +4,6 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from ..authentication import CustomJWTAuthentication
-from django.db import transaction
-from ..models import Problem, SearchHistory, TestCase
-from ..services.code_executor import CodeExecutor
 from ..serializers import ExecuteCodeSerializer
 from ..utils.rate_limit import check_rate_limit, log_usage
 from ..dynamodb.client import DynamoDBClient
@@ -97,55 +94,16 @@ class ExecuteCodeView(APIView):
                         status=status.HTTP_400_BAD_REQUEST
                     )
 
-                # For backward compatibility with log_usage, try to get Django ORM Problem
-                # This is optional - if it doesn't exist, we'll pass None
-                orm_problem = None
-                try:
-                    orm_problem = Problem.objects.only('id').get(
-                        platform=platform,
-                        problem_id=problem_identifier
-                    )
-                except Problem.DoesNotExist:
-                    # This is fine - we're transitioning to DynamoDB
-                    pass
+                # DynamoDB only - no ORM problem reference needed
 
             elif problem_id:
-                # Legacy approach: Django ORM problem_id lookup
-                # First get the Problem to extract platform/problem_identifier
-                try:
-                    orm_problem = Problem.objects.only(
-                        'id', 'platform', 'problem_id'
-                    ).get(id=problem_id)
-                except Problem.DoesNotExist:
-                    return Response(
-                        {'error': 'Problem not found'},
-                        status=status.HTTP_404_NOT_FOUND
-                    )
-
-                platform = orm_problem.platform
-                problem_identifier = orm_problem.problem_id
-
-                # Now verify test cases exist in DynamoDB
-                problem_data = problem_repo.get_problem_with_testcases(
-                    platform=platform,
-                    problem_id=problem_identifier
+                # Legacy approach: problem_id only (not supported in DynamoDB-only mode)
+                return Response(
+                    {
+                        'error': 'Legacy problem_id is not supported. Please provide platform and problem_identifier.'
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
                 )
-
-                if not problem_data:
-                    # Fallback to Django ORM for backward compatibility
-                    if not TestCase.objects.filter(problem=orm_problem).exists():
-                        return Response(
-                            {'error': 'No test cases found for this problem'},
-                            status=status.HTTP_400_BAD_REQUEST
-                        )
-                else:
-                    # Check DynamoDB test cases
-                    test_cases = problem_data.get('test_cases', [])
-                    if not test_cases:
-                        return Response(
-                            {'error': 'No test cases found for this problem'},
-                            status=status.HTTP_400_BAD_REQUEST
-                        )
             else:
                 return Response(
                     {
@@ -167,12 +125,12 @@ class ExecuteCodeView(APIView):
                 is_code_public=is_code_public
             )
 
-            # Log usage - pass ORM problem if available for backward compatibility
+            # Log usage
             log_usage(
                 user=request.user,
                 action='execution',
-                problem=orm_problem if 'orm_problem' in locals() else None,
-                metadata={'task_id': task.id, 'language': language}
+                problem=None,  # DynamoDB only - no ORM problem
+                metadata={'task_id': task.id, 'language': language, 'platform': platform, 'problem_id': problem_identifier}
             )
 
             return Response({

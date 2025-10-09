@@ -13,7 +13,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError
 from ..services.google_oauth import GoogleOAuthService
 from ..serializers import SubscriptionPlanSerializer
-from ..models import SubscriptionPlan
+# from ..models import SubscriptionPlan  # REMOVED - using DynamoDB SubscriptionPlanRepository
 from ..utils.jwt_helper import generate_tokens_for_user
 from ..utils.serializer_helper import serialize_dynamodb_user
 

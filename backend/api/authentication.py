@@ -98,6 +98,11 @@ class CustomJWTAuthentication(JWTAuthentication):
                     self._user_dict = user_data
 
                 @property
+                def pk(self):
+                    """Primary key for Django ORM compatibility"""
+                    return self.id
+
+                @property
                 def is_authenticated(self):
                     return True
 

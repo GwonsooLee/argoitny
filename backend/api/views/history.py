@@ -9,8 +9,8 @@ from django.core.exceptions import ValidationError
 
 from api.dynamodb.client import DynamoDBClient
 from api.dynamodb.repositories import SearchHistoryRepository
-from ..tasks import generate_hints_task
-from ..utils.rate_limit import check_rate_limit, log_usage
+# DISABLED: from ..tasks import generate_hints_task
+# DISABLED: from ..utils.rate_limit import check_rate_limit, log_usage
 
 
 class SearchHistoryListView(APIView):

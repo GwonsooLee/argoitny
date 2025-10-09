@@ -6,9 +6,9 @@ from rest_framework.permissions import AllowAny
 from django.conf import settings
 from django.core.cache import cache
 from django.db.models import Q, Count
-from ..models import Problem
-from ..serializers import ProblemSerializer, ProblemListSerializer
-from ..utils.cache import CacheKeyGenerator, get_or_set_cache
+# DISABLED: from ..models import Problem
+# DISABLED: from ..serializers import ProblemSerializer, ProblemListSerializer
+# DISABLED: from ..utils.cache import CacheKeyGenerator, get_or_set_cache
 import logging
 
 logger = logging.getLogger(__name__)

@@ -16,12 +16,11 @@ def get_table_schema():
         'AttributeDefinitions': [
             {'AttributeName': 'PK', 'AttributeType': 'S'},
             {'AttributeName': 'SK', 'AttributeType': 'S'},
-            # GSI1 attributes
+            # GSI1 attributes (Job status queries - email/google_id lookup)
             {'AttributeName': 'GSI1PK', 'AttributeType': 'S'},
-            {'AttributeName': 'GSI1SK', 'AttributeType': 'S'},
-            # GSI2 attributes
+            {'AttributeName': 'GSI1SK', 'AttributeType': 'S'},  # String for job timestamps and user IDs
+            # GSI2 attributes (Google ID lookup - HASH only, no RANGE key)
             {'AttributeName': 'GSI2PK', 'AttributeType': 'S'},
-            {'AttributeName': 'GSI2SK', 'AttributeType': 'S'},
             # GSI3 attributes (Problem status index)
             {'AttributeName': 'GSI3PK', 'AttributeType': 'S'},
             {'AttributeName': 'GSI3SK', 'AttributeType': 'N'},
@@ -38,13 +37,12 @@ def get_table_schema():
                 'Projection': {'ProjectionType': 'ALL'}
             },
             {
-                # GSI2: Public history timeline
+                # GSI2: Google ID lookup (HASH only, no RANGE key)
                 'IndexName': 'GSI2',
                 'KeySchema': [
-                    {'AttributeName': 'GSI2PK', 'KeyType': 'HASH'},
-                    {'AttributeName': 'GSI2SK', 'KeyType': 'RANGE'}
+                    {'AttributeName': 'GSI2PK', 'KeyType': 'HASH'}
                 ],
-                'Projection': {'ProjectionType': 'KEYS_ONLY'}
+                'Projection': {'ProjectionType': 'ALL'}
             },
             {
                 # GSI3: Problem status index (completed/draft problems)

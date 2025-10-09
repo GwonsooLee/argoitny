@@ -169,6 +169,9 @@ aws:
   # AWS region
   region: "us-east-1"
 
+  # S3 Test Case Storage
+  testcase_bucket: "algoitny-testcases-zteapne2"  # Production S3 bucket for test cases
+
   # S3 storage
   s3:
     enabled: false

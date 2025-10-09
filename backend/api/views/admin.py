@@ -15,9 +15,8 @@ from api.dynamodb.repositories import (
     ProblemRepository
 )
 from api.serializers import (
-    UserManagementSerializer,
+    UserSerializer,
     SubscriptionPlanSerializer,
-    UsageLogSerializer,
     ProblemSerializer
 )
 

@@ -1,7 +1,10 @@
 """DynamoDB client initialization"""
 import os
 import boto3
+import logging
 from botocore.config import Config
+
+logger = logging.getLogger(__name__)
 
 
 class DynamoDBClient:
@@ -9,6 +12,8 @@ class DynamoDBClient:
     _client = None
     _resource = None
     _table_name = 'algoitny_main'
+    _client_initialized = False
+    _resource_initialized = False
 
     @classmethod
     def get_client(cls):
@@ -29,6 +34,7 @@ class DynamoDBClient:
                         retries={'max_attempts': 3, 'mode': 'standard'}
                     )
                 )
+                logger.info(f"[DynamoDB Init] Client initialized with LocalStack at {localstack_url}")
             else:
                 # Production AWS configuration
                 cls._client = boto3.client(
@@ -38,6 +44,9 @@ class DynamoDBClient:
                         retries={'max_attempts': 3, 'mode': 'standard'}
                     )
                 )
+                logger.info("[DynamoDB Init] Client initialized with AWS")
+
+            cls._client_initialized = True
 
         return cls._client
 
@@ -55,11 +64,15 @@ class DynamoDBClient:
                     aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID', 'test'),
                     aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY', 'test')
                 )
+                logger.info(f"[DynamoDB Init] Resource initialized with LocalStack at {localstack_url}")
             else:
                 cls._resource = boto3.resource(
                     'dynamodb',
                     region_name=os.getenv('AWS_DEFAULT_REGION', 'us-east-1')
                 )
+                logger.info("[DynamoDB Init] Resource initialized with AWS")
+
+            cls._resource_initialized = True
 
         return cls._resource
 

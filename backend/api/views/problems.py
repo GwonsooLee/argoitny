@@ -8,7 +8,7 @@ from django.core.cache import cache
 from datetime import datetime
 from decimal import Decimal
 from ..dynamodb.client import DynamoDBClient
-from ..dynamodb.repositories import ProblemRepository
+from ..dynamodb.repositories import ProblemRepository, SearchHistoryRepository
 import logging
 
 logger = logging.getLogger(__name__)
@@ -210,8 +210,12 @@ class ProblemDetailView(APIView):
         Returns:
             {"message": "Problem deleted successfully"}
         """
+        logger.info(f"[DELETE] Request from user: {request.user}, authenticated: {request.user.is_authenticated}")
+        logger.info(f"[DELETE] User email: {getattr(request.user, 'email', None)}, is_admin: {request.user.is_admin() if request.user.is_authenticated else False}")
+
         # Check if user is admin
         if not request.user.is_admin():
+            logger.warning(f"[DELETE] Access denied - user is not admin")
             return Response(
                 {'error': 'Admin access required'},
                 status=status.HTTP_403_FORBIDDEN
@@ -223,11 +227,14 @@ class ProblemDetailView(APIView):
 
             # Support both /problems/:id/ and /problems/:platform/:problem_id/
             if platform and problem_identifier:
+                logger.info(f"Attempting to delete problem: platform={platform}, problem_id={problem_identifier}")
+
                 # Check if problem exists
                 problem = problem_repo.get_problem(
                     platform=platform,
                     problem_id=problem_identifier
                 )
+                logger.info(f"Problem found: {problem is not None}")
             else:
                 return Response(
                     {'error': 'Please provide both platform and problem_identifier'},
@@ -240,23 +247,45 @@ class ProblemDetailView(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-            # Prevent deletion of completed problems (soft delete only)
-            if problem.get('is_completed'):
-                return Response(
-                    {'error': 'Cannot delete completed problems. Only drafts can be deleted.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            # Hard delete (only for drafts)
-            success = problem_repo.delete_problem(
+            # Use soft delete to avoid GSI consistency issues
+            # Hard delete causes the item to still appear in GSI queries for a few seconds
+            import time
+            logger.info(f"Marking problem as deleted (soft delete): platform={platform}, problem_id={problem_identifier}")
+            updated_problem = problem_repo.update_problem(
                 platform=platform,
-                problem_id=problem_identifier
+                problem_id=problem_identifier,
+                updates={
+                    'is_deleted': True,
+                    'deleted_at': int(time.time()),
+                    'deleted_reason': f'Deleted by admin {request.user.email}'
+                }
             )
+            success = updated_problem is not None
+            logger.info(f"Soft delete result: {success}")
 
             if success:
                 # Invalidate caches
                 cache.delete("problem_drafts:all")
                 cache.delete("problem_registered:all")
+                logger.info(f"[DELETE] Cache invalidated for problem_drafts:all and problem_registered:all")
+
+                # Verify cache was deleted
+                if cache.get("problem_drafts:all") is not None:
+                    logger.warning(f"[DELETE] Cache problem_drafts:all still exists after delete!")
+                if cache.get("problem_registered:all") is not None:
+                    logger.warning(f"[DELETE] Cache problem_registered:all still exists after delete!")
+
+                # Schedule hard delete task (async, delayed by 5 seconds)
+                from ..tasks import hard_delete_problem_task
+                hard_delete_problem_task.apply_async(
+                    kwargs={
+                        'platform': platform,
+                        'problem_id': problem_identifier
+                    },
+                    countdown=5,  # Wait 5 seconds before hard delete
+                    queue='default'
+                )
+                logger.info(f"[DELETE] Scheduled hard delete task for {platform}/{problem_identifier}")
 
                 return Response(
                     {'message': 'Problem deleted successfully'},

@@ -1,9 +1,6 @@
-"""Celery tasks for async processing - Optimized for performance"""
+"""Celery tasks for async processing - Migrated to DynamoDB"""
 from celery import shared_task
-from django.db import models, transaction
 from django.core.cache import cache
-from django.contrib.contenttypes.models import ContentType
-from .models import Problem, TestCase, SearchHistory, User
 from .services.gemini_service import GeminiService
 from .services.code_execution_service import CodeExecutionService
 from .utils.job_helper import JobHelper
@@ -89,12 +86,29 @@ def generate_script_task(self, job_id):
             'celery_task_id': self.request.id
         })
 
+        # Fetch solution_code from existing Problem using DynamoDB
+        from api.dynamodb.repositories import ProblemRepository
+
+        solution_code = ''
+        problem_repo = ProblemRepository()
+        problem = problem_repo.get_problem(
+            platform=job['platform'],
+            problem_id=job['problem_id']
+        )
+
+        if not problem:
+            logger.warning(f"[generate_script_task] Problem not found: {job['platform']}/{job['problem_id']}")
+            raise ValueError(f"Problem {job['platform']}/{job['problem_id']} not found. Script generation requires existing problem with solution code.")
+
+        solution_code = problem.get('solution_code', '')
+        logger.info(f"[generate_script_task] Fetched solution_code from Problem ({len(solution_code)} chars)")
+
         # Prepare problem info for Gemini
         problem_info = {
             'platform': job['platform'],
             'problem_id': job['problem_id'],
             'title': job['title'],
-            'solution_code': job.get('solution_code') or '',
+            'solution_code': solution_code,
             'language': job['language'],
             'constraints': job['constraints'],
             'tags': job.get('tags', []),
@@ -138,100 +152,91 @@ def generate_script_task(self, job_id):
             # Generate test cases using the script
             test_case_inputs = TestCaseGenerator.execute_generator_code(
                 code=generator_code,
-                num_cases=20
+                num_cases=10
             )
 
-            # OPTIMIZATION: Encode solution_code to base64 for consistency
-            encoded_solution_code = ''
-            if job.get('solution_code'):
-                encoded_solution_code = base64.b64encode(
-                    job['solution_code'].encode('utf-8')
-                ).decode('utf-8')
-
-            problem_defaults = {
+            # Update problem metadata using DynamoDB (problem and solution_code already exist)
+            problem_updates = {
                 'title': job['title'],
                 'problem_url': job.get('problem_url') or '',
                 'tags': job.get('tags', []),
-                'solution_code': encoded_solution_code,
                 'language': job['language'],
                 'constraints': job['constraints']
             }
 
-            # OPTIMIZATION: Use update_or_create for atomic operation
-            problem, created = Problem.objects.update_or_create(
+            problem_repo.update_problem(
                 platform=job['platform'],
                 problem_id=job['problem_id'],
-                defaults=problem_defaults
+                updates=problem_updates
             )
 
-            # OPTIMIZATION: Use atomic transaction for test case operations
-            with transaction.atomic():
-                # Delete existing test cases in bulk
-                deleted_count = TestCase.objects.filter(problem=problem).delete()[0]
-                logger.info(f"Deleted {deleted_count} existing test cases for problem {problem.id}")
+            # Reload problem instance
+            problem = problem_repo.get_problem(
+                platform=job['platform'],
+                problem_id=job['problem_id']
+            )
 
-                # Execute solution code with generated inputs to get outputs
-                if job.get('solution_code'):
-                    test_results = CodeExecutionService.execute_with_test_cases(
-                        code=job['solution_code'],
-                        language=job['language'],
-                        test_inputs=test_case_inputs
+            # Execute solution code with generated inputs to get outputs
+            test_results = CodeExecutionService.execute_with_test_cases(
+                code=solution_code,
+                language=job['language'],
+                test_inputs=test_case_inputs
+            )
+
+            # Log execution results
+            success_count = sum(1 for r in test_results if r['status'] == 'success')
+            failed_count = len(test_results) - success_count
+            logger.info(
+                f"[generate_script_task] Test case execution: "
+                f"{success_count} succeeded, {failed_count} failed"
+            )
+
+            # Log failed test cases (only first 3 to avoid log spam)
+            for idx, r in enumerate(r for r in test_results if r['status'] != 'success'):
+                if idx >= 3:  # Limit to first 3 failures
+                    break
+                logger.warning(
+                    f"[generate_script_task] Failed test case {idx+1}: "
+                    f"input={r.get('input', '')[:50]}, error={r.get('error', 'Unknown')}"
+                )
+
+            # Prepare test cases for S3 storage
+            testcases_for_s3 = []
+            for idx, r in enumerate(r for r in test_results if r['status'] == 'success'):
+                testcases_for_s3.append({
+                    'testcase_id': str(idx + 1),
+                    'input': r['input'],
+                    'output': r['output']
+                })
+
+            # Store all test cases in S3 as a single file
+            if testcases_for_s3:
+                from api.services.s3_testcase_service import S3TestCaseService
+                s3_service = S3TestCaseService()
+
+                try:
+                    s3_service.store_testcases(
+                        platform=job['platform'],
+                        problem_id=job['problem_id'],
+                        testcases=testcases_for_s3
                     )
 
-                    # Log execution results
-                    success_count = sum(1 for r in test_results if r['status'] == 'success')
-                    failed_count = len(test_results) - success_count
-                    logger.info(
-                        f"[generate_script_task] Test case execution: "
-                        f"{success_count} succeeded, {failed_count} failed"
+                    # Update problem metadata to reflect S3 storage
+                    problem_repo.update_problem(
+                        platform=job['platform'],
+                        problem_id=job['problem_id'],
+                        updates={
+                            'test_case_count': len(testcases_for_s3)
+                        }
                     )
 
-                    # Log failed test cases (only first 3 to avoid log spam)
-                    for idx, r in enumerate(r for r in test_results if r['status'] != 'success'):
-                        if idx >= 3:  # Limit to first 3 failures
-                            break
-                        logger.warning(
-                            f"[generate_script_task] Failed test case {idx+1}: "
-                            f"input={r.get('input', '')[:50]}, error={r.get('error', 'Unknown')}"
-                        )
-
-                    # OPTIMIZATION: Bulk create test cases with successful results only
-                    test_case_objects = [
-                        TestCase(
-                            problem=problem,
-                            input=r['input'],
-                            output=r['output']
-                        )
-                        for r in test_results if r['status'] == 'success'
-                    ]
-
-                    if test_case_objects:
-                        TestCase.objects.bulk_create(
-                            test_case_objects,
-                            batch_size=100  # Process in batches for memory efficiency
-                        )
-                        logger.info(f"Created {len(test_case_objects)} test cases for problem {problem.id}")
-                        logger.info(f"Problem {problem.id} remains in draft state - admin review required")
-                    else:
-                        logger.warning(f"No successful test cases generated for problem {problem.id}")
-                else:
-                    # No solution code, create test cases with empty outputs
-                    test_case_objects = [
-                        TestCase(
-                            problem=problem,
-                            input=test_input,
-                            output=''
-                        )
-                        for test_input in test_case_inputs
-                    ]
-
-                    if test_case_objects:
-                        TestCase.objects.bulk_create(
-                            test_case_objects,
-                            batch_size=100
-                        )
-                        logger.info(f"Created {len(test_case_objects)} test cases (no outputs) for problem {problem.id}")
-                        logger.info(f"Problem {problem.id} remains in draft state - admin review required")
+                    logger.info(f"Stored {len(testcases_for_s3)} test cases in S3")
+                except Exception as e:
+                    logger.error(f"Failed to store test cases in S3: {e}")
+                    raise
+                logger.info(f"Problem remains in draft state - admin review required")
+            else:
+                logger.warning(f"No successful test cases generated")
 
         except Exception as e:
             # Log but don't fail the task if test case generation fails
@@ -278,13 +283,6 @@ def generate_outputs_task(self, platform, problem_id):
     """
     Async task to generate outputs for test cases using solution code
 
-    OPTIMIZATIONS:
-    - Prefetch test_cases to avoid N+1 queries
-    - Use only() to fetch minimal fields
-    - Bulk update instead of individual saves
-    - Atomic transaction for consistency
-    - Efficient list comprehensions
-
     Args:
         platform: Platform name (e.g., 'baekjoon', 'codeforces')
         problem_id: Problem ID
@@ -293,29 +291,33 @@ def generate_outputs_task(self, platform, problem_id):
         dict: Result with status and count
     """
     try:
-        # OPTIMIZATION: Use only() + prefetch_related to minimize queries
-        problem = Problem.objects.only(
-            'id', 'solution_code', 'language', 'platform', 'problem_id'
-        ).prefetch_related(
-            models.Prefetch(
-                'test_cases',
-                queryset=TestCase.objects.only('id', 'input', 'output', 'problem_id')
-            )
-        ).get(
+        from api.dynamodb.repositories import ProblemRepository
+
+        problem_repo = ProblemRepository()
+
+        # Get problem with test cases from DynamoDB
+        problem_with_tests = problem_repo.get_problem_with_testcases(
             platform=platform,
             problem_id=problem_id
         )
 
+        if not problem_with_tests:
+            logger.error(f"Problem {platform}/{problem_id} not found")
+            return {
+                'status': 'FAILED',
+                'error': 'Problem not found'
+            }
+
         # Early validation
-        if not problem.solution_code:
+        solution_code = problem_with_tests.get('solution_code', '')
+        if not solution_code:
             logger.warning(f"Problem {platform}/{problem_id} has no solution code")
             return {
                 'status': 'FAILED',
                 'error': 'Problem has no solution code'
             }
 
-        # OPTIMIZATION: Get test cases from prefetch (no additional query)
-        test_cases = list(problem.test_cases.all())
+        test_cases = problem_with_tests.get('test_cases', [])
         if not test_cases:
             logger.warning(f"Problem {platform}/{problem_id} has no test cases")
             return {
@@ -323,51 +325,39 @@ def generate_outputs_task(self, platform, problem_id):
                 'error': 'Problem has no test cases'
             }
 
-        # OPTIMIZATION: Extract inputs in single list comprehension
-        test_inputs = [tc.input for tc in test_cases]
+        # Extract inputs
+        test_inputs = [tc['input'] for tc in test_cases]
 
-        # Decode base64 solution code before executing
-        try:
-            decoded_code = base64.b64decode(problem.solution_code).decode('utf-8')
-        except Exception as e:
-            logger.error(f"Failed to decode solution code: {str(e)}")
-            return {
-                'status': 'FAILED',
-                'error': f'Failed to decode solution code: {str(e)}'
-            }
-
-        # Execute solution code with test inputs
+        # Execute solution code with test inputs (solution_code already decoded by repository)
         test_results = CodeExecutionService.execute_with_test_cases(
-            code=decoded_code,
-            language=problem.language or 'python',
+            code=solution_code,
+            language=problem_with_tests.get('language') or 'python',
             test_inputs=test_inputs
         )
 
-        # OPTIMIZATION: Use bulk_update in atomic transaction
-        with transaction.atomic():
-            test_cases_to_update = []
-            failed_cases = []
+        # Update test case outputs in DynamoDB
+        failed_cases = []
+        success_count = 0
 
-            for tc, result in zip(test_cases, test_results):
-                if result['status'] == 'success':
-                    tc.output = result['output']
-                    test_cases_to_update.append(tc)
-                else:
-                    failed_cases.append({
-                        'input': result.get('input', '')[:50],
-                        'error': result.get('error', 'Unknown error')
-                    })
-
-            # Bulk update all successful test cases at once (single query)
-            if test_cases_to_update:
-                TestCase.objects.bulk_update(
-                    test_cases_to_update,
-                    ['output'],
-                    batch_size=100  # Process in batches
+        for tc, result in zip(test_cases, test_results):
+            if result['status'] == 'success':
+                # Update test case output
+                pk = f"PROB#{platform}#{problem_id}"
+                sk = f"TC#{tc['testcase_id']}"
+                problem_repo.update_item(
+                    pk=pk,
+                    sk=sk,
+                    update_expression='SET dat.#out = :out',
+                    expression_attribute_values={':out': result['output']},
+                    expression_attribute_names={'#out': 'out'}
                 )
+                success_count += 1
+            else:
+                failed_cases.append({
+                    'input': result.get('input', '')[:50],
+                    'error': result.get('error', 'Unknown error')
+                })
 
-        # Calculate summary
-        success_count = len(test_cases_to_update)
         failed_count = len(failed_cases)
 
         # Log summary and failures
@@ -388,13 +378,6 @@ def generate_outputs_task(self, platform, problem_id):
             'count': success_count,
             'failed_count': failed_count,
             'message': f'Outputs generated successfully for {success_count} test cases'
-        }
-
-    except Problem.DoesNotExist:
-        logger.error(f"Problem {platform}/{problem_id} not found")
-        return {
-            'status': 'FAILED',
-            'error': 'Problem not found'
         }
 
     except Exception as e:
@@ -488,55 +471,11 @@ def execute_code_task(self, code, language, platform=None, problem_identifier=No
                     'output': tc['output']
                 })
 
-            # Get ORM problem for history tracking (if exists)
-            orm_problem = None
-            try:
-                orm_problem = Problem.objects.only(
-                    'id', 'platform', 'problem_id', 'title', 'metadata'
-                ).get(platform=platform, problem_id=problem_identifier)
-            except Problem.DoesNotExist:
-                # Create a minimal problem dict for history
-                orm_problem = None
-
-        elif problem_id:
-            # Legacy approach: Use Django ORM
-            logger.info(f"Using legacy problem_id {problem_id}")
-
-            # OPTIMIZATION: Use only() + prefetch_related to minimize queries
-            orm_problem = Problem.objects.only(
-                'id', 'platform', 'problem_id', 'title', 'metadata'
-            ).prefetch_related(
-                models.Prefetch(
-                    'test_cases',
-                    queryset=TestCase.objects.only('id', 'input', 'output', 'problem_id')
-                )
-            ).get(id=problem_id)
-
-            platform = orm_problem.platform
-            problem_identifier = orm_problem.problem_id
-
-            # Get test cases from ORM
-            orm_test_cases = list(orm_problem.test_cases.all())
-            if not orm_test_cases:
-                logger.warning(f"Problem {problem_id} has no test cases")
-                return {
-                    'status': 'FAILED',
-                    'error': 'No test cases available for this problem'
-                }
-
-            # Convert ORM test cases to expected format
-            test_cases = []
-            for tc in orm_test_cases:
-                test_cases.append({
-                    'id': tc.id,
-                    'input': tc.input,
-                    'output': tc.output
-                })
         else:
-            logger.error("Neither (platform, problem_identifier) nor problem_id provided")
+            logger.error("Platform and problem_identifier are required")
             return {
                 'status': 'FAILED',
-                'error': 'Either (platform, problem_identifier) or problem_id must be provided'
+                'error': 'Platform and problem_identifier are required'
             }
 
         # Now we have test_cases in the expected format
@@ -697,13 +636,6 @@ def execute_code_task(self, code, language, platform=None, problem_identifier=No
             }
         }
 
-    except Problem.DoesNotExist:
-        logger.error(f"Problem not found (legacy lookup)")
-        return {
-            'status': 'FAILED',
-            'error': 'Problem not found'
-        }
-
     except Exception as e:
         logger.error(f"Error in execute_code_task: {str(e)}", exc_info=True)
         # Don't retry - handled by autoretry_for
@@ -762,41 +694,51 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
 
         # Update job status if job_id provided
         if job_id:
-            job = JobHelper.get_problem_extraction_job(job_id)
-            if job:
-                JobHelper.update_problem_extraction_job(job_id, {
-                    'status': 'PROCESSING',
-                    'celery_task_id': self.request.id
-                })
-                logger.info(f"[Worker] Job {job_id} status updated to PROCESSING")
+            from api.dynamodb.client import DynamoDBClient
+            from api.dynamodb.repositories import ProblemExtractionJobRepository
 
-                # Update Problem metadata to PROCESSING (DynamoDB)
-                try:
-                    from api.dynamodb.client import DynamoDBClient
-                    from api.dynamodb.repositories import ProblemRepository
+            table = DynamoDBClient.get_table()
+            job_repo = ProblemExtractionJobRepository(table)
 
-                    table = DynamoDBClient.get_table()
-                    problem_repo = ProblemRepository(table)
+            # ATOMIC IDEMPOTENCY CHECK: Try to atomically update status from PENDING to PROCESSING
+            # This prevents race conditions when multiple workers consume the same message
+            success, job = job_repo.conditional_update_status_to_processing(
+                job_id=job_id,
+                celery_task_id=self.request.id,
+                expected_status='PENDING'
+            )
 
-                    # Try to get problem from DynamoDB
-                    problem = problem_repo.get_problem(job['platform'], job['problem_id'])
-                    if problem:
-                        # Update metadata
-                        updates = {
-                            'metadata': {
-                                **(problem.get('metadata') or {}),
-                                'extraction_status': 'PROCESSING',
-                                'extraction_job_id': job_id
-                            }
+            if not success:
+                logger.warning(f"[Worker] Job {job_id} already PROCESSING or not PENDING, skipping task (another worker claimed it)")
+                return {
+                    'status': 'SKIPPED',
+                    'message': 'Job already claimed by another worker',
+                    'job_id': job_id
+                }
+
+            logger.info(f"[Worker] Job {job_id} atomically claimed and status updated to PROCESSING")
+
+            # Update Problem metadata to PROCESSING (DynamoDB)
+            try:
+                problem_repo = ProblemRepository(table)
+
+                # Try to get problem from DynamoDB
+                problem = problem_repo.get_problem(job['platform'], job['problem_id'])
+                if problem:
+                    # Update metadata
+                    updates = {
+                        'metadata': {
+                            **(problem.get('metadata') or {}),
+                            'extraction_status': 'PROCESSING',
+                            'extraction_job_id': job_id
                         }
-                        problem_repo.update_problem(job['platform'], job['problem_id'], updates)
-                        logger.info(f"[Worker] Problem {job['platform']}/{job['problem_id']} status updated to PROCESSING")
-                    else:
-                        logger.info(f"[Worker] Problem {job['platform']}/{job['problem_id']} not created yet (will be created after extraction)")
-                except Exception as e:
-                    logger.warning(f"[Worker] Failed to update problem metadata: {e}")
-            else:
-                logger.warning(f"[Worker] Job {job_id} not found for problem extraction")
+                    }
+                    problem_repo.update_problem(job['platform'], job['problem_id'], updates)
+                    logger.info(f"[Worker] Problem {job['platform']}/{job['problem_id']} status updated to PROCESSING")
+                else:
+                    logger.info(f"[Worker] Problem {job['platform']}/{job['problem_id']} not created yet (will be created after extraction)")
+            except Exception as e:
+                logger.warning(f"[Worker] Failed to update problem metadata: {e}")
 
         # Extract platform and problem_id from URL
         logger.info(f"[Worker] Parsing URL: {problem_url}")
@@ -804,15 +746,14 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
         logger.info(f"[Worker] Parsed - Platform: {platform}, Problem ID: {problem_id}")
 
         # Helper function to update progress
-        def update_progress(progress_message, status='in_progress', update_problem_metadata=False):
+        def update_progress(progress_message, status='in_progress', update_problem_metadata=True):
             """
-            Update job progress and optionally update Problem metadata
+            Update job progress and Problem metadata
 
             Args:
                 progress_message: Progress message to log
                 status: Progress status ('started', 'in_progress', 'completed', 'failed')
-                update_problem_metadata: Only update Problem metadata on True (status changes)
-                                        This reduces WCU consumption by 60-80%
+                update_problem_metadata: Always update Problem metadata for real-time UX (default True)
             """
             logger.info(f"[Progress] {progress_message}")
 
@@ -835,7 +776,7 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
                     status=status
                 )
 
-                # Only update Problem metadata on explicit request (status changes)
+                # Update Problem metadata for real-time frontend updates
                 if update_problem_metadata:
                     problem_repo = ProblemRepository(table)
                     problem = problem_repo.get_problem(platform, problem_id)
@@ -845,7 +786,7 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
                                 **(problem.get('metadata') or {}),
                                 'extraction_status': 'PROCESSING' if status != 'completed' else 'COMPLETED',
                                 'extraction_job_id': job_id,
-                                'last_progress': progress_message  # Renamed from 'progress'
+                                'progress': progress_message  # Keep as 'progress' for frontend compatibility
                             }
                         }
                         problem_repo.update_problem(platform, problem_id, updates)
@@ -859,14 +800,152 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
             update_progress("Loading from cache...", update_problem_metadata=True)  # First update
             problem_info = cached_info
         else:
-            # Use Gemini to extract problem info
-            update_progress("Fetching webpage...", update_problem_metadata=True)  # First update
+            # Use Gemini with 2-step extraction (metadata first, then solution)
             gemini_service = GeminiService()
-            problem_info = gemini_service.extract_problem_info_from_url(
+
+            # STEP 1: Extract problem metadata (title, constraints, samples)
+            update_progress("📄 Step 1/2: Extracting problem metadata...", update_problem_metadata=True)
+            problem_metadata = gemini_service.extract_problem_metadata_from_url(
                 problem_url,
-                progress_callback=update_progress,  # Intermediate updates (no metadata)
-                additional_context=additional_context
+                progress_callback=lambda msg: update_progress(f"📄 {msg}")
             )
+            logger.info(f"Extracted metadata: {problem_metadata['title']}, {len(problem_metadata.get('samples', []))} samples")
+
+            # Update Problem with metadata immediately after extraction
+            if job_id:
+                try:
+                    from api.dynamodb.client import DynamoDBClient
+                    from api.dynamodb.repositories import ProblemRepository
+
+                    table = DynamoDBClient.get_table()
+                    problem_repo = ProblemRepository(table)
+
+                    # Check if problem exists
+                    existing_problem = problem_repo.get_problem(platform, problem_id)
+
+                    if existing_problem:
+                        # Update with metadata
+                        metadata = {
+                            **(existing_problem.get('metadata') or {}),
+                            'extraction_job_id': job_id,
+                            'extraction_status': 'PROCESSING',
+                            'extracted_title': problem_metadata['title'],
+                            'progress': f"Metadata extracted: {problem_metadata['title']}"
+                        }
+
+                        updates = {
+                            'title': problem_metadata['title'],
+                            'constraints': problem_metadata.get('constraints', ''),
+                            'metadata': metadata
+                        }
+                        problem_repo.update_problem(platform, problem_id, updates)
+                        logger.info(f"Updated problem {platform}/{problem_id} with metadata: {problem_metadata['title']}")
+                    else:
+                        # Create problem with metadata
+                        metadata = {
+                            'extraction_job_id': job_id,
+                            'extraction_status': 'PROCESSING',
+                            'extracted_title': problem_metadata['title'],
+                            'progress': f"Metadata extracted: {problem_metadata['title']}"
+                        }
+
+                        problem_repo.create_problem(
+                            platform=platform,
+                            problem_id=problem_id,
+                            problem_data={
+                                'title': problem_metadata['title'],
+                                'problem_url': problem_url,
+                                'constraints': problem_metadata.get('constraints', ''),
+                                'solution_code': '',  # Will be added in Step 2
+                                'language': 'cpp',
+                                'tags': [],
+                                'is_completed': False,
+                                'metadata': metadata
+                            }
+                        )
+                        logger.info(f"Created problem {platform}/{problem_id} with metadata")
+
+                except Exception as e:
+                    logger.error(f"Failed to update problem with metadata: {e}")
+
+            # STEP 2: Generate solution with retry logic
+            max_attempts = 3
+            solution_result = None
+            previous_attempt = None
+            validation_error = None
+
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    update_progress(f"🧠 Step 2/2: Generating solution (attempt {attempt}/{max_attempts})...", update_problem_metadata=True)
+
+                    solution_result = gemini_service.generate_solution_for_problem(
+                        problem_metadata,
+                        previous_attempt=previous_attempt,
+                        progress_callback=lambda msg: update_progress(f"🧠 {msg}")
+                    )
+
+                    solution_code = solution_result['solution_code']
+                    logger.info(f"Generated solution on attempt {attempt}: {len(solution_code)} characters")
+
+                    # Validate solution with samples
+                    samples = problem_metadata.get('samples', [])
+                    if samples:
+                        update_progress(f"✓ Testing solution with {len(samples)} sample{'s' if len(samples) > 1 else ''}...")
+
+                        validation_passed, validation_error = gemini_service._validate_solution_with_samples(
+                            solution_code,
+                            samples
+                        )
+
+                        if validation_passed:
+                            logger.info(f"✓ Solution passed all {len(samples)} samples on attempt {attempt}")
+                            update_progress(f"✓ Solution verified with {len(samples)} samples")
+                            break
+                        else:
+                            logger.warning(f"Attempt {attempt}/{max_attempts} failed validation: {validation_error}")
+
+                            if attempt < max_attempts:
+                                # Prepare retry with error context
+                                previous_attempt = {
+                                    'code': solution_code,
+                                    'error': validation_error,
+                                    'attempt_number': attempt
+                                }
+                                update_progress(f"⚠ Sample test failed, analyzing mistake...")
+                                continue
+                            else:
+                                # Last attempt failed - save with warning
+                                logger.warning(f"⚠ Solution failed after {max_attempts} attempts, saving with warning")
+                                break
+                    else:
+                        logger.warning("No samples to validate")
+                        break
+
+                except Exception as e:
+                    logger.error(f"Attempt {attempt} failed: {e}")
+                    if attempt < max_attempts:
+                        previous_attempt = {
+                            'code': solution_result['solution_code'] if solution_result else '',
+                            'error': str(e),
+                            'attempt_number': attempt
+                        }
+                        continue
+                    else:
+                        raise
+
+            # Combine metadata and solution
+            problem_info = {
+                **problem_metadata,
+                'solution_code': solution_result['solution_code'] if solution_result else '',
+                'constraints': problem_metadata.get('constraints', '')
+            }
+
+            # Add validation info
+            if validation_error and attempt == max_attempts:
+                problem_info['validation_warning'] = f'Solution may be incorrect: {validation_error}'
+                problem_info['validation_passed'] = False
+            elif validation_error is None and samples:
+                problem_info['validation_passed'] = True
 
             # OPTIMIZATION: Cache the result
             cache.set(cache_key, problem_info, CACHE_TTL_LONG)
@@ -891,6 +970,18 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
 
                 if existing_problem:
                     # Update existing problem with extracted data
+                    metadata = {
+                        **(existing_problem.get('metadata') or {}),
+                        'extraction_job_id': job_id,
+                        'extraction_status': 'COMPLETED',
+                        'extracted_title': problem_info['title']
+                    }
+
+                    # Add validation warning if present
+                    if 'validation_warning' in problem_info:
+                        metadata['validation_warning'] = problem_info['validation_warning']
+                        metadata['validation_passed'] = problem_info.get('validation_passed', False)
+
                     updates = {
                         'title': problem_info['title'],
                         'problem_url': problem_url,
@@ -898,12 +989,7 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
                         'solution_code': problem_info['solution_code'],
                         'language': 'cpp',
                         'is_completed': False,  # Keep as draft
-                        'metadata': {
-                            **(existing_problem.get('metadata') or {}),
-                            'extraction_job_id': job_id,
-                            'extraction_status': 'COMPLETED',
-                            'extracted_title': problem_info['title']
-                        }
+                        'metadata': metadata
                     }
                     problem_repo.update_problem(platform, problem_id, updates)
                     logger.info(f"Updated problem {platform}/{problem_id} with extracted title: {problem_info['title']}")
@@ -911,6 +997,16 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
                     created = False
                 else:
                     # Create new problem
+                    metadata = {
+                        'extraction_job_id': job_id,
+                        'extraction_status': 'COMPLETED'
+                    }
+
+                    # Add validation warning if present
+                    if 'validation_warning' in problem_info:
+                        metadata['validation_warning'] = problem_info['validation_warning']
+                        metadata['validation_passed'] = problem_info.get('validation_passed', False)
+
                     problem_repo.create_problem(
                         platform=platform,
                         problem_id=problem_id,
@@ -922,10 +1018,7 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
                             'language': 'cpp',
                             'tags': [],
                             'is_completed': False,  # Draft state
-                            'metadata': {
-                                'extraction_job_id': job_id,
-                                'extraction_status': 'COMPLETED'
-                            }
+                            'metadata': metadata
                         }
                     )
                     logger.info(f"Created problem {platform}/{problem_id} in DynamoDB")
@@ -1287,6 +1380,94 @@ def delete_job_task(self, job_id):
         raise
 
 
+@shared_task(
+    bind=True,
+    max_retries=MAX_RETRIES,
+    time_limit=120,  # 2 minutes hard limit
+    soft_time_limit=100,  # 100 seconds soft limit
+    acks_late=True,
+    reject_on_worker_lost=True,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=120,
+    retry_jitter=True,
+    ignore_result=True,  # No need to store result for delete operations
+)
+def hard_delete_problem_task(self, platform, problem_id):
+    """
+    Async task to permanently delete a soft-deleted Problem from DynamoDB
+
+    This task should only be called after a problem has been soft-deleted (is_deleted=True).
+    It performs the actual hard deletion from DynamoDB.
+
+    OPTIMIZATIONS:
+    - Uses ProblemRepository for DynamoDB deletion
+    - Ignore result to save space
+    - Fast execution with minimal overhead
+    - Invalidates related caches
+
+    Args:
+        platform: Platform name (e.g., 'baekjoon', 'codeforces')
+        problem_id: Problem ID on the platform
+
+    Returns:
+        dict: Result with platform, problem_id and status
+    """
+    try:
+        from .dynamodb.client import DynamoDBClient
+        from .dynamodb.repositories import ProblemRepository
+
+        # Initialize repository
+        table = DynamoDBClient.get_table()
+        problem_repo = ProblemRepository(table)
+
+        # Verify problem exists and is soft-deleted
+        problem = problem_repo.get_problem(platform=platform, problem_id=problem_id)
+
+        if not problem:
+            logger.warning(f"Problem {platform}/{problem_id} not found for hard deletion")
+            return {
+                'status': 'FAILED',
+                'error': 'Problem not found'
+            }
+
+        if not problem.get('is_deleted', False):
+            logger.warning(f"Problem {platform}/{problem_id} is not soft-deleted, refusing hard delete")
+            return {
+                'status': 'FAILED',
+                'error': 'Problem is not soft-deleted'
+            }
+
+        # Perform hard delete
+        success = problem_repo.delete_problem(platform=platform, problem_id=problem_id)
+
+        if success:
+            logger.info(f"Hard deleted problem {platform}/{problem_id}")
+
+            # Invalidate related caches
+            cache.delete("problem_drafts:all")
+            cache.delete("problem_registered:all")
+            cache.delete(f"problem:{platform}:{problem_id}")
+
+            return {
+                'status': 'COMPLETED',
+                'platform': platform,
+                'problem_id': problem_id,
+                'message': f'Problem {platform}/{problem_id} permanently deleted'
+            }
+        else:
+            logger.error(f"Failed to hard delete problem {platform}/{problem_id}")
+            return {
+                'status': 'FAILED',
+                'error': 'Failed to delete from DynamoDB'
+            }
+
+    except Exception as e:
+        logger.error(f"Error in hard_delete_problem_task for {platform}/{problem_id}: {str(e)}", exc_info=True)
+        # Don't retry - handled by autoretry_for
+        raise
+
+
 # ============================================================================
 # CACHE WARMING TASKS
 # ============================================================================
@@ -1313,49 +1494,60 @@ def warm_problem_cache_task(self):
     from django.conf import settings
 
     try:
-        logger.info("Starting cache warming task for problems...")
+        from api.dynamodb.repositories import ProblemRepository
+
+        logger.info("Starting cache warming task for problems using DynamoDB...")
+
+        problem_repo = ProblemRepository()
+        ttl = settings.CACHE_TTL.get('PROBLEM_LIST', 300)
 
         # 1. Warm cache for completed problems list (main endpoint)
         cache_key = CacheKeyGenerator.problem_list_key()
-        queryset = Problem.objects.minimal_fields().with_test_case_count().completed().order_by('-created_at')
-        serializer = ProblemListSerializer(queryset, many=True)
-        ttl = settings.CACHE_TTL.get('PROBLEM_LIST', 300)
-        cache.set(cache_key, serializer.data, ttl)
-        logger.info(f"Warmed cache: {cache_key} ({len(serializer.data)} problems)")
+        completed_problems, _ = problem_repo.list_completed_problems(limit=1000)
+        cache.set(cache_key, completed_problems, ttl)
+        logger.info(f"Warmed cache: {cache_key} ({len(completed_problems)} problems)")
 
         # 2. Warm cache for registered problems endpoint
         cache_key = "problem_registered:all"
-        cache.set(cache_key, {'problems': serializer.data}, ttl)
+        cache.set(cache_key, {'problems': completed_problems}, ttl)
         logger.info(f"Warmed cache: {cache_key}")
 
         # 3. Warm cache for platform-specific problem lists
-        platforms = Problem.objects.values_list('platform', flat=True).distinct()
-        for platform in platforms:
+        # Group by platform
+        platforms_dict = {}
+        for problem in completed_problems:
+            platform = problem.get('platform')
+            if platform not in platforms_dict:
+                platforms_dict[platform] = []
+            platforms_dict[platform].append(problem)
+
+        for platform, problems in platforms_dict.items():
             cache_key = CacheKeyGenerator.problem_list_key(platform=platform)
-            queryset = Problem.objects.minimal_fields().with_test_case_count().completed().filter(
-                platform=platform
-            ).order_by('-created_at')
-            serializer = ProblemListSerializer(queryset, many=True)
-            cache.set(cache_key, serializer.data, ttl)
-            logger.info(f"Warmed cache: {cache_key} ({len(serializer.data)} problems)")
+            cache.set(cache_key, problems, ttl)
+            logger.info(f"Warmed cache: {cache_key} ({len(problems)} problems)")
 
         # 4. Warm cache for most recently accessed problem details (top 20)
-        recent_problems = Problem.objects.with_test_cases().completed().order_by('-created_at')[:20]
         ttl_detail = settings.CACHE_TTL.get('PROBLEM_DETAIL', 600)
-        for problem in recent_problems:
-            cache_key = CacheKeyGenerator.problem_detail_key(problem_id=problem.id)
-            serializer = ProblemSerializer(problem)
-            cache.set(cache_key, serializer.data, ttl_detail)
+        recent_count = min(20, len(completed_problems))
+        for idx, problem in enumerate(completed_problems[:recent_count]):
+            # Get full problem with test cases
+            problem_with_tests = problem_repo.get_problem_with_testcases(
+                platform=problem['platform'],
+                problem_id=problem['problem_id']
+            )
+            if problem_with_tests:
+                # Note: problem_id here is platform#problem_id key, need to derive actual cache key
+                cache_key = f"problem_detail:{problem['platform']}:{problem['problem_id']}"
+                cache.set(cache_key, problem_with_tests, ttl_detail)
 
-        logger.info(f"Warmed cache for {len(recent_problems)} problem details")
+        logger.info(f"Warmed cache for {recent_count} problem details")
 
         # 5. Warm cache for draft problems
         cache_key = "problem_drafts:all"
-        queryset = Problem.objects.minimal_fields().with_test_case_count().drafts().order_by('-created_at')
-        serializer = ProblemListSerializer(queryset, many=True)
+        draft_problems, _ = problem_repo.list_draft_problems(limit=1000)
         ttl_short = settings.CACHE_TTL.get('SHORT', 60)
-        cache.set(cache_key, {'drafts': serializer.data}, ttl_short)
-        logger.info(f"Warmed cache: {cache_key} ({len(serializer.data)} drafts)")
+        cache.set(cache_key, {'drafts': draft_problems}, ttl_short)
+        logger.info(f"Warmed cache: {cache_key} ({len(draft_problems)} drafts)")
 
         logger.info("Cache warming task completed successfully")
         return {'status': 'SUCCESS', 'message': 'Problem cache warmed successfully'}
@@ -1365,89 +1557,8 @@ def warm_problem_cache_task(self):
         raise
 
 
-@shared_task(
-    bind=True,
-    max_retries=2,
-    time_limit=300,  # 5 minutes
-    soft_time_limit=270,
-    ignore_result=True,
-)
-def warm_user_stats_cache_task(self, user_ids=None):
-    """
-    Warm cache for user statistics
-
-    Args:
-        user_ids: List of user IDs to warm cache for (default: active users)
-
-    This task pre-populates the cache with user statistics for active users
-    """
-    from .utils.cache import CacheKeyGenerator
-    from django.conf import settings
-    from django.db.models import Count, Q
-
-    try:
-        logger.info("Starting cache warming task for user stats...")
-
-        # If no user_ids provided, get recently active users
-        if not user_ids:
-            # Get users who have search history in the last 7 days
-            from datetime import timedelta
-            from django.utils import timezone
-            week_ago = timezone.now() - timedelta(days=7)
-
-            user_ids = SearchHistory.objects.filter(
-                created_at__gte=week_ago,
-                user__isnull=False
-            ).values_list('user_id', flat=True).distinct()
-
-        warmed_count = 0
-        for user_id in user_ids:
-            try:
-                cache_key = CacheKeyGenerator.user_stats_key(user_id)
-
-                # Calculate stats
-                user_history = SearchHistory.objects.filter(user_id=user_id).only(
-                    'id', 'platform', 'language', 'problem_id', 'failed_count'
-                )
-
-                total_executions = user_history.count()
-                platform_stats = user_history.values('platform').annotate(count=Count('id')).order_by()
-                by_platform = {stat['platform']: stat['count'] for stat in platform_stats}
-
-                language_stats = user_history.values('language').annotate(count=Count('id')).order_by()
-                by_language = {stat['language']: stat['count'] for stat in language_stats}
-
-                total_problems = user_history.values('problem').distinct().count()
-
-                pass_fail_stats = user_history.aggregate(
-                    passed=Count('id', filter=Q(failed_count=0)),
-                    failed=Count('id', filter=Q(failed_count__gt=0))
-                )
-
-                response_data = {
-                    'total_executions': total_executions,
-                    'by_platform': by_platform,
-                    'by_language': by_language,
-                    'total_problems': total_problems,
-                    'passed_executions': pass_fail_stats['passed'],
-                    'failed_executions': pass_fail_stats['failed']
-                }
-
-                # Cache the result
-                ttl = settings.CACHE_TTL.get('USER_STATS', 180)
-                cache.set(cache_key, response_data, ttl)
-                warmed_count += 1
-
-            except Exception as e:
-                logger.error(f"Error warming cache for user {user_id}: {str(e)}")
-                continue
-
-        logger.info(f"Cache warming task completed. Warmed {warmed_count} user stats")
-        return {'status': 'SUCCESS', 'warmed_count': warmed_count}
-
-    except Exception as e:
-        logger.error(f"Error in warm_user_stats_cache_task: {str(e)}", exc_info=True)
-        raise
+# REMOVED: warm_user_stats_cache_task - requires ORM migration to DynamoDB
+# TODO: Re-implement using SearchHistoryRepository with DynamoDB aggregations
 
 
 @shared_task(
@@ -1513,11 +1624,11 @@ def recover_orphaned_jobs_task(self, timeout_minutes=30):
         cutoff_timestamp = time.time() - (timeout_minutes * 60)
 
         # Find orphaned extraction jobs from DynamoDB
-        orphaned_extraction = JobHelper.list_problem_extraction_jobs(status='PROCESSING', limit=1000)
+        orphaned_extraction, _ = JobHelper.list_problem_extraction_jobs(status='PROCESSING', limit=1000)
         orphaned_extraction = [job for job in orphaned_extraction if job.get('updated_at', 0) < cutoff_timestamp]
 
         # Find orphaned generation jobs from DynamoDB
-        orphaned_generation = JobHelper.list_script_generation_jobs(status='PROCESSING', limit=1000)
+        orphaned_generation, _ = JobHelper.list_script_generation_jobs(status='PROCESSING', limit=1000)
         orphaned_generation = [job for job in orphaned_generation if job.get('updated_at', 0) < cutoff_timestamp]
 
         extraction_count = len(orphaned_extraction)

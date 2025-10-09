@@ -37,7 +37,7 @@ import {
   ContentCopy as ContentCopyIcon,
   Refresh as RefreshIcon
 } from '@mui/icons-material';
-import { apiGet, apiPost } from '../utils/api-client';
+import { apiGet, apiPost, apiDelete } from '../utils/api-client';
 import { API_ENDPOINTS } from '../config/api';
 
 // Status enums
@@ -78,6 +78,7 @@ function ProblemDetail({ platform, problemId, onBack }) {
   const [regenerateDialogOpen, setRegenerateDialogOpen] = useState(false);
   const [additionalContext, setAdditionalContext] = useState('');
   const [regenerating, setRegenerating] = useState(false);
+  const [lastRefreshTime, setLastRefreshTime] = useState(null);
 
   const fetchProblemAndJobs = async () => {
     // Don't show refreshing indicator on initial load
@@ -141,15 +142,24 @@ function ProblemDetail({ platform, problemId, onBack }) {
     } finally {
       setLoading(false);
       setRefreshing(false);
+      setLastRefreshTime(new Date());
     }
   };
 
   useEffect(() => {
     fetchProblemAndJobs();
-    // Auto-refresh every 10 seconds to avoid rate limiting
-    const interval = setInterval(fetchProblemAndJobs, 10000);
+
+    // Dynamic polling based on extraction status
+    const setupPolling = () => {
+      // Poll every 10 seconds
+      const pollInterval = 10000;
+      const interval = setInterval(fetchProblemAndJobs, pollInterval);
+      return interval;
+    };
+
+    const interval = setupPolling();
     return () => clearInterval(interval);
-  }, [platform, problemId]);
+  }, [platform, problemId, problem?.metadata?.extraction_status]);
 
   const showSnackbar = (message, severity = 'info') => {
     setSnackbar({ open: true, message, severity });
@@ -472,14 +482,11 @@ function ProblemDetail({ platform, problemId, onBack }) {
   const handleDelete = async () => {
     setDeleting(true);
     try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000/api'}/problems/${platform}/${problemId}/`, {
-        method: 'DELETE',
-        credentials: 'include'
-      });
+      const response = await apiDelete(`${API_ENDPOINTS.problems}${platform}/${problemId}/`, { requireAuth: true });
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to delete problem');
+        throw new Error(errorData.error || errorData.detail || 'Failed to delete problem');
       }
 
       showSnackbar('Problem deleted successfully!', 'success');
@@ -636,9 +643,9 @@ function ProblemDetail({ platform, problemId, onBack }) {
   const getExtractionStages = () => {
     const stages = [
       { key: 'queued', label: 'Queued', description: 'Waiting to start' },
-      { key: 'fetching', label: 'Fetching Web Content', description: 'Downloading problem page from website' },
-      { key: 'analyzing', label: 'AI Processing', description: 'Analyzing problem and generating solution' },
-      { key: 'validating', label: 'Validating Solution', description: 'Testing solution with sample test cases' },
+      { key: 'extracting', label: 'Step 1: Extracting Metadata', description: '📄 Extracting problem details from webpage', icon: '📄' },
+      { key: 'solving', label: 'Step 2: Generating Solution', description: '🧠 AI is solving the problem', icon: '🧠' },
+      { key: 'validating', label: 'Validating Solution', description: '✓ Testing with sample cases' },
       { key: 'completed', label: 'Completed', description: 'Extraction successful' }
     ];
 
@@ -650,7 +657,6 @@ function ProblemDetail({ platform, problemId, onBack }) {
     }
 
     // Check if extraction is completed - only if status is explicitly COMPLETED
-    // Don't consider constraints alone, as they may exist during regeneration
     if (extractionStatus === ExtractionStatus.COMPLETED) {
       return { stages, currentStage: 4, allCompleted: true, progressMessage: 'Extraction completed' };
     }
@@ -666,23 +672,40 @@ function ProblemDetail({ platform, problemId, onBack }) {
     if (progress.includes('Loading from cache')) {
       currentStageIndex = 2;
       progressMessage = 'Loading cached data...';
-    } else if (progress.includes('Fetching webpage') || progress.includes('Retrying fetch')) {
+    }
+    // Step 1: Extracting metadata (with 📄 emoji)
+    else if (progress.includes('📄') || progress.includes('Step 1/2') || progress.includes('Extracting problem metadata')) {
       currentStageIndex = 1;
-      progressMessage = progress.includes('Retrying') ? `Retrying web fetch...${attemptInfo}` : 'Fetching web content...';
-    } else if (progress.includes('Analyzing problem') || progress.includes('Generating solution') || progress.includes('Regenerating solution')) {
+      const cleanProgress = progress.replace('📄', '').trim();
+      progressMessage = cleanProgress || 'Extracting problem metadata...';
+    }
+    // Step 2: Generating solution (with 🧠 emoji)
+    else if (progress.includes('🧠') || progress.includes('Step 2/2') || progress.includes('Generating solution')) {
       currentStageIndex = 2;
-      progressMessage = progress.includes('Regenerating')
-        ? `AI is retrying...${attemptInfo}`
-        : `AI is processing the problem...${attemptInfo}`;
-    } else if (progress.includes('Testing solution') || progress.includes('Sample test failed')) {
+      const cleanProgress = progress.replace('🧠', '').trim();
+      progressMessage = cleanProgress + attemptInfo || `Generating solution...${attemptInfo}`;
+    }
+    // Validation & testing
+    else if (progress.includes('Testing solution') || progress.includes('Sample test failed') || progress.includes('analyzing mistake')) {
       currentStageIndex = 3;
-      progressMessage = progress.includes('failed')
-        ? `Solution validation failed, retrying...${attemptInfo}`
-        : `Validating solution...${attemptInfo}`;
-    } else if (progress.includes('verified with')) {
+      progressMessage = progress.includes('failed') || progress.includes('analyzing')
+        ? `⚠ Validation failed, retrying...${attemptInfo}`
+        : `Testing with samples...${attemptInfo}`;
+    }
+    else if (progress.includes('verified with') || progress.includes('✓')) {
       currentStageIndex = 3;
       progressMessage = progress;
-    } else if (extractionStatus === ExtractionStatus.PENDING) {
+    }
+    // Legacy progress messages
+    else if (progress.includes('Fetching webpage')) {
+      currentStageIndex = 1;
+      progressMessage = 'Fetching web content...';
+    }
+    else if (progress.includes('Analyzing problem') || progress.includes('AI Processing')) {
+      currentStageIndex = 2;
+      progressMessage = `AI is solving the problem...${attemptInfo}`;
+    }
+    else if (extractionStatus === ExtractionStatus.PENDING) {
       currentStageIndex = 0;
       progressMessage = 'Queued for processing...';
     }
@@ -695,29 +718,6 @@ function ProblemDetail({ platform, problemId, onBack }) {
 
   return (
     <Box>
-      {/* Refresh indicator */}
-      {refreshing && (
-        <Box sx={{
-          position: 'fixed',
-          top: 16,
-          right: 16,
-          zIndex: 1000,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 1,
-          bgcolor: 'background.paper',
-          px: 2,
-          py: 1,
-          borderRadius: 2,
-          boxShadow: 2
-        }}>
-          <CircularProgress size={16} />
-          <Typography variant="caption" color="text.secondary">
-            Refreshing...
-          </Typography>
-        </Box>
-      )}
-
       <Box sx={{
         display: 'flex',
         flexDirection: { xs: 'column', sm: 'row' },
@@ -843,6 +843,7 @@ function ProblemDetail({ platform, problemId, onBack }) {
               variant="contained"
               color="warning"
               onClick={() => setRegenerateDialogOpen(true)}
+              disabled={isExtracting}
               sx={{
                 fontSize: { xs: '0.813rem', sm: '0.875rem' },
                 py: { xs: 1, sm: 0.75 }
@@ -864,11 +865,23 @@ function ProblemDetail({ platform, problemId, onBack }) {
           borderColor: 'grey.400',
           position: 'relative'
         }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2.5 }}>
-            <CircularProgress size={18} thickness={4} sx={{ color: 'grey.600' }} />
-            <Typography variant="subtitle1" sx={{ fontWeight: 600, color: 'text.primary' }}>
-              Extraction in Progress
-            </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2.5 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+              <CircularProgress size={18} thickness={4} sx={{ color: 'grey.600' }} />
+              <Typography variant="subtitle1" sx={{ fontWeight: 600, color: 'text.primary' }}>
+                Extraction in Progress
+              </Typography>
+              <Chip
+                label={refreshing ? "🔄 Refreshing..." : "Updating..."}
+                size="small"
+                sx={{ height: 24, fontSize: '0.75rem' }}
+              />
+            </Box>
+            {lastRefreshTime && (
+              <Typography variant="caption" color="text.secondary">
+                Last updated: {lastRefreshTime.toLocaleTimeString()}
+              </Typography>
+            )}
           </Box>
 
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5, pl: 4.5 }}>

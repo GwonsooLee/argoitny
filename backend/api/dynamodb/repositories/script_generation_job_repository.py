@@ -1,4 +1,5 @@
 """Script Generation Job Repository for DynamoDB"""
+import base64
 import time
 import uuid
 from typing import List, Dict, Any, Optional, Tuple
@@ -27,7 +28,6 @@ class ScriptGenerationJobRepository(BaseRepository):
             'tit': title,
             'url': problem_url,
             'tag': tags (list),
-            'sol': solution_code,
             'lng': language,
             'con': constraints,
             'gen': generator_code,
@@ -39,6 +39,8 @@ class ScriptGenerationJobRepository(BaseRepository):
         upd: updated_timestamp
         GSI1PK: 'SGJOB#STATUS#{status}'     (for listing by status)
         GSI1SK: created_timestamp (Number)
+
+    Note: solution_code is NOT stored in SGJOB - it should be fetched from Problem entity
     """
 
     def create_job(
@@ -50,7 +52,6 @@ class ScriptGenerationJobRepository(BaseRepository):
         constraints: str,
         problem_url: str = '',
         tags: List[str] = None,
-        solution_code: str = '',
         status: str = 'PENDING',
         job_id: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -65,7 +66,6 @@ class ScriptGenerationJobRepository(BaseRepository):
             constraints: Problem constraints
             problem_url: URL to problem (optional)
             tags: Problem tags (optional)
-            solution_code: Solution code (optional)
             status: Job status (default: PENDING)
             job_id: Optional job ID (if not provided, UUID will be generated)
 
@@ -91,7 +91,6 @@ class ScriptGenerationJobRepository(BaseRepository):
                 'tit': title,
                 'url': problem_url,
                 'tag': tags,
-                'sol': solution_code,
                 'lng': language,
                 'con': constraints,
                 'gen': '',  # generator_code initially empty
@@ -146,7 +145,6 @@ class ScriptGenerationJobRepository(BaseRepository):
                 - celery_task_id: Celery task ID
                 - generator_code: Generated code
                 - error_message: Error message
-                - solution_code: Solution code
 
         Returns:
             Updated job or None if not found
@@ -171,7 +169,6 @@ class ScriptGenerationJobRepository(BaseRepository):
             'celery_task_id': ('dat.tid', 'tid'),
             'generator_code': ('dat.gen', 'gen'),
             'error_message': ('dat.err', 'err'),
-            'solution_code': ('dat.sol', 'sol'),
             'platform': ('dat.plt', 'plt'),
             'problem_id': ('dat.pid', 'pid'),
             'title': ('dat.tit', 'tit'),
@@ -300,6 +297,59 @@ class ScriptGenerationJobRepository(BaseRepository):
         next_key = response.get('LastEvaluatedKey')
         return result, next_key
 
+    def find_stale_jobs(self, cutoff_time) -> List[Dict[str, Any]]:
+        """
+        Find jobs that have been in PROCESSING status before cutoff_time
+
+        Args:
+            cutoff_time: datetime object - jobs updated before this time are considered stale
+
+        Returns:
+            List of stale jobs
+        """
+        cutoff_timestamp = int(cutoff_time.timestamp())
+
+        # Query jobs with PROCESSING status
+        query_params = {
+            'IndexName': 'GSI1',
+            'KeyConditionExpression': Key('GSI1PK').eq('SGJOB#STATUS#PROCESSING'),
+            'FilterExpression': Attr('upd').lt(cutoff_timestamp)
+        }
+
+        response = self.table.query(**query_params)
+        items = response.get('Items', [])
+
+        # Transform items
+        result = []
+        for item in items:
+            job_id = item['PK'].replace('SGJOB#', '')
+            result.append(self._transform_item(item, job_id))
+
+        return result
+
+    def update_job_status(
+        self,
+        job_id: str,
+        status: str,
+        error_message: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Update job status and optionally error message
+
+        Args:
+            job_id: Job ID
+            status: New status
+            error_message: Optional error message
+
+        Returns:
+            Updated job or None if not found
+        """
+        updates = {'status': status}
+        if error_message:
+            updates['error_message'] = error_message
+
+        return self.update_job(job_id, updates)
+
     def _transform_item(self, item: Dict[str, Any], job_id: str) -> Dict[str, Any]:
         """
         Transform DynamoDB item to job format
@@ -309,18 +359,18 @@ class ScriptGenerationJobRepository(BaseRepository):
             job_id: Job ID
 
         Returns:
-            Job dictionary
+            Job dictionary (solution_code should be fetched from Problem separately)
         """
         dat = item.get('dat', {})
 
         return {
             'id': job_id,
+            'job_id': job_id,  # Add job_id alias for compatibility
             'platform': dat.get('plt', ''),
             'problem_id': dat.get('pid', ''),
             'title': dat.get('tit', ''),
             'problem_url': dat.get('url', ''),
             'tags': dat.get('tag', []),
-            'solution_code': dat.get('sol', ''),
             'language': dat.get('lng', ''),
             'constraints': dat.get('con', ''),
             'generator_code': dat.get('gen', ''),

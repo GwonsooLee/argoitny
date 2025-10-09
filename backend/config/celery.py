@@ -66,66 +66,78 @@ def debug_task(self):
 @worker_ready.connect
 def recover_orphaned_jobs_on_startup(sender=None, **kwargs):
     """
-    Recover orphaned jobs when worker starts.
+    Recover orphaned jobs when worker starts - DynamoDB implementation.
     This is more reliable than shutdown handlers because shutdown may be abrupt.
     Marks jobs that have been stuck in PROCESSING state for > 10 minutes as FAILED.
     """
     logger.info("Worker starting up - checking for orphaned jobs...")
 
     try:
-        from api.models import ProblemExtractionJob, ScriptGenerationJob, Problem
-        from django.utils import timezone
-        from datetime import timedelta
+        from api.dynamodb.client import DynamoDBClient
+        from api.dynamodb.repositories import (
+            ProblemExtractionJobRepository,
+            ScriptGenerationJobRepository,
+            ProblemRepository
+        )
+        from datetime import datetime, timedelta, timezone as dt_timezone
+
+        table = DynamoDBClient.get_table()
+        extraction_repo = ProblemExtractionJobRepository(table)
+        script_repo = ScriptGenerationJobRepository(table)
+        problem_repo = ProblemRepository(table)
 
         # Consider jobs orphaned if they've been in PROCESSING for > 10 minutes
-        cutoff_time = timezone.now() - timedelta(minutes=10)
+        cutoff_time = datetime.now(dt_timezone.utc) - timedelta(minutes=10)
 
         # Mark orphaned extraction jobs as FAILED
-        extraction_jobs = ProblemExtractionJob.objects.filter(
-            status='PROCESSING',
-            updated_at__lt=cutoff_time
-        )
-        extraction_count = extraction_jobs.count()
+        extraction_jobs = extraction_repo.find_stale_jobs(cutoff_time)
+        extraction_count = len(extraction_jobs)
 
         if extraction_count > 0:
             logger.warning(f"Found {extraction_count} orphaned extraction jobs (> 10 min in PROCESSING)")
 
             for job in extraction_jobs:
-                job.status = 'FAILED'
-                job.error_message = 'Job orphaned - no updates for > 10 minutes'
-                job.save(update_fields=['status', 'error_message', 'updated_at'])
+                job_id = job['job_id']
+                platform = job['platform']
+                problem_id = job['problem_id']
 
-                # Update Problem metadata
-                try:
-                    problem = Problem.objects.get(
-                        platform=job.platform,
-                        problem_id=job.problem_id
+                # Update job status
+                extraction_repo.update_job_status(
+                    job_id=job_id,
+                    status='FAILED',
+                    error_message='Job orphaned - no updates for > 10 minutes'
+                )
+
+                # Update Problem metadata if problem exists
+                problem = problem_repo.get_problem(platform=platform, problem_id=problem_id)
+                if problem:
+                    metadata = problem.get('metadata', {})
+                    metadata['extraction_status'] = 'FAILED'
+                    metadata['error_message'] = 'Job orphaned - no updates for > 10 minutes'
+                    problem_repo.update_problem(
+                        platform=platform,
+                        problem_id=problem_id,
+                        updates={'metadata': metadata}
                     )
-                    problem.metadata = {
-                        **(problem.metadata or {}),
-                        'extraction_status': 'FAILED',
-                        'error_message': 'Job orphaned - no updates for > 10 minutes'
-                    }
-                    problem.save(update_fields=['metadata'])
-                    logger.info(f"Marked orphaned extraction job {job.id} ({job.platform}/{job.problem_id}) as FAILED")
-                except Problem.DoesNotExist:
-                    logger.warning(f"Problem {job.platform}/{job.problem_id} not found for job {job.id}")
+                    logger.info(f"Marked orphaned extraction job {job_id} ({platform}/{problem_id}) as FAILED")
+                else:
+                    logger.warning(f"Problem {platform}/{problem_id} not found for job {job_id}")
 
         # Mark orphaned script generation jobs as FAILED
-        script_jobs = ScriptGenerationJob.objects.filter(
-            status='PROCESSING',
-            updated_at__lt=cutoff_time
-        )
-        script_count = script_jobs.count()
+        script_jobs = script_repo.find_stale_jobs(cutoff_time)
+        script_count = len(script_jobs)
 
         if script_count > 0:
             logger.warning(f"Found {script_count} orphaned script generation jobs (> 10 min in PROCESSING)")
 
             for job in script_jobs:
-                job.status = 'FAILED'
-                job.error_message = 'Job orphaned - no updates for > 10 minutes'
-                job.save(update_fields=['status', 'error_message', 'updated_at'])
-                logger.info(f"Marked orphaned script job {job.id} ({job.platform}/{job.problem_id}) as FAILED")
+                job_id = job['job_id']
+                script_repo.update_job_status(
+                    job_id=job_id,
+                    status='FAILED',
+                    error_message='Job orphaned - no updates for > 10 minutes'
+                )
+                logger.info(f"Marked orphaned script job {job_id} as FAILED")
 
         total_recovered = extraction_count + script_count
         if total_recovered > 0:

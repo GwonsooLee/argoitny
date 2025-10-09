@@ -8,12 +8,377 @@ from django.conf import settings
 class GeminiService:
     """Handle Gemini AI operations"""
 
+    # Few-shot examples database for 2500+ difficulty problems
+    FEW_SHOT_EXAMPLES = {
+        'dp_optimization': {
+            'description': 'DP optimization techniques (Convex Hull Trick, Divide & Conquer DP, etc.)',
+            'when_to_use': 'DP with transitions of form dp[i] = min/max(dp[j] + cost(j, i)) where cost is linear or quadratic',
+            'time_complexity': 'O(N log N) instead of O(N²)',
+            'code_pattern': '''// Convex Hull Trick for DP optimization
+struct Line {
+    long long m, c;
+    long long eval(long long x) { return m * x + c; }
+};
+
+deque<Line> hull;
+
+bool bad(Line l1, Line l2, Line l3) {
+    // Check if l2 is redundant
+    return (__int128)(l3.c - l1.c) * (l1.m - l2.m) <= (__int128)(l2.c - l1.c) * (l1.m - l3.m);
+}
+
+void addLine(Line newLine) {
+    while (hull.size() >= 2 && bad(hull[hull.size()-2], hull[hull.size()-1], newLine))
+        hull.pop_back();
+    hull.push_back(newLine);
+}
+
+long long query(long long x) {
+    while (hull.size() >= 2 && hull[0].eval(x) >= hull[1].eval(x))
+        hull.pop_front();
+    return hull[0].eval(x);
+}'''
+        },
+        'segment_tree': {
+            'description': 'Segment Tree with Lazy Propagation for range updates/queries',
+            'when_to_use': 'Range update + range query operations',
+            'time_complexity': 'O(log N) per operation',
+            'code_pattern': '''// Segment Tree with Lazy Propagation
+const int MAXN = 200005;
+long long tree[4*MAXN], lazy[4*MAXN];
+
+void push(int node, int start, int end) {
+    if (lazy[node] != 0) {
+        tree[node] += (end - start + 1) * lazy[node];
+        if (start != end) {
+            lazy[2*node] += lazy[node];
+            lazy[2*node+1] += lazy[node];
+        }
+        lazy[node] = 0;
+    }
+}
+
+void updateRange(int node, int start, int end, int l, int r, long long val) {
+    push(node, start, end);
+    if (start > r || end < l) return;
+    if (start >= l && end <= r) {
+        lazy[node] += val;
+        push(node, start, end);
+        return;
+    }
+    int mid = (start + end) / 2;
+    updateRange(2*node, start, mid, l, r, val);
+    updateRange(2*node+1, mid+1, end, l, r, val);
+    push(2*node, start, mid);
+    push(2*node+1, mid+1, end);
+    tree[node] = tree[2*node] + tree[2*node+1];
+}'''
+        },
+        'graph_flows': {
+            'description': 'Maximum flow (Dinic\'s Algorithm) and bipartite matching',
+            'when_to_use': 'Maximum bipartite matching or maximum flow problems',
+            'time_complexity': 'O(V²E) for Dinic',
+            'code_pattern': '''// Dinic's Algorithm for Maximum Flow
+const long long INF = 1e18;
+
+struct Edge {
+    int to, rev;
+    long long cap;
+};
+
+vector<Edge> graph[MAXN];
+int level[MAXN], iter[MAXN];
+
+void addEdge(int from, int to, long long cap) {
+    graph[from].push_back({to, (int)graph[to].size(), cap});
+    graph[to].push_back({from, (int)graph[from].size()-1, 0});
+}
+
+bool bfs(int s, int t) {
+    memset(level, -1, sizeof(level));
+    queue<int> q;
+    level[s] = 0;
+    q.push(s);
+    while (!q.empty()) {
+        int v = q.front(); q.pop();
+        for (auto& e : graph[v]) {
+            if (e.cap > 0 && level[e.to] < 0) {
+                level[e.to] = level[v] + 1;
+                q.push(e.to);
+            }
+        }
+    }
+    return level[t] >= 0;
+}
+
+long long dfs(int v, int t, long long f) {
+    if (v == t) return f;
+    for (int& i = iter[v]; i < graph[v].size(); i++) {
+        Edge& e = graph[v][i];
+        if (e.cap > 0 && level[v] < level[e.to]) {
+            long long d = dfs(e.to, t, min(f, e.cap));
+            if (d > 0) {
+                e.cap -= d;
+                graph[e.to][e.rev].cap += d;
+                return d;
+            }
+        }
+    }
+    return 0;
+}'''
+        },
+        'string_algorithms': {
+            'description': 'Advanced string algorithms (KMP, Z-algorithm, etc.)',
+            'when_to_use': 'Pattern matching, string searching, prefix/suffix operations',
+            'time_complexity': 'O(N + M) for KMP',
+            'code_pattern': '''// KMP Algorithm for pattern matching
+vector<int> computeLPS(string pattern) {
+    int m = pattern.length();
+    vector<int> lps(m);
+    int len = 0;
+    lps[0] = 0;
+    int i = 1;
+
+    while (i < m) {
+        if (pattern[i] == pattern[len]) {
+            len++;
+            lps[i] = len;
+            i++;
+        } else {
+            if (len != 0) {
+                len = lps[len - 1];
+            } else {
+                lps[i] = 0;
+                i++;
+            }
+        }
+    }
+    return lps;
+}
+
+vector<int> KMP(string text, string pattern) {
+    vector<int> lps = computeLPS(pattern);
+    vector<int> matches;
+    int n = text.length();
+    int m = pattern.length();
+    int i = 0, j = 0;
+
+    while (i < n) {
+        if (pattern[j] == text[i]) {
+            i++;
+            j++;
+        }
+        if (j == m) {
+            matches.push_back(i - j);
+            j = lps[j - 1];
+        } else if (i < n && pattern[j] != text[i]) {
+            if (j != 0) {
+                j = lps[j - 1];
+            } else {
+                i++;
+            }
+        }
+    }
+    return matches;
+}'''
+        }
+    }
+
     def __init__(self):
         if settings.GEMINI_API_KEY:
             genai.configure(api_key=settings.GEMINI_API_KEY)
             self.model = genai.GenerativeModel('gemini-2.5-pro')
         else:
             self.model = None
+
+    def get_optimal_temperature(self, difficulty_rating):
+        """
+        Get optimal temperature based on problem difficulty
+        Lower temperature = more deterministic (better for hard problems)
+        Higher temperature = more creative (better for easy problems)
+        """
+        if difficulty_rating is None:
+            return 0.7  # Default
+        elif difficulty_rating >= 2500:
+            return 0.3  # Very deterministic for 2500+ problems
+        elif difficulty_rating >= 2000:
+            return 0.5
+        elif difficulty_rating >= 1500:
+            return 0.7
+        else:
+            return 0.8
+
+    def get_difficulty_guidance(self, difficulty_rating):
+        """Generate difficulty-specific guidance for prompts"""
+        if difficulty_rating is None:
+            return ""
+
+        if difficulty_rating >= 2500:
+            return """
+## DIFFICULTY LEVEL: 2500+ (Very Hard / Expert)
+⚠️ This is an ADVANCED problem requiring expert-level competitive programming skills.
+
+Expected solution characteristics:
+- **Algorithm**: Advanced data structures or algorithms (segment trees, DP optimization, FFT, suffix arrays, graph flows, etc.)
+- **Time Complexity**: Must be near-optimal (often O(N log N) or O(N))
+- **Common patterns**: DP optimization, advanced graph algorithms, number theory, computational geometry, string algorithms
+- **Edge cases**: Requires EXTREMELY careful handling of boundary conditions, integer overflow, and special cases
+- **Proof**: Solution often requires mathematical proof or deep algorithmic insight
+
+### Critical Analysis Required:
+1. **Problem Pattern Recognition**: Does this match a known hard problem pattern?
+2. **Algorithm Selection**: Which advanced technique is needed?
+3. **Implementation Complexity**: Are there subtle implementation details that can break the solution?
+4. **Edge Case Explosion**: What are ALL the edge cases for this specific problem?
+"""
+        elif difficulty_rating >= 2000:
+            return """
+## DIFFICULTY LEVEL: 2000-2499 (Hard)
+This is a CHALLENGING problem requiring solid competitive programming skills.
+
+Expected solution characteristics:
+- **Algorithm**: Advanced DP, graph algorithms, or data structures
+- **Time Complexity**: Usually O(N log N) or O(N²) with small constant
+- **Common patterns**: Complex DP, greedy with proof, binary search, graph traversal with state
+"""
+        elif difficulty_rating >= 1500:
+            return """
+## DIFFICULTY LEVEL: 1500-1999 (Medium-Hard)
+This is an INTERMEDIATE problem requiring good problem-solving skills.
+
+Expected solution characteristics:
+- **Algorithm**: DP, BFS/DFS, sorting, binary search, or moderate data structures
+- **Time Complexity**: O(N log N) or O(N²) acceptable
+"""
+        else:
+            return """
+## DIFFICULTY LEVEL: Below 1500 (Easy-Medium)
+This is a BEGINNER-FRIENDLY problem.
+
+Expected solution characteristics:
+- **Algorithm**: Simple implementation, brute force with optimization, or basic algorithms
+- **Time Complexity**: O(N) to O(N²) typically acceptable
+"""
+
+    def get_algorithm_hints(self, difficulty_rating):
+        """Get algorithm hints for 2500+ problems"""
+        if difficulty_rating is None or difficulty_rating < 2500:
+            return ""
+
+        return """
+### Advanced Algorithm Patterns for 2500+ Problems
+
+Consider these advanced techniques and patterns:
+
+**1. Dynamic Programming Optimization**
+- Convex Hull Trick: For DP with linear transitions
+- Divide & Conquer DP: For DP with quadrilateral inequality
+- Knuth's Optimization: For specific DP recurrences
+- Slope Trick: For maintaining piecewise linear functions
+
+**2. Advanced Data Structures**
+- Segment Tree with Lazy Propagation: Range updates and queries
+- Persistent Data Structures: Access previous versions
+- Heavy-Light Decomposition: Tree path queries
+- Link-Cut Tree: Dynamic tree queries
+- Fenwick Tree (BIT): Range sum queries
+
+**3. Graph Algorithms**
+- Maximum Flow: Dinic's algorithm, min-cost max-flow
+- Bipartite Matching: Hungarian algorithm, Hopcroft-Karp
+- Strongly Connected Components: Tarjan's, Kosaraju's
+- Articulation Points and Bridges
+- Lowest Common Ancestor (LCA): Binary lifting, Euler tour
+
+**4. String Algorithms**
+- KMP, Z-algorithm: Pattern matching
+- Suffix Array, Suffix Automaton: String indexing
+- Aho-Corasick: Multiple pattern matching
+- Manacher's Algorithm: Palindrome detection
+- Rolling Hash: Fast string comparison
+
+**5. Mathematics & Number Theory**
+- Modular Arithmetic: Extended Euclidean, modular inverse
+- Prime Factorization: Pollard's rho
+- Combinatorics: Lucas theorem, Catalan numbers
+- FFT/NTT: Fast polynomial multiplication
+- Matrix Exponentiation: Linear recurrence optimization
+
+**6. Computational Geometry**
+- Convex Hull: Graham scan, Jarvis march
+- Line Sweep: Closest pair, segment intersection
+- Rotating Calipers: Farthest pair
+"""
+
+    def get_few_shot_examples(self, algorithm_category, difficulty_rating):
+        """
+        Get few-shot examples based on algorithm category
+        Only returns examples for 2500+ problems
+        """
+        if difficulty_rating is None or difficulty_rating < 2500:
+            return ""
+
+        if algorithm_category not in self.FEW_SHOT_EXAMPLES:
+            return ""
+
+        example = self.FEW_SHOT_EXAMPLES[algorithm_category]
+
+        return f"""
+## Few-Shot Example: {example['description']}
+
+**When to use:** {example['when_to_use']}
+**Time Complexity:** {example['time_complexity']}
+
+**Code Pattern:**
+```cpp
+{example['code_pattern']}
+```
+"""
+
+    def analyze_problem_category(self, problem_metadata):
+        """
+        Analyze problem and identify algorithm category for few-shot selection
+        Returns category string or None
+        """
+        if not self.model:
+            return None
+
+        import logging
+        logger = logging.getLogger(__name__)
+
+        try:
+            # Quick analysis prompt
+            analysis_prompt = f"""Analyze this competitive programming problem and identify the PRIMARY algorithm/data structure needed.
+
+Problem: {problem_metadata.get('title', 'Unknown')}
+Constraints: {problem_metadata.get('constraints', 'Unknown')[:500]}
+
+Return ONLY ONE of these categories:
+- dp_optimization (DP requiring CHT, divide-and-conquer, or Knuth optimization)
+- segment_tree (range queries/updates)
+- graph_flows (max flow, bipartite matching)
+- string_algorithms (KMP, suffix array, etc.)
+- graph_basic (BFS, DFS, shortest path)
+- dp_basic (standard DP)
+- greedy (greedy algorithm)
+- math (number theory, combinatorics)
+- implementation (simulation, brute force)
+
+Return ONLY the category name, nothing else."""
+
+            response = self.model.generate_content(
+                analysis_prompt,
+                generation_config=genai.types.GenerationConfig(
+                    temperature=0.1,  # Low temperature for deterministic category
+                )
+            )
+            category = response.text.strip().lower()
+            logger.info(f"Problem category detected: {category}")
+            return category
+
+        except Exception as e:
+            logger.warning(f"Failed to analyze problem category: {e}")
+            return None
 
     def generate_test_case_generator_code(self, problem_info, previous_failure=None):
         """
@@ -525,8 +890,8 @@ Now write the COMPLETE function based on the solution code format and constraint
             for script in soup(["script", "style", "noscript"]):
                 script.decompose()
 
-            # Get text and clean it up
-            text = soup.get_text()
+            # Get text and clean it up - use separator to ensure spacing between elements
+            text = soup.get_text(separator=' ', strip=True)
 
             # Break into lines and remove leading/trailing space on each
             lines = (line.strip() for line in text.splitlines())
@@ -534,6 +899,10 @@ Now write the COMPLETE function based on the solution code format and constraint
             chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
             # Drop blank lines
             webpage_content = '\n'.join(chunk for chunk in chunks if chunk)
+
+            # Clean up multiple spaces
+            import re
+            webpage_content = re.sub(r' +', ' ', webpage_content)
 
             # Log parsed content for debugging
             logger.info(f"Parsed webpage content length: {len(webpage_content)} characters")
@@ -609,7 +978,7 @@ Return your response in EXACTLY this format:
         {{"input": "sample input 1", "output": "expected output 1"}},
         {{"input": "sample input 2", "output": "expected output 2"}}
     ],
-    "solution_code": "C++ code here - MUST be correct and pass all samples"
+    "solution_code": "<COMPLETE C++ CODE WITH #include, main(), FAST I/O, AND FULL IMPLEMENTATION>"
 }}
 
 Webpage content:
@@ -727,7 +1096,7 @@ Remember:
 
                     # Check if solution_code is a placeholder and extract actual code from response
                     solution_code = result.get('solution_code', '')
-                    if 'MUST be correct' in solution_code or len(solution_code) < 100:
+                    if 'MUST be correct' in solution_code or 'code here' in solution_code.lower() or 'placeholder' in solution_code.lower() or len(solution_code) < 100:
                         logger.warning('solution_code appears to be a placeholder. Extracting code from response.')
 
                         # Try multiple extraction methods
@@ -803,9 +1172,15 @@ Remember:
                                 update_progress(f"Sample test failed, retrying...")
                                 continue
                             else:
-                                raise ValueError(f'Generated solution failed sample test cases after {max_attempts} attempts: {validation_error}')
+                                # On last attempt, save the result with warning instead of failing completely
+                                logger.warning(f'⚠ Solution failed validation after {max_attempts} attempts, but saving anyway')
+                                result['validation_warning'] = f'Solution may be incorrect: {validation_error}'
+                                result['validation_passed'] = False
+                                update_progress(f"⚠ Solution saved with validation warning")
+                                return result
 
                         logger.info(f'✓ Solution passed all {len(samples)} sample test cases on attempt {attempt}')
+                        result['validation_passed'] = True
                         update_progress(f"✓ Solution verified with {len(samples)} samples")
                     else:
                         logger.warning('No sample test cases provided for validation')
@@ -1000,3 +1375,557 @@ Now generate the hints:"""
 
         except Exception as e:
             raise ValueError(f'Failed to generate hints: {str(e)}')
+
+    def extract_problem_metadata_from_url(self, problem_url, difficulty_rating=None, progress_callback=None):
+        """
+        Step 1: Extract only problem metadata (title, constraints, samples) from URL
+        This is separated from solution generation to allow Gemini to focus on extraction first.
+
+        Args:
+            problem_url: URL to the problem page
+            difficulty_rating: Optional difficulty rating (e.g., 2500 for Codeforces)
+            progress_callback: Optional callback function to report progress
+
+        Returns:
+            dict: {
+                'title': str,
+                'constraints': str,
+                'samples': list of {'input': str, 'output': str},
+                'platform': str,
+                'problem_id': str
+            }
+        """
+        import logging
+        import re
+
+        logger = logging.getLogger(__name__)
+
+        if not self.model:
+            raise ValueError('Gemini API key not configured')
+
+        def update_progress(message):
+            if progress_callback:
+                progress_callback(message)
+
+        try:
+            # Fetch webpage content
+            update_progress("Fetching webpage...")
+            import time
+            import random
+            from bs4 import BeautifulSoup
+
+            # Random User-Agent pool to avoid pattern detection
+            user_agents = [
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15',
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+                'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            ]
+
+            # Random Accept-Language values
+            accept_languages = [
+                'en-US,en;q=0.9',
+                'en-US,en;q=0.9,ko;q=0.8',
+                'en-GB,en;q=0.9',
+                'en-US,en;q=0.8',
+            ]
+
+            # Fetch with randomized headers to avoid bot detection
+            # Don't set Accept-Encoding - let requests handle it automatically
+            headers = {
+                'User-Agent': random.choice(user_agents),
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Language': random.choice(accept_languages),
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Sec-Fetch-User': '?1',
+                'Cache-Control': 'max-age=0',
+                'DNT': '1',
+            }
+
+            # Add random delay to avoid rate limiting (3-7 seconds)
+            time.sleep(random.uniform(3, 7))
+
+            # Use session to maintain cookies
+            session = requests.Session()
+            session.headers.update(headers)
+
+            # Try to get the page with retry logic
+            max_retries = 3
+            response = None
+            for attempt in range(max_retries):
+                try:
+                    response = session.get(problem_url, timeout=30, allow_redirects=True)
+
+                    if response.status_code == 403:
+                        if attempt < max_retries - 1:
+                            update_progress(f"Retrying fetch (attempt {attempt + 2}/{max_retries})...")
+                            # Wait longer on retry with exponential backoff
+                            wait_time = random.uniform(5, 10) * (attempt + 1)
+                            time.sleep(wait_time)
+
+                            # Change User-Agent for retry
+                            session.headers['User-Agent'] = random.choice(user_agents)
+                            continue
+                        else:
+                            raise ValueError(f'Failed to fetch problem URL after {max_retries} attempts: 403 Forbidden. The website may be blocking automated requests.')
+
+                    response.raise_for_status()
+                    break
+
+                except requests.exceptions.RequestException as e:
+                    if attempt < max_retries - 1:
+                        update_progress(f"Retrying fetch (attempt {attempt + 2}/{max_retries})...")
+                        wait_time = random.uniform(3, 6) * (attempt + 1)
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        raise ValueError(f'Failed to fetch problem URL: {str(e)}')
+
+            # Extract clean text from HTML using BeautifulSoup
+            soup = BeautifulSoup(response.text, 'html.parser')
+
+            # Platform-specific HTML parsing to extract only problem content
+            update_progress("Extracting problem content...")
+            problem_content = None
+
+            # Codeforces: Extract problem statement div
+            if 'codeforces.com' in problem_url:
+                # Try to find problem statement div
+                problem_div = soup.find('div', class_='problem-statement')
+                if problem_div:
+                    logger.info("Found Codeforces problem-statement div")
+                    problem_content = problem_div
+                else:
+                    logger.warning("Could not find problem-statement div, using full content")
+
+            # Baekjoon: Extract problem content
+            elif 'acmicpc.net' in problem_url:
+                problem_div = soup.find('div', id='problem-body') or soup.find('div', id='problem_description')
+                if problem_div:
+                    logger.info("Found Baekjoon problem content div")
+                    problem_content = problem_div
+                else:
+                    logger.warning("Could not find problem body div, using full content")
+
+            # Use extracted content or fall back to full soup
+            if problem_content:
+                soup = BeautifulSoup(str(problem_content), 'html.parser')
+                logger.info(f"Using extracted problem content (HTML length: {len(str(problem_content))} chars)")
+
+            # Remove script and style elements
+            for script in soup(["script", "style", "noscript"]):
+                script.decompose()
+
+            # Get text and clean it up - use separator to ensure spacing between elements
+            text = soup.get_text(separator=' ', strip=True)
+
+            # Break into lines and remove leading/trailing space on each
+            lines = (line.strip() for line in text.splitlines())
+            # Break multi-headlines into a line each
+            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+            # Drop blank lines
+            webpage_content = '\n'.join(chunk for chunk in chunks if chunk)
+
+            # Clean up multiple spaces
+            import re
+            webpage_content = re.sub(r' +', ' ', webpage_content)
+
+            # Log parsed content for debugging
+            logger.info(f"Parsed webpage content length: {len(webpage_content)} characters")
+            logger.info(f"Parsed content preview (first 2000 chars):\n{webpage_content[:2000]}")
+
+            # Limit content size to avoid token limits (increased to 80000 since we're filtering)
+            if len(webpage_content) > 80000:
+                logger.info(f"Content truncated from {len(webpage_content)} to 80000 characters")
+                webpage_content = webpage_content[:80000]
+
+            # Log webpage content info
+            logger.info(f"Fetched webpage: {len(response.text)} HTML chars, converted to {len(webpage_content)} plain text chars")
+            logger.debug(f"Plain text preview (first 1000 chars): {webpage_content[:1000]}")
+
+            # Check if webpage contains basic problem indicators
+            has_title_indicators = any(keyword in webpage_content.lower() for keyword in ['problem', 'title', 'input', 'output', 'constraint', 'sample', 'example'])
+            logger.info(f"Webpage has problem indicators: {has_title_indicators}")
+
+            # Build difficulty-specific warning
+            difficulty_warning = ""
+            if difficulty_rating and difficulty_rating >= 2500:
+                difficulty_warning = f"""
+⚠️ IMPORTANT: This problem has a difficulty rating of {difficulty_rating} (Expert level).
+Pay extra attention to:
+- Complex constraint patterns (multiple variables with dependencies)
+- Non-obvious input formats (graphs, trees, special structures)
+- Large constraint values (10^5, 10^6, 10^9) - extract EXACT limits
+- Multiple test case formats (T test cases vs. single case)
+"""
+
+            # Prompt focused ONLY on extraction with difficulty awareness
+            prompt = f"""You are a competitive programming problem parser specializing in Codeforces, Baekjoon, ICPC, and IOI problems.
+
+## YOUR TASK
+Extract the problem metadata in structured JSON format. DO NOT solve the problem or generate code.
+
+{difficulty_warning}
+
+## EXTRACTION REQUIREMENTS
+
+### 1. Title
+- Extract the EXACT problem title as displayed on the page
+
+### 2. Constraints (INPUT FORMAT ONLY)
+You must extract with PRECISE detail:
+- First line format: "First line contains..."
+- Subsequent line formats: "Next N lines contain..."
+- Variable ranges with correct notation: "1 ≤ N ≤ 10^5" or "1 ≤ N ≤ 100000"
+- Multi-test case format: "First line contains T (number of test cases)"
+- Array/sequence formats: "Next line contains N space-separated integers"
+- String constraints: "String length ≤ 10^6, contains only lowercase letters"
+- Graph formats: "Next M lines contain edges (u, v)"
+
+DO NOT include:
+- Output format descriptions
+- Time/memory limits
+- Problem descriptions or stories
+- Solution approaches
+
+### 3. Sample Test Cases
+- Extract ALL sample inputs and outputs exactly as shown
+- Preserve whitespace, newlines, and formatting EXACTLY
+- If multiple samples exist, extract all of them
+- Do not modify or "clean up" the samples
+
+## OUTPUT FORMAT
+Return ONLY valid JSON (no markdown, no code blocks):
+{{
+    "title": "Problem Title",
+    "constraints": "First line: integer N (1 ≤ N ≤ 10^5)\\nNext N lines: each contains two integers A_i, B_i (1 ≤ A_i, B_i ≤ 10^9)",
+    "samples": [
+        {{"input": "3\\n1 2\\n3 4\\n5 6", "output": "6\\n12\\n30"}},
+        {{"input": "1\\n100 200", "output": "20000"}}
+    ]
+}}
+
+## WEBPAGE CONTENT
+{webpage_content}
+
+Return ONLY valid JSON, nothing else."""
+
+            update_progress("Extracting problem metadata...")
+            logger.info(f"Sending prompt to Gemini (webpage content: {len(webpage_content)} chars)")
+            response = self.model.generate_content(prompt)
+            response_text = response.text.strip()
+
+            logger.info(f"Gemini response received: {len(response_text)} chars")
+            logger.info(f"Gemini full response: {response_text}")  # Log full response to see what Gemini returns
+
+            # Try multiple JSON extraction methods
+            import json as json_module
+            result = None
+
+            # Method 1: Find JSON in code blocks
+            json_match = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', response_text)
+            if json_match:
+                try:
+                    result = json_module.loads(json_match.group(1))
+                    logger.info("Extracted JSON from code block")
+                except:
+                    pass
+
+            # Method 2: Find largest JSON object
+            if not result:
+                json_matches = re.finditer(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response_text)
+                largest_match = None
+                max_length = 0
+                for match in json_matches:
+                    if len(match.group()) > max_length:
+                        largest_match = match
+                        max_length = len(match.group())
+
+                if largest_match:
+                    try:
+                        result = json_module.loads(largest_match.group())
+                        logger.info("Extracted JSON from largest object")
+                    except:
+                        pass
+
+            # Method 3: Find any JSON-like structure
+            if not result:
+                json_match = re.search(r'\{[\s\S]*\}', response_text)
+                if json_match:
+                    try:
+                        result = json_module.loads(json_match.group())
+                        logger.info("Extracted JSON with basic regex")
+                    except:
+                        pass
+
+            if not result:
+                logger.error(f"Failed to parse JSON. Full response: {response_text}")
+                raise ValueError(f'No valid JSON found in response. Preview: {response_text[:200]}...')
+
+            logger.info(f"Parsed JSON result: {result}")
+
+            # Validate required fields
+            if not result.get('title') or result.get('title').strip() == '':
+                logger.error(f"Missing or empty title in extracted data. Full result: {result}")
+                logger.error(f"Webpage content preview: {webpage_content[:1000]}")
+                raise ValueError(f'Missing title in extracted data: {result}')
+            if not result.get('constraints'):
+                logger.warning('Missing constraints, using empty string')
+                result['constraints'] = 'No constraints provided'
+
+            # Parse problem URL
+            platform, problem_id = self._parse_problem_url(problem_url)
+            result['platform'] = platform
+            result['problem_id'] = problem_id
+
+            logger.info(f"Successfully extracted metadata: {result['title']}, {len(result.get('samples', []))} samples")
+            return result
+
+        except requests.RequestException as e:
+            raise ValueError(f'Failed to fetch problem URL: {str(e)}')
+        except Exception as e:
+            logger.error(f"Error in extract_problem_metadata_from_url: {e}", exc_info=True)
+            raise ValueError(f'Failed to extract problem metadata: {str(e)}')
+
+    def generate_solution_for_problem(self, problem_metadata, difficulty_rating=None, previous_attempt=None, progress_callback=None):
+        """
+        Step 2: Generate solution code for the extracted problem
+        This is separated to allow Gemini to focus entirely on solving the problem.
+
+        Args:
+            problem_metadata: dict with title, constraints, samples, platform, problem_id
+            difficulty_rating: Optional difficulty rating (e.g., 2500 for Codeforces)
+            previous_attempt: dict with 'code', 'error' if this is a retry
+            progress_callback: Optional callback function to report progress
+
+        Returns:
+            dict: {
+                'solution_code': str (C++ code),
+                'attempt_number': int
+            }
+        """
+        import logging
+        import re
+
+        logger = logging.getLogger(__name__)
+
+        if not self.model:
+            raise ValueError('Gemini API key not configured')
+
+        def update_progress(message):
+            if progress_callback:
+                progress_callback(message)
+
+        # Get difficulty-specific guidance and algorithm hints
+        difficulty_guidance = self.get_difficulty_guidance(difficulty_rating)
+        algorithm_hints = self.get_algorithm_hints(difficulty_rating)
+
+        # Try to detect problem category and get few-shot examples
+        few_shot_examples = ""
+        if difficulty_rating and difficulty_rating >= 2500:
+            try:
+                category = self.analyze_problem_category(problem_metadata)
+                if category:
+                    few_shot_examples = self.get_few_shot_examples(category, difficulty_rating)
+                    logger.info(f"Added few-shot examples for category: {category}")
+            except Exception as e:
+                logger.warning(f"Could not get few-shot examples: {e}")
+
+        # Build retry context if this is not the first attempt
+        retry_context = ""
+        if previous_attempt:
+            retry_context = f"""
+## PREVIOUS ATTEMPT ANALYSIS
+Your previous solution FAILED. Analyze your mistake:
+
+### Previous Code:
+```cpp
+{previous_attempt.get('code', 'N/A')}
+```
+
+### Failure Reason:
+{previous_attempt.get('error', 'Unknown error')}
+
+### Critical Questions:
+1. **Algorithm Selection**: Was your algorithm correct for this problem type?
+2. **Time Complexity**: Did you exceed time limits? What's the required complexity?
+3. **Edge Cases**: Which edge case did you miss?
+   - Empty input (N=0)?
+   - Single element (N=1)?
+   - Maximum constraints?
+   - Negative numbers or special values?
+4. **Implementation Bugs**: Off-by-one errors? Integer overflow? Array bounds?
+
+### Your Task Now:
+Generate a CORRECTED solution that fixes the specific failure above.
+"""
+
+        # Build samples display
+        samples_str = "\n".join([
+            f"""Sample {i+1}:
+Input:
+{s['input']}
+
+Expected Output:
+{s['output']}
+"""
+            for i, s in enumerate(problem_metadata.get('samples', []))
+        ])
+
+        prompt = f"""You are an ELITE competitive programmer (Grandmaster level) with expertise in solving Codeforces 2500+ problems, ICPC World Finals problems, and IOI problems.
+
+{difficulty_guidance}
+
+## PROBLEM
+**Title:** {problem_metadata['title']}
+
+**Input Format and Constraints:**
+{problem_metadata['constraints']}
+
+**Sample Test Cases:**
+{samples_str}
+
+{algorithm_hints}
+
+{few_shot_examples}
+
+{retry_context}
+
+## SOLUTION APPROACH (MANDATORY CHAIN-OF-THOUGHT)
+
+### Step 1: Problem Understanding
+Analyze what the problem is REALLY asking:
+- What is the core question?
+- What are the inputs and outputs?
+- Are there any implicit constraints or patterns?
+
+### Step 2: Algorithm Selection
+{f"Given the difficulty rating of {difficulty_rating}, consider:" if difficulty_rating and difficulty_rating >= 2500 else "Select the appropriate algorithm:"}
+- What algorithm category does this belong to? (DP, Graph, Greedy, Data Structure, Math, etc.)
+- What is the optimal time complexity needed?
+- Are there any well-known problem patterns this matches?
+
+### Step 3: Edge Case Analysis
+Identify ALL edge cases:
+- **Minimum values**: N=0, N=1, single element, empty array
+- **Maximum values**: N=10^5, values=10^9, stress testing
+- **Special cases**: All elements equal, sorted array, reverse sorted, alternating patterns
+- **Boundary conditions**: First/last elements, overflow, modulo arithmetic
+
+### Step 4: Implementation Strategy
+- Choose appropriate data types (int vs long long)
+- Plan the input reading logic
+- Structure the algorithm clearly
+- Add fast I/O if needed
+
+### Step 5: Verification
+Before finalizing, mentally trace through:
+- ✓ Sample inputs produce correct outputs?
+- ✓ Edge cases handled?
+- ✓ Time complexity within limits?
+- ✓ No integer overflow?
+- ✓ Output format exactly matches?
+
+## C++ IMPLEMENTATION REQUIREMENTS
+
+### Mandatory Components:
+1. **Headers**: Use `#include <bits/stdc++.h>` or specific headers
+2. **Fast I/O**:
+   ```cpp
+   ios_base::sync_with_stdio(false);
+   cin.tie(NULL);
+   cout.tie(NULL);
+   ```
+3. **Data Types**: Use `long long` for large numbers (> 10^6)
+4. **Main Function**: Implement `int main()` with `return 0;`
+5. **Clean Code**: No debug prints, clear variable names
+
+### Code Template:
+```cpp
+#include <bits/stdc++.h>
+using namespace std;
+
+int main() {{
+    ios_base::sync_with_stdio(false);
+    cin.tie(NULL);
+
+    // Read input
+
+    // Implement algorithm
+
+    // Output result
+
+    return 0;
+}}
+```
+
+## OUTPUT INSTRUCTIONS
+Return ONLY the complete, working C++ code inside triple backticks:
+
+```cpp
+// YOUR COMPLETE SOLUTION HERE
+```
+
+DO NOT include:
+- Explanations before or after the code
+- Comments explaining the algorithm (code should be self-documenting)
+- Multiple solutions or alternatives
+- Markdown outside the code block
+"""
+
+        update_progress("Generating solution...")
+
+        # Use optimal temperature based on difficulty
+        temperature = self.get_optimal_temperature(difficulty_rating)
+        logger.info(f"Generating solution with temperature={temperature} for difficulty={difficulty_rating}")
+
+        response = self.model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                temperature=temperature,
+            )
+        )
+        response_text = response.text.strip()
+
+        # Extract C++ code
+        code_match = re.search(r'```(?:cpp|c\+\+)?\s*([\s\S]*?)```', response_text)
+        if code_match:
+            solution_code = code_match.group(1).strip()
+        else:
+            # Try to find code starting with #include
+            include_match = re.search(r'(#include[\s\S]*?return\s+0\s*;[\s\S]*?\})', response_text)
+            if include_match:
+                solution_code = include_match.group(1).strip()
+            else:
+                raise ValueError('Could not extract C++ code from response')
+
+        if len(solution_code) < 100:
+            raise ValueError('Generated code is too short, likely incomplete')
+
+        logger.info(f"Successfully generated solution: {len(solution_code)} characters")
+
+        return {
+            'solution_code': solution_code,
+            'attempt_number': (previous_attempt.get('attempt_number', 0) + 1) if previous_attempt else 1
+        }
+
+    def _parse_problem_url(self, url):
+        """Parse platform and problem_id from URL"""
+        import re
+
+        if 'codeforces.com' in url:
+            match = re.search(r'/problem/(\d+)/([A-Z]\d*)', url)
+            if match:
+                return 'codeforces', f"{match.group(1)}{match.group(2)}"
+        elif 'acmicpc.net' in url or 'baekjoon' in url:
+            match = re.search(r'/problem/(\d+)', url)
+            if match:
+                return 'baekjoon', match.group(1)
+
+        return 'unknown', 'unknown'
