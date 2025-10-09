@@ -94,7 +94,7 @@ urlpatterns = [
     path('register/extract-problem-info/', ExtractProblemInfoView.as_view(), name='extract-problem-info'),
 
     # Regenerate Solution
-    path('register/problems/<int:problem_id>/regenerate-solution/', RegenerateSolutionView.as_view(), name='regenerate-solution'),
+    path('register/problems/<str:platform>/<str:problem_id>/regenerate-solution/', RegenerateSolutionView.as_view(), name='regenerate-solution'),
 
     # Task Status
     path('register/task-status/<str:task_id>/', CheckTaskStatusView.as_view(), name='register-task-status'),

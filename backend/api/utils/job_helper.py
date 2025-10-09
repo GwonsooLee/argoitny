@@ -88,6 +88,27 @@ class JobHelper:
         return job_repo.update_job(str(job_id), updates)
 
     @staticmethod
+    def conditional_update_script_job_to_processing(job_id, celery_task_id, expected_status='PENDING'):
+        """
+        Atomically update ScriptGenerationJob status to PROCESSING
+
+        Args:
+            job_id: Job ID
+            celery_task_id: Celery task ID
+            expected_status: Expected current status (default: PENDING)
+
+        Returns:
+            Tuple of (success: bool, job: Optional[Dict])
+        """
+        table = DynamoDBClient.get_table()
+        job_repo = ScriptGenerationJobRepository(table)
+        return job_repo.conditional_update_status_to_processing(
+            str(job_id),
+            celery_task_id,
+            expected_status
+        )
+
+    @staticmethod
     def list_script_generation_jobs(**kwargs):
         """List ScriptGenerationJobs from DynamoDB"""
         table = DynamoDBClient.get_table()

@@ -211,10 +211,23 @@ class ProblemDetailView(APIView):
             {"message": "Problem deleted successfully"}
         """
         logger.info(f"[DELETE] Request from user: {request.user}, authenticated: {request.user.is_authenticated}")
-        logger.info(f"[DELETE] User email: {getattr(request.user, 'email', None)}, is_admin: {request.user.is_admin() if request.user.is_authenticated else False}")
+        try:
+            is_admin_status = request.user.is_admin() if request.user.is_authenticated else False
+            logger.info(f"[DELETE] User email: {getattr(request.user, 'email', None)}, is_admin: {is_admin_status}")
+        except (AttributeError, Exception) as e:
+            logger.warning(f"[DELETE] Error checking admin status: {e}")
+            is_admin_status = False
 
         # Check if user is admin
-        if not request.user.is_admin():
+        try:
+            if not request.user.is_admin():
+                logger.warning(f"[DELETE] Access denied - user is not admin")
+                return Response(
+                    {'error': 'Admin access required'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        except (AttributeError, Exception):
+            # is_admin() method doesn't exist or failed
             logger.warning(f"[DELETE] Access denied - user is not admin")
             return Response(
                 {'error': 'Admin access required'},

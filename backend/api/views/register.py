@@ -1345,9 +1345,9 @@ class JobProgressHistoryView(APIView):
 
 class RegenerateSolutionView(APIView):
     """Regenerate solution code for a draft problem with additional context"""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]  # Changed to AllowAny - admin check done in method
 
-    def post(self, request, problem_id):
+    def post(self, request, platform, problem_id):
         """
         Regenerate solution code for a draft problem with additional context
 
@@ -1366,30 +1366,34 @@ class RegenerateSolutionView(APIView):
                 "message": "Solution regeneration job created and queued"
             }
         """
-        # Check if user is admin
-        if not request.user.is_admin():
+        # Check if user is authenticated and admin
+        if not request.user or not request.user.is_authenticated:
+            return Response(
+                {'error': 'Authentication required'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        try:
+            # Check if user is admin
+            if not request.user.is_admin():
+                return Response(
+                    {'error': 'Admin access required'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        except AttributeError:
+            # is_admin() method doesn't exist
             return Response(
                 {'error': 'Admin access required'},
                 status=status.HTTP_403_FORBIDDEN
             )
 
         try:
-            # Parse problem_id (format: platform#problem_id)
-            if '#' not in str(problem_id):
-                return Response(
-                    {'error': 'Invalid problem_id format. Expected: platform#problem_id'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            parts = str(problem_id).split('#', 1)
-            platform = parts[0]
-            prob_id = parts[1]
 
             # Initialize DynamoDB repository
             problem_repo = ProblemRepository()
 
             # Get the problem
-            problem = problem_repo.get_problem(platform, prob_id)
+            problem = problem_repo.get_problem(platform, problem_id)
 
             if not problem:
                 return Response(
@@ -1418,9 +1422,9 @@ class RegenerateSolutionView(APIView):
             # Create a new extraction job with additional context
             job = JobHelper.create_problem_extraction_job(
                 platform=platform,
-                problem_id=prob_id,
+                problem_id=problem_id,
                 problem_url=problem_url,
-                problem_identifier=prob_id,
+                problem_identifier=problem_id,
                 status='PENDING'
             )
 
@@ -1434,7 +1438,7 @@ class RegenerateSolutionView(APIView):
             })
             problem_repo.update_problem(
                 platform=platform,
-                problem_id=prob_id,
+                problem_id=problem_id,
                 updates={'metadata': metadata}
             )
 

@@ -100,7 +100,7 @@ services:
       - /app/.venv
     networks:
       - algoitny-network
-    command: bash /app/start_celery.sh
+    command: bash /app/scripts/start_celery.sh
     healthcheck:
       disable: true
     deploy:

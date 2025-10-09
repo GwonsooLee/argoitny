@@ -49,8 +49,9 @@ locals {
 }
 
 
-# SQS
+# SQS - only create if node groups exist
 resource "aws_sqs_queue" "aws_node_termination_handler_queue" {
+  count                     = length(var.node_group_configurations) > 0 ? 1 : 0
   name                      = "${local.handler_name}-queue"
   sqs_managed_sse_enabled   = true
   message_retention_seconds = 43200
@@ -60,7 +61,8 @@ resource "aws_sqs_queue" "aws_node_termination_handler_queue" {
 }
 
 resource "aws_sqs_queue_policy" "aws_node_termination_handler_queue" {
-  queue_url = aws_sqs_queue.aws_node_termination_handler_queue.id
+  count     = length(var.node_group_configurations) > 0 ? 1 : 0
+  queue_url = aws_sqs_queue.aws_node_termination_handler_queue[0].id
   policy    = <<-EOF
 {
     "Version": "2012-10-17",
@@ -72,7 +74,7 @@ resource "aws_sqs_queue_policy" "aws_node_termination_handler_queue" {
         },
         "Action": "sqs:SendMessage",
         "Resource": [
-            "${aws_sqs_queue.aws_node_termination_handler_queue.arn}"
+            "${aws_sqs_queue.aws_node_termination_handler_queue[0].arn}"
         ]
     }]
 }
@@ -105,17 +107,17 @@ resource "aws_autoscaling_group_tag" "aws_node_termination_handler_asg" {
 }
 
 
-# Event Bridge
+# Event Bridge - only create if node groups exist
 resource "aws_cloudwatch_event_rule" "aws_node_termination_handler" {
-  for_each      = local.event_bridge_rules
+  for_each      = length(var.node_group_configurations) > 0 ? local.event_bridge_rules : {}
   name          = each.value.name
   event_pattern = jsonencode(each.value.event_pattern)
 }
 
 resource "aws_cloudwatch_event_target" "aws_node_termination_handler" {
-  for_each = local.event_bridge_rules
+  for_each = length(var.node_group_configurations) > 0 ? local.event_bridge_rules : {}
   rule     = each.value.name
-  arn      = aws_sqs_queue.aws_node_termination_handler_queue.arn
+  arn      = aws_sqs_queue.aws_node_termination_handler_queue[0].arn
 
   depends_on = [
     aws_sqs_queue.aws_node_termination_handler_queue,
@@ -124,8 +126,9 @@ resource "aws_cloudwatch_event_target" "aws_node_termination_handler" {
 }
 
 
-# OIDC ( IAM Role for "aws_node_termination_handler" Pod )
+# OIDC ( IAM Role for "aws_node_termination_handler" Pod ) - only create if node groups exist
 resource "aws_iam_role" "aws_node_termination_handler" {
+  count              = length(var.node_group_configurations) > 0 ? 1 : 0
   name               = "eks-${local.handler_name}"
   assume_role_policy = <<POLICY
 {
@@ -150,6 +153,7 @@ POLICY
 }
 
 resource "aws_iam_policy" "aws_node_termination_handler" {
+  count  = length(var.node_group_configurations) > 0 ? 1 : 0
   name   = "eks-${local.handler_name}-policy"
   policy = <<-EOF
 {
@@ -173,6 +177,7 @@ EOF
 }
 
 resource "aws_iam_role_policy_attachment" "aws_node_termination_handler" {
-  policy_arn = aws_iam_policy.aws_node_termination_handler.arn
-  role       = aws_iam_role.aws_node_termination_handler.name
+  count      = length(var.node_group_configurations) > 0 ? 1 : 0
+  policy_arn = aws_iam_policy.aws_node_termination_handler[0].arn
+  role       = aws_iam_role.aws_node_termination_handler[0].name
 }

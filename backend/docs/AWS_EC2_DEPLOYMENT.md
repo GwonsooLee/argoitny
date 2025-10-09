@@ -396,14 +396,6 @@ SECRET_KEY=your_super_secure_random_secret_key_here_generate_with_django
 DJANGO_SETTINGS_MODULE=config.settings_production
 ALLOWED_HOSTS=api.testcase.run,www.testcase.run,testcase.run
 
-# Database Configuration
-DB_ENGINE=django.db.backends.mysql
-DB_NAME=algoitny
-DB_USER=algoitny
-DB_PASSWORD=your_secure_database_password
-DB_HOST=localhost
-DB_PORT=3306
-
 # Redis Configuration
 REDIS_HOST=localhost
 REDIS_PORT=6379

@@ -327,6 +327,69 @@ class ScriptGenerationJobRepository(BaseRepository):
 
         return result
 
+    def conditional_update_status_to_processing(
+        self,
+        job_id: str,
+        celery_task_id: str,
+        expected_status: str = 'PENDING'
+    ) -> Tuple[bool, Optional[Dict[str, Any]]]:
+        """
+        Atomically update job status to PROCESSING only if it's currently in expected_status.
+        This prevents duplicate execution by multiple workers.
+
+        Args:
+            job_id: Job ID
+            celery_task_id: Celery task ID to set
+            expected_status: Expected current status (default: PENDING)
+
+        Returns:
+            Tuple of (success: bool, job: Optional[Dict])
+            - (True, job) if update succeeded
+            - (False, None) if condition failed (already processing)
+        """
+        pk = f'SGJOB#{job_id}'
+        sk = 'META'
+        timestamp = int(time.time())
+
+        try:
+            # Get current job to preserve GSI1SK timestamp
+            current_job = self.get_job(job_id)
+            if not current_job:
+                return (False, None)
+
+            created_at = int(current_job.get('created_at', timestamp))
+
+            # Conditional update: only update if status is expected_status
+            self.table.update_item(
+                Key={'PK': pk, 'SK': sk},
+                UpdateExpression='SET dat.#sts = :new_status, dat.tid = :tid, #upd = :upd, GSI1PK = :gsi1pk, GSI1SK = :gsi1sk',
+                ConditionExpression='dat.#sts = :expected_status',
+                ExpressionAttributeNames={
+                    '#sts': 'sts',
+                    '#upd': 'upd'
+                },
+                ExpressionAttributeValues={
+                    ':expected_status': expected_status,
+                    ':new_status': 'PROCESSING',
+                    ':tid': celery_task_id,
+                    ':upd': timestamp,
+                    ':gsi1pk': 'SGJOB#STATUS#PROCESSING',
+                    ':gsi1sk': f'{created_at:020d}#{job_id}'
+                }
+            )
+
+            # If we get here, update succeeded
+            updated_job = self.get_job(job_id)
+            return (True, updated_job)
+
+        except self.table.meta.client.exceptions.ConditionalCheckFailedException:
+            # Condition failed - job is not in expected status (likely already PROCESSING)
+            return (False, None)
+        except Exception as e:
+            # Other error
+            print(f"Error in conditional update: {e}")
+            return (False, None)
+
     def update_job_status(
         self,
         job_id: str,

@@ -4,16 +4,36 @@ resource "aws_eks_cluster" "eks_cluster" {
   version  = var.cluster_version
 
   vpc_config {
-    security_group_ids      = [aws_security_group.eks_cluster.id]
-    subnet_ids              = var.cluster_subnet_ids
+    security_group_ids = [aws_security_group.eks_cluster.id]
+    subnet_ids         = var.cluster_subnet_ids
+    # Enable both private and public access for flexibility
     endpoint_private_access = true
-    endpoint_public_access  = var.enable_public_access
+    endpoint_public_access  = true
     public_access_cidrs     = var.public_access_cidrs
   }
 
   kubernetes_network_config {
     service_ipv4_cidr = "172.30.0.0/16"
+    ip_family         = "ipv4"
   }
+
+  # Enable EKS cluster creator admin access
+  access_config {
+    authentication_mode                         = "API_AND_CONFIG_MAP"
+    bootstrap_cluster_creator_admin_permissions = true
+  }
+
+  # Upgrade policy for managed control plane
+  upgrade_policy {
+    support_type = "STANDARD"
+  }
+
+  # Bootstrap self-managed add-ons
+  bootstrap_self_managed_addons = true
+
+  # Enable control plane logging (conditional)
+  enabled_cluster_log_types = var.enable_cluster_logging ? ["api", "audit", "authenticator", "controllerManager", "scheduler"] : []
+
   tags = merge(var.tags, tomap({
     "Name" = var.cluster_name,
   }))
@@ -21,6 +41,24 @@ resource "aws_eks_cluster" "eks_cluster" {
   depends_on = [
     aws_iam_role_policy_attachment.eks_cluster_AmazonEKSClusterPolicy,
   ]
+
+  lifecycle {
+    ignore_changes = [
+      access_config[0].bootstrap_cluster_creator_admin_permissions
+    ]
+  }
+}
+
+# CloudWatch log group for EKS cluster logs (conditional)
+resource "aws_cloudwatch_log_group" "eks_cluster" {
+  count = var.enable_cluster_logging ? 1 : 0
+
+  name              = "/aws/eks/${var.cluster_name}/cluster"
+  retention_in_days = var.cluster_log_retention_days
+
+  tags = merge(var.tags, tomap({
+    "Name" = "eks-${var.cluster_name}-logs",
+  }))
 }
 
 

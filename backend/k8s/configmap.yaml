@@ -14,6 +14,7 @@ data:
   # Configuration file (mounted as /etc/algoitny/config.yaml)
   config.yaml: |
     # AlgoItny Production Configuration
+    # NOTE: This project uses DynamoDB as primary database and SQS for Celery broker
 
     # ============================================
     # Django Core Settings
@@ -26,6 +27,7 @@ data:
       allowed_hosts:
         - "api.testcase.run"
         - "testcase.run"
+        - "*.testcase.run"
 
       # Time zone
       timezone: "UTC"
@@ -34,37 +36,28 @@ data:
       language_code: "en-us"
 
     # ============================================
-    # Database Configuration
+    # Database Configuration (SQLite for Django internal use only)
     # ============================================
+    # NOTE: This project uses DynamoDB as the primary database.
+    # SQLite is used only for Django's internal requirements (sessions, admin).
+    # All application data is stored in DynamoDB.
     database:
-      engine: "django.db.backends.mysql"
-      name: "algoitny"
-      user: "algoitny"
-      # Password should be stored in a Secret, not ConfigMap
-      host: "mysql-service.default.svc.cluster.local"
-      port: 3306
-
-      options:
-        charset: "utf8mb4"
-        init_command: "SET sql_mode='STRICT_TRANS_TABLES'"
-
-      conn_max_age: 600
-      conn_health_checks: true
-      atomic_requests: false
-      autocommit: true
+      engine: "django.db.backends.sqlite3"
+      name: "/data/db.sqlite3"  # Persistent volume path
 
     # ============================================
     # Cache Configuration
     # ============================================
     cache:
-      # Enable Redis cache in production
+      # Production: Use Redis for distributed caching
+      # For single-instance deployments, use LocMemCache
       enable_redis: true
 
       redis:
         host: "redis-service.default.svc.cluster.local"
         port: 6379
         db: 0
-        # Password should be stored in a Secret
+        # Password should be stored in AWS Secrets Manager (REDIS_PASSWORD)
 
         max_connections: 50
         retry_on_timeout: true
@@ -85,18 +78,24 @@ data:
         long: 1800
 
     # ============================================
-    # Celery Configuration
+    # Celery Configuration (SQS Broker)
     # ============================================
     celery:
-      broker_url: "redis://redis-service.default.svc.cluster.local:6379/0"
+      # SQS broker URL - credentials from AWS Secrets Manager or IAM role
+      # Format: sqs://ACCESS_KEY:SECRET_KEY@
+      # Note: Actual SQS endpoint is configured via CELERY_BROKER_TRANSPORT_OPTIONS
+      broker_url: "sqs://"
       result_backend: "django-db"
 
       task_time_limit: 1800
       task_soft_time_limit: 1680
-      task_acks_late: true
+      # CRITICAL: Set to false to ACK messages immediately on consume
+      # Combined with DynamoDB atomic updates, ensures exactly-once processing
+      task_acks_late: false
       task_reject_on_worker_lost: true
 
-      worker_prefetch_multiplier: 4
+      # CRITICAL: Set to 1 to prevent duplicate task execution
+      worker_prefetch_multiplier: 1
       worker_max_tasks_per_child: 1000
       worker_concurrency: 4
 
@@ -115,17 +114,37 @@ data:
     # Google OAuth Configuration
     # ============================================
     google_oauth:
-      # Client ID and Secret should be in Secrets
+      # Client ID and Secret - stored in AWS Secrets Manager
+      # Keys: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
       redirect_uri: "https://api.testcase.run/auth/callback"
+
+    # ============================================
+    # AWS Configuration
+    # ============================================
+    aws:
+      # AWS credentials - Use IAM roles for EKS (recommended)
+      # Or store in AWS Secrets Manager: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+      region: "ap-northeast-2"
+
+      # S3 Test Case Storage
+      testcase_bucket: "algoitny-testcases-zteapne2"
+
+      # Secrets Manager
+      secrets_manager:
+        enabled: true
+        secret_name: "algoitny-secrets"
 
     # ============================================
     # API Keys
     # ============================================
     api_keys:
-      # API keys should be stored in Secrets, not ConfigMap
+      # Gemini API Key - stored in AWS Secrets Manager (GEMINI_API_KEY)
+
+      # Judge0 API (optional)
       judge0:
         enabled: false
         url: "https://judge0-ce.p.rapidapi.com"
+        # API Key - stored in AWS Secrets Manager (JUDGE0_API_KEY)
 
     # ============================================
     # CORS Configuration
@@ -143,6 +162,7 @@ data:
       csrf_trusted_origins:
         - "https://api.testcase.run"
         - "https://testcase.run"
+        - "https://www.testcase.run"
 
       secure_ssl_redirect: true
       secure_hsts_seconds: 31536000
@@ -157,6 +177,10 @@ data:
       code_execution_timeout: 5
       admin_url: "admin/"
 
+      # Admin user emails (users with these emails will have admin privileges)
+      admin_emails:
+        - "gwonsoo.lee@gmail.com"
+
     # ============================================
     # Email Configuration
     # ============================================
@@ -167,7 +191,8 @@ data:
         host: "smtp.gmail.com"
         port: 587
         use_tls: true
-        # Username and password should be in Secrets
+        # Username and password - stored in AWS Secrets Manager
+        # Keys: EMAIL_HOST_USER, EMAIL_HOST_PASSWORD
 
       default_from: "noreply@testcase.run"
       server_email: "server@testcase.run"
@@ -177,6 +202,7 @@ data:
     # Monitoring & Logging
     # ============================================
     monitoring:
+      # Sentry DSN - stored in AWS Secrets Manager (SENTRY_DSN)
       environment: "production"
       enable_debug_toolbar: false
 
@@ -186,14 +212,18 @@ data:
     performance:
       gunicorn:
         workers: 4
+        threads: 2
+        worker_class: "gthread"
         log_level: "info"
+        timeout: 120
+        keepalive: 5
 
     # ============================================
     # JWT Configuration
     # ============================================
     jwt:
-      access_token_lifetime: 60
-      refresh_token_lifetime: 43200
+      access_token_lifetime: 60        # 1 hour
+      refresh_token_lifetime: 43200    # 30 days
       rotate_refresh_tokens: true
       blacklist_after_rotation: false
       update_last_login: true
@@ -203,10 +233,25 @@ data:
     # ============================================
     rest_framework:
       page_size: 20
+      default_permission: "AllowAny"  # or "IsAuthenticated"
+
+    # ============================================
+    # Middleware Configuration
+    # ============================================
+    middleware:
+      use_whitenoise: true  # Static file serving in production
+      enable_debug_toolbar: false
+
+    # ============================================
+    # Static Files Configuration
+    # ============================================
+    static_files:
+      storage: "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 ---
 # Secret for sensitive data (NOT included in version control)
-# Create this separately with actual secrets
+# IMPORTANT: DO NOT commit this file with actual secrets!
+# In production, use AWS Secrets Manager or create this Secret manually
 apiVersion: v1
 kind: Secret
 metadata:
@@ -217,31 +262,60 @@ metadata:
     component: backend
 type: Opaque
 stringData:
-  # Django secret key
+  # ============================================
+  # Required Secrets
+  # ============================================
+
+  # Django secret key (REQUIRED)
+  # Generate using: python -c 'from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())'
   SECRET_KEY: "your-production-secret-key-here"
 
-  # Database credentials
-  DB_PASSWORD: "your-database-password"
-
-  # Google OAuth credentials
-  GOOGLE_CLIENT_ID: "your-google-client-id.apps.googleusercontent.com"
+  # Google OAuth credentials (REQUIRED)
+  GOOGLE_CLIENT_ID: "1098813759307-o199ntn0c3c6vkj9isb5gfsdg5lo8p4f.apps.googleusercontent.com"
   GOOGLE_CLIENT_SECRET: "your-google-client-secret"
 
-  # Gemini API key
+  # Gemini API key (REQUIRED)
   GEMINI_API_KEY: "your-gemini-api-key"
 
-  # Redis password (if required)
-  REDIS_PASSWORD: "your-redis-password"
+  # ============================================
+  # AWS Credentials (if not using IAM roles)
+  # ============================================
+  # RECOMMENDED: Use IAM roles for service accounts (IRSA) instead
+  # Only uncomment if you cannot use IAM roles
+  # AWS_ACCESS_KEY_ID: "your-aws-access-key-id"
+  # AWS_SECRET_ACCESS_KEY: "your-aws-secret-access-key"
 
-  # Email SMTP credentials
+  # ============================================
+  # Optional Secrets
+  # ============================================
+
+  # Redis password (optional - only if Redis requires authentication)
+  # REDIS_PASSWORD: "your-redis-password"
+
+  # Email SMTP credentials (optional - for email notifications)
   EMAIL_HOST_USER: "your-email@gmail.com"
-  EMAIL_HOST_PASSWORD: "your-app-password"
+  EMAIL_HOST_PASSWORD: "your-gmail-app-password"
 
-  # Judge0 API key (if using)
-  JUDGE0_API_KEY: "your-judge0-api-key"
+  # Sentry DSN (optional - for error monitoring)
+  # SENTRY_DSN: "https://your-sentry-dsn@sentry.io/project-id"
 
-  # Sentry DSN (if using)
-  SENTRY_DSN: "your-sentry-dsn"
+---
+# RECOMMENDED: Use AWS Secrets Manager instead of Kubernetes Secrets
+# Create secrets in AWS Secrets Manager with the following keys:
+#
+# Secret name: algoitny-secrets (or as configured in configmap)
+# Secret keys:
+#   {
+#     "SECRET_KEY": "your-django-secret-key",
+#     "GOOGLE_CLIENT_ID": "your-google-client-id",
+#     "GOOGLE_CLIENT_SECRET": "your-google-client-secret",
+#     "GEMINI_API_KEY": "your-gemini-api-key",
+#     "EMAIL_HOST_USER": "your-email@gmail.com",
+#     "EMAIL_HOST_PASSWORD": "your-email-password",
+#     "SENTRY_DSN": "your-sentry-dsn"
+#   }
+#
+# Then configure your EKS pods to use IAM roles with SecretsManager access
 
 ---
 # Deployment example showing how to use ConfigMap and Secret
@@ -265,25 +339,25 @@ spec:
         app: algoitny
         component: backend
     spec:
+      # Use IAM role for service account (IRSA)
+      # serviceAccountName: algoitny-backend-sa
+
       containers:
       - name: backend
         image: algoitny/backend:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 8000
           name: http
 
         # Environment variables from Secret
         env:
+        # Required secrets
         - name: SECRET_KEY
           valueFrom:
             secretKeyRef:
               name: algoitny-backend-secrets
               key: SECRET_KEY
-        - name: DB_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: algoitny-backend-secrets
-              key: DB_PASSWORD
         - name: GOOGLE_CLIENT_ID
           valueFrom:
             secretKeyRef:
@@ -299,42 +373,74 @@ spec:
             secretKeyRef:
               name: algoitny-backend-secrets
               key: GEMINI_API_KEY
-        - name: REDIS_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: algoitny-backend-secrets
-              key: REDIS_PASSWORD
+
+        # Optional secrets
         - name: EMAIL_HOST_USER
           valueFrom:
             secretKeyRef:
               name: algoitny-backend-secrets
               key: EMAIL_HOST_USER
+              optional: true
         - name: EMAIL_HOST_PASSWORD
           valueFrom:
             secretKeyRef:
               name: algoitny-backend-secrets
               key: EMAIL_HOST_PASSWORD
+              optional: true
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: algoitny-backend-secrets
+              key: REDIS_PASSWORD
+              optional: true
+        - name: SENTRY_DSN
+          valueFrom:
+            secretKeyRef:
+              name: algoitny-backend-secrets
+              key: SENTRY_DSN
+              optional: true
+
+        # AWS configuration
+        - name: AWS_DEFAULT_REGION
+          value: "ap-northeast-2"
+        # If not using IRSA, uncomment:
+        # - name: AWS_ACCESS_KEY_ID
+        #   valueFrom:
+        #     secretKeyRef:
+        #       name: algoitny-backend-secrets
+        #       key: AWS_ACCESS_KEY_ID
+        # - name: AWS_SECRET_ACCESS_KEY
+        #   valueFrom:
+        #     secretKeyRef:
+        #       name: algoitny-backend-secrets
+        #       key: AWS_SECRET_ACCESS_KEY
 
         # Mount ConfigMap as file
         volumeMounts:
         - name: config
           mountPath: /etc/algoitny
           readOnly: true
+        - name: data
+          mountPath: /data
 
         # Health checks
         livenessProbe:
           httpGet:
-            path: /api/health/live/
+            path: /api/health/
             port: 8000
           initialDelaySeconds: 30
           periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
 
         readinessProbe:
           httpGet:
-            path: /api/health/ready/
+            path: /api/health/
             port: 8000
           initialDelaySeconds: 10
           periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
 
         # Resource limits
         resources:
@@ -342,8 +448,8 @@ spec:
             memory: "512Mi"
             cpu: "250m"
           limits:
-            memory: "1Gi"
-            cpu: "500m"
+            memory: "2Gi"
+            cpu: "1000m"
 
       volumes:
       - name: config
@@ -352,6 +458,9 @@ spec:
           items:
           - key: config.yaml
             path: config.yaml
+      - name: data
+        persistentVolumeClaim:
+          claimName: algoitny-backend-data
 
 ---
 # Celery Worker Deployment
@@ -375,29 +484,99 @@ spec:
         app: algoitny
         component: celery-worker
     spec:
+      # Use IAM role for service account (IRSA)
+      # serviceAccountName: algoitny-backend-sa
+
       containers:
       - name: celery-worker
         image: algoitny/backend:latest
-        command: ["celery", "-A", "config", "worker", "-l", "info", "-Q", "execution,generation,ai,maintenance"]
+        imagePullPolicy: Always
+        command: ["celery", "-A", "config", "worker", "--loglevel=info", "--pool=prefork", "-Q", "execution,generation,ai,maintenance"]
 
         # Environment variables from Secret (same as backend)
-        envFrom:
-        - secretRef:
-            name: algoitny-backend-secrets
+        env:
+        # Required secrets
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: algoitny-backend-secrets
+              key: SECRET_KEY
+        - name: GOOGLE_CLIENT_ID
+          valueFrom:
+            secretKeyRef:
+              name: algoitny-backend-secrets
+              key: GOOGLE_CLIENT_ID
+        - name: GOOGLE_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: algoitny-backend-secrets
+              key: GOOGLE_CLIENT_SECRET
+        - name: GEMINI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: algoitny-backend-secrets
+              key: GEMINI_API_KEY
+
+        # Optional secrets
+        - name: EMAIL_HOST_USER
+          valueFrom:
+            secretKeyRef:
+              name: algoitny-backend-secrets
+              key: EMAIL_HOST_USER
+              optional: true
+        - name: EMAIL_HOST_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: algoitny-backend-secrets
+              key: EMAIL_HOST_PASSWORD
+              optional: true
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: algoitny-backend-secrets
+              key: REDIS_PASSWORD
+              optional: true
+        - name: SENTRY_DSN
+          valueFrom:
+            secretKeyRef:
+              name: algoitny-backend-secrets
+              key: SENTRY_DSN
+              optional: true
+
+        # AWS configuration
+        - name: AWS_DEFAULT_REGION
+          value: "ap-northeast-2"
 
         # Mount ConfigMap as file
         volumeMounts:
         - name: config
           mountPath: /etc/algoitny
           readOnly: true
+        - name: data
+          mountPath: /data
 
+        # Resource limits
         resources:
           requests:
             memory: "512Mi"
             cpu: "250m"
           limits:
-            memory: "1Gi"
-            cpu: "500m"
+            memory: "2Gi"
+            cpu: "1000m"
+
+        # Liveness probe for celery worker
+        livenessProbe:
+          exec:
+            command:
+            - celery
+            - -A
+            - config
+            - inspect
+            - ping
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
 
       volumes:
       - name: config
@@ -406,3 +585,23 @@ spec:
           items:
           - key: config.yaml
             path: config.yaml
+      - name: data
+        persistentVolumeClaim:
+          claimName: algoitny-backend-data
+
+---
+# PersistentVolumeClaim for SQLite database (shared by backend and workers)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: algoitny-backend-data
+  namespace: default
+  labels:
+    app: algoitny
+spec:
+  accessModes:
+    - ReadWriteMany  # Required for multiple pods to share SQLite db
+  resources:
+    requests:
+      storage: 5Gi
+  # storageClassName: efs-sc  # Use EFS or other ReadWriteMany storage class

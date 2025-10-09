@@ -7,7 +7,6 @@ Usage:
 
     secrets = SecretsManager.load()
     secret_key = secrets.get('SECRET_KEY')
-    db_password = secrets.get('DB_PASSWORD')
 """
 
 import os
@@ -144,7 +143,6 @@ class SecretsManager:
 
         Example:
             secrets.get('SECRET_KEY', env_var='DJANGO_SECRET_KEY')
-            secrets.get('DB_PASSWORD')  # Will check env var DB_PASSWORD
         """
         # Ensure secrets are loaded
         if cls._secrets_cache is None:

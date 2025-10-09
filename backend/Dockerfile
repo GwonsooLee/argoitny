@@ -75,7 +75,7 @@ USER django
 RUN python manage.py collectstatic --noinput --clear || true
 
 # Copy entrypoint script
-COPY --chown=django:django docker-entrypoint.sh /usr/local/bin/
+COPY --chown=django:django scripts/docker-entrypoint.sh /usr/local/bin/
 USER root
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 USER django

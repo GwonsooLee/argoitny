@@ -324,11 +324,22 @@ GOOGLE_OAUTH_REDIRECT_URI = config.get(
 )
 
 # ============================================
-# Gemini API Configuration
+# LLM Service Configuration (Gemini & OpenAI)
 # ============================================
 
 # Gemini API key from Secrets Manager
 GEMINI_API_KEY = secrets.get('GEMINI_API_KEY', default='')
+
+# OpenAI API Configuration
+OPENAI_API_KEY = secrets.get('OPENAI_API_KEY', default='')
+# GPT-5 is the latest unified model (released August 2025)
+# Combines reasoning abilities with fast responses
+OPENAI_MODEL = config.get('openai.model', env_var='OPENAI_MODEL', default='gpt-5')
+
+# Default LLM Service ('gemini' or 'openai')
+# This determines which LLM service is used by default
+# Individual tasks can override this if needed
+DEFAULT_LLM_SERVICE = config.get('llm.default_service', env_var='DEFAULT_LLM_SERVICE', default='gemini')
 
 # ============================================
 # S3 Test Case Storage Configuration
@@ -438,9 +449,10 @@ CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = config.get_int('celery.task_time_limit', default=1800)
 CELERY_TASK_SOFT_TIME_LIMIT = config.get_int('celery.task_soft_time_limit', default=1680)
-# CRITICAL: Set to True to prevent duplicate task execution across multiple workers
-# With acks_late=True, SQS visibility timeout prevents other workers from picking up the same task
-CELERY_TASK_ACKS_LATE = config.get_bool('celery.task_acks_late', default=True)
+# CRITICAL: Set to False to ACK messages immediately on consume, preventing duplicate execution
+# Combined with DynamoDB atomic updates, this ensures tasks are processed exactly once
+# Messages are removed from queue immediately, preventing visibility timeout issues
+CELERY_TASK_ACKS_LATE = config.get_bool('celery.task_acks_late', default=False)
 CELERY_TASK_REJECT_ON_WORKER_LOST = config.get_bool('celery.task_reject_on_worker_lost', default=True)
 
 # Worker optimization
@@ -463,7 +475,10 @@ os.environ['AWS_ENDPOINT_URL_SQS'] = LOCALSTACK_URL
 
 CELERY_BROKER_TRANSPORT_OPTIONS = {
     'region': AWS_DEFAULT_REGION,
-    'visibility_timeout': 300,  # 5 minutes (reduced from 1 hour to prevent stuck tasks)
+    # With acks_late=False, messages are ACKed immediately on consume
+    # visibility_timeout is now a safety buffer in case of unexpected issues
+    # Set to task_time_limit * 2 for safety
+    'visibility_timeout': 3600,  # 60 minutes (task_time_limit 30min * 2)
     'polling_interval': 1,  # 1 second
     'queue_name_prefix': 'algoitny-',
     'is_secure': False,

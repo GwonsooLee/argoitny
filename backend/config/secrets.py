@@ -68,10 +68,6 @@ def get_secret(secret_name, default=None):
 
 # Pre-load critical secrets
 SECRET_KEY = get_secret('DJANGO_SECRET_KEY', 'django-insecure-local-dev-key-change-in-production')
-DB_PASSWORD = get_secret('DB_PASSWORD', 'rootpassword')
-DB_HOST = get_secret('DB_HOST', 'localhost')
-DB_NAME = get_secret('DB_NAME', 'algoitny')
-DB_USER = get_secret('DB_USER', 'root')
 GEMINI_API_KEY = get_secret('GEMINI_API_KEY', '')
 GOOGLE_CLIENT_ID = get_secret('GOOGLE_CLIENT_ID', '')
 GOOGLE_CLIENT_SECRET = get_secret('GOOGLE_CLIENT_SECRET', '')

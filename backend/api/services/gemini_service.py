@@ -1594,11 +1594,63 @@ DO NOT include:
 - Problem descriptions or stories
 - Solution approaches
 
-### 3. Sample Test Cases
-- Extract ALL sample inputs and outputs exactly as shown
-- Preserve whitespace, newlines, and formatting EXACTLY
-- If multiple samples exist, extract all of them
-- Do not modify or "clean up" the samples
+### 3. Sample Test Cases - CRITICAL EXTRACTION RULES
+
+⚠️ EXTREME PRECISION REQUIRED: These samples will be used for automated C++ solution validation via stdin/stdout comparison.
+
+**Identification Patterns (Look for these labels/keywords):**
+- **Input indicators**: "Input", "Sample Input", "예제 입력", "stdin", "Example Input", "Test Input", "입력"
+- **Output indicators**: "Output", "Sample Output", "예제 출력", "stdout", "Example Output", "Test Output", "출력"
+- **Separators**: Horizontal lines, blank lines, section headers between input/output
+
+**Extraction Rules (STRICT):**
+1. **Exact Character Extraction**:
+   - Extract ONLY the data lines (no labels, no headers like "Input:", "Output:")
+   - Each character, space, newline must be EXACTLY as shown in the problem
+   - DO NOT add quotes, brackets, or any wrapper characters
+   - DO NOT add or remove ANY whitespace, newlines, or blank lines
+   - DO NOT interpret or format numbers (keep "0003" as "0003", not "3")
+
+2. **Input/Output Boundaries**:
+   - Input ends where output begins (typically at output label or separator)
+   - If multiple samples exist, each has its own input/output pair
+   - Number samples sequentially (Sample 1, Sample 2, etc.)
+
+3. **Formatting Preservation**:
+   - Single space between numbers → keep as single space
+   - Multiple lines → preserve with \\n (newline character)
+   - Trailing spaces → preserve them
+   - Empty lines within sample → preserve them
+   - Leading zeros → preserve them (e.g., "007" not "7")
+
+4. **Common Mistakes to AVOID**:
+   ❌ Including labels: "Input: 3\\n1 2 3" → ✓ Should be: "3\\n1 2 3"
+   ❌ Changing newlines: "3 1 2 3" → ✓ Should be: "3\\n1 2 3" (if shown on separate lines)
+   ❌ Adding spaces: "3\\n1 2 3" → ❌ "3 \\n 1 2 3"
+   ❌ Removing trailing newlines in output
+   ❌ Converting number formats: "00042" → ❌ "42"
+
+5. **Multiple Samples**:
+   - Extract ALL samples from the problem (typically 2-5 samples)
+   - Keep them as separate entries in the samples array
+   - DO NOT merge multiple samples into one
+
+**Validation Format:**
+Each sample must be ready for C++ stdin/stdout validation:
+{{"input": "3\\n1 2 3", "output": "6"}}  // ONLY raw data, use \\n for newlines
+
+**Platform-Specific Notes:**
+- **Codeforces**: Samples in "Input/Output" sections under examples
+- **Baekjoon (acmicpc.net)**: "예제 입력 1" / "예제 출력 1" with sequential numbering
+- **LeetCode**: May show as function calls - extract equivalent stdin format
+- **AtCoder**: "Sample Input 1" / "Sample Output 1"
+
+**Quality Check Before Returning:**
+- ✓ Did I remove ALL labels and headers?
+- ✓ Are newlines represented as \\n (not actual line breaks in JSON)?
+- ✓ Did I preserve exact spacing between numbers?
+- ✓ Are multiple samples separated into distinct array entries?
+- ✓ Would this exact string work as stdin for a C++ program?
 
 ## OUTPUT FORMAT
 Return ONLY valid JSON (no markdown, no code blocks):
@@ -1778,7 +1830,25 @@ Expected Output:
             for i, s in enumerate(problem_metadata.get('samples', []))
         ])
 
+        # Calculate expected complexity for constraints (NEW)
+        constraints_hint = ""
+        constraints_text = problem_metadata.get('constraints', '')
+        # Try to extract N constraints
+        n_match = re.search(r'[1≤]\s*N\s*[≤]\s*(\d+)', constraints_text)
+        if n_match:
+            max_n = int(n_match.group(1))
+            if max_n <= 500:
+                constraints_hint = "\n**Complexity Target:** O(N³) may be acceptable for N ≤ 500"
+            elif max_n <= 5000:
+                constraints_hint = "\n**Complexity Target:** O(N²) acceptable for N ≤ 5000"
+            elif max_n <= 100000:
+                constraints_hint = "\n**Complexity Target:** O(N log N) or O(N) required for N ≤ 10⁵"
+            else:
+                constraints_hint = "\n**Complexity Target:** O(N) or O(log N) required for large N"
+
         prompt = f"""You are an ELITE competitive programmer (Grandmaster level) with expertise in solving Codeforces 2500+ problems, ICPC World Finals problems, and IOI problems.
+
+Follow this EXACT protocol to solve the problem:
 
 {difficulty_guidance}
 
@@ -1786,7 +1856,7 @@ Expected Output:
 **Title:** {problem_metadata['title']}
 
 **Input Format and Constraints:**
-{problem_metadata['constraints']}
+{problem_metadata['constraints']}{constraints_hint}
 
 **Sample Test Cases:**
 {samples_str}
@@ -1797,56 +1867,88 @@ Expected Output:
 
 {retry_context}
 
-## SOLUTION APPROACH (MANDATORY CHAIN-OF-THOUGHT)
+═══════════════════════════════════════════════════════════════
+## MANDATORY SOLUTION PROTOCOL
+═══════════════════════════════════════════════════════════════
 
-### Step 1: Problem Understanding
+### Step 0: Problem Restatement (Comprehension Check)
+Before solving, restate the problem in 2-3 lines to confirm understanding:
+- What is the input format?
+- What is the expected output?
+- What is the core question being asked?
+
+### Step 1: Problem Understanding & Analysis
 Analyze what the problem is REALLY asking:
-- What is the core question?
-- What are the inputs and outputs?
+- What is the underlying problem pattern?
 - Are there any implicit constraints or patterns?
+- What problem category does this belong to? (DP, Graph, Greedy, Data Structure, Math, etc.)
 
-### Step 2: Algorithm Selection
+### Step 2: Algorithm Selection with Complexity Proof
 {f"Given the difficulty rating of {difficulty_rating}, consider:" if difficulty_rating and difficulty_rating >= 2500 else "Select the appropriate algorithm:"}
-- What algorithm category does this belong to? (DP, Graph, Greedy, Data Structure, Math, etc.)
-- What is the optimal time complexity needed?
-- Are there any well-known problem patterns this matches?
+- What algorithm/data structure is needed?
+- **Prove your complexity fits constraints:**
+  - Calculate exact time complexity (e.g., O(N log N))
+  - Verify it runs in < 1-2 seconds for max constraints
+  - Show calculation: "N=10⁵, O(N log N) ≈ 10⁵ × 17 ≈ 1.7M ops ✓"
+- Is there a well-known algorithm/pattern this matches?
 
-### Step 3: Edge Case Analysis
-Identify ALL edge cases:
-- **Minimum values**: N=0, N=1, single element, empty array
-- **Maximum values**: N=10^5, values=10^9, stress testing
-- **Special cases**: All elements equal, sorted array, reverse sorted, alternating patterns
-- **Boundary conditions**: First/last elements, overflow, modulo arithmetic
+### Step 3: Edge Case Analysis & Common Pitfalls
+
+**Edge Cases to Test:**
+- **Minimum values**: N=0, N=1, single element, empty array/string
+- **Maximum values**: N=10⁵, values=10⁹, stress testing at limits
+- **Special cases**: All elements equal, already sorted, reverse sorted, alternating patterns
+- **Boundary conditions**: First/last elements, modulo arithmetic (10⁹+7)
+
+**Common Pitfalls Checklist (Check ALL):**
+- [ ] Integer overflow → Use `long long` for sums/products when values > 10⁶
+- [ ] Off-by-one errors → Verify loop bounds and array indices
+- [ ] Modulo arithmetic → Apply mod correctly if required (especially in multiplication)
+- [ ] Disconnected components → For graph problems, handle multiple components
+- [ ] Empty input cases → What if N=0 or string is empty?
+- [ ] Duplicate values → Problem may assume unique, but test with duplicates
+- [ ] Uninitialized variables → Initialize all arrays/variables
+- [ ] Array bounds → Ensure array size matches maximum N
 
 ### Step 4: Implementation Strategy
-- Choose appropriate data types (int vs long long)
-- Plan the input reading logic
-- Structure the algorithm clearly
-- Add fast I/O if needed
+Plan the implementation:
+- Choose appropriate data types (int vs long long vs double)
+- Plan the input reading logic (single vs multiple test cases)
+- Structure the algorithm clearly (avoid spaghetti code)
+- Add fast I/O if needed (recommended for large inputs)
+- Decide on exact output format (trailing spaces, newlines)
 
-### Step 5: Verification
-Before finalizing, mentally trace through:
+### Step 5: Verification Checklist
+Before finalizing, verify:
 - ✓ Sample inputs produce correct outputs?
-- ✓ Edge cases handled?
+- ✓ All edge cases from Step 3 handled?
 - ✓ Time complexity within limits?
-- ✓ No integer overflow?
-- ✓ Output format exactly matches?
+- ✓ No integer overflow risk?
+- ✓ Output format EXACTLY matches problem specification?
+- ✓ No debug prints or extra output?
 
+**Optional Mental Dry-Run:**
+Trace through 1-2 tricky test cases mentally (can add as comments in code)
+
+═══════════════════════════════════════════════════════════════
 ## C++ IMPLEMENTATION REQUIREMENTS
+═══════════════════════════════════════════════════════════════
 
 ### Mandatory Components:
 1. **Headers**: Use `#include <bits/stdc++.h>` or specific headers
-2. **Fast I/O**:
+2. **Fast I/O** (recommended for large inputs):
    ```cpp
    ios_base::sync_with_stdio(false);
    cin.tie(NULL);
-   cout.tie(NULL);
    ```
-3. **Data Types**: Use `long long` for large numbers (> 10^6)
+3. **Data Types**: Use `long long` for large numbers (sums/products > 10⁶)
 4. **Main Function**: Implement `int main()` with `return 0;`
-5. **Clean Code**: No debug prints, clear variable names
+5. **Clean Code**:
+   - No debug prints (cout/cerr/printf for debugging)
+   - Clear, self-documenting variable names
+   - Minimal comments only (code should be readable)
 
-### Code Template:
+### Standard Template:
 ```cpp
 #include <bits/stdc++.h>
 using namespace std;
@@ -1865,18 +1967,25 @@ int main() {{
 }}
 ```
 
-## OUTPUT INSTRUCTIONS
-Return ONLY the complete, working C++ code inside triple backticks:
+═══════════════════════════════════════════════════════════════
+## OUTPUT FORMAT (STRICT)
+═══════════════════════════════════════════════════════════════
+
+Return your solution in this EXACT format:
 
 ```cpp
 // YOUR COMPLETE SOLUTION HERE
 ```
 
-DO NOT include:
-- Explanations before or after the code
-- Comments explaining the algorithm (code should be self-documenting)
-- Multiple solutions or alternatives
-- Markdown outside the code block
+**CRITICAL RULES:**
+- Return ONLY ONE code block
+- NO explanations before the code block
+- NO text after the code block
+- NO multiple solutions or alternatives
+- NO verbose comments (minimal inline comments only)
+- Make sure the code block is properly formatted and complete
+
+If the problem statement is ambiguous, make the least-risk assumption and document it briefly in comments.
 """
 
         update_progress("Generating solution...")
@@ -1885,6 +1994,13 @@ DO NOT include:
         temperature = self.get_optimal_temperature(difficulty_rating)
         logger.info(f"Generating solution with temperature={temperature} for difficulty={difficulty_rating}")
 
+        # Log the full prompt being sent to Gemini
+        logger.info("="*80)
+        logger.info("GEMINI SOLUTION GENERATION PROMPT:")
+        logger.info("="*80)
+        logger.info(prompt)
+        logger.info("="*80)
+
         response = self.model.generate_content(
             prompt,
             generation_config=genai.types.GenerationConfig(
@@ -1892,6 +2008,13 @@ DO NOT include:
             )
         )
         response_text = response.text.strip()
+
+        # Log the Gemini response
+        logger.info("="*80)
+        logger.info("GEMINI SOLUTION GENERATION RESPONSE:")
+        logger.info("="*80)
+        logger.info(response_text)
+        logger.info("="*80)
 
         # Extract C++ code
         code_match = re.search(r'```(?:cpp|c\+\+)?\s*([\s\S]*?)```', response_text)

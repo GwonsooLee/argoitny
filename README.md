@@ -51,11 +51,6 @@ cd algoitny
 `.env` 파일을 생성하고 다음 내용을 추가하세요:
 
 ```env
-# Database
-DB_NAME=algoitny
-DB_USER=root
-DB_PASSWORD=rootpassword
-
 # Django
 SECRET_KEY=django-insecure-dev-key-change-in-production
 DEBUG=True

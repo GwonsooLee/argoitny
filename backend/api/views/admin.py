@@ -26,7 +26,11 @@ logger = logging.getLogger(__name__)
 class IsAdminUser:
     """Permission class to check if user is admin"""
     def has_permission(self, request, view):
-        return request.user and request.user.is_authenticated and request.user.is_admin()
+        try:
+            return request.user and request.user.is_authenticated and request.user.is_admin()
+        except (AttributeError, Exception):
+            # is_admin() method doesn't exist or failed
+            return False
 
 
 class UserManagementView(APIView):

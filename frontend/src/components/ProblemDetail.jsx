@@ -35,7 +35,8 @@ import {
   Download as DownloadIcon,
   Delete as DeleteIcon,
   ContentCopy as ContentCopyIcon,
-  Refresh as RefreshIcon
+  Refresh as RefreshIcon,
+  OpenInNew as OpenInNewIcon
 } from '@mui/icons-material';
 import { apiGet, apiPost, apiDelete } from '../utils/api-client';
 import { API_ENDPOINTS } from '../config/api';
@@ -93,14 +94,7 @@ function ProblemDetail({ platform, problemId, onBack }) {
 
       if (problemResponse.ok) {
         problemData = await problemResponse.json();
-        // Decode base64 solution code
-        if (problemData.solution_code) {
-          try {
-            problemData.solution_code = atob(problemData.solution_code);
-          } catch (e) {
-            console.error('[ProblemDetail] Failed to decode solution code:', e);
-          }
-        }
+        // Backend already decodes solution_code from base64, no need to decode again
         setProblem(problemData);
       } else if (problemResponse.status === 403) {
         // Access denied - redirect immediately
@@ -455,7 +449,8 @@ function ProblemDetail({ platform, problemId, onBack }) {
 
     setRegenerating(true);
     try {
-      const response = await apiPost(`/register/problems/${problem.id}/regenerate-solution/`, {
+      // Use platform/problem_id URL format
+      const response = await apiPost(`/register/problems/${problem.platform}/${problem.problem_id}/regenerate-solution/`, {
         additional_context: additionalContext
       }, { requireAuth: true });
 
@@ -732,6 +727,19 @@ function ProblemDetail({ platform, problemId, onBack }) {
           gap: 1,
           ml: { xs: 0, sm: 'auto' }
         }}>
+          {problem.problem_url && (
+            <Button
+              variant="outlined"
+              startIcon={<OpenInNewIcon sx={{ fontSize: { xs: '1.125rem', sm: '1.25rem' } }} />}
+              onClick={() => window.open(problem.problem_url, '_blank')}
+              sx={{
+                fontSize: { xs: '0.813rem', sm: '0.875rem' },
+                py: { xs: 1, sm: 0.75 }
+              }}
+            >
+              Open Problem
+            </Button>
+          )}
           <Button
             variant="outlined"
             startIcon={<EditIcon sx={{ fontSize: { xs: '1.125rem', sm: '1.25rem' } }} />}
@@ -772,7 +780,7 @@ function ProblemDetail({ platform, problemId, onBack }) {
               {retryingExtraction ? 'Retrying...' : (problem.metadata.extraction_status === 'PROCESSING' ? 'Cancel & Retry' : 'Retry Extraction')}
             </Button>
           )}
-          {!isDraft && !isCompleted && (
+          {!isDraft && !isCompleted && !isExtracting && (
             <Button
               variant="outlined"
               startIcon={<PlayArrowIcon sx={{ fontSize: { xs: '1.125rem', sm: '1.25rem' } }} />}
@@ -786,7 +794,7 @@ function ProblemDetail({ platform, problemId, onBack }) {
               {generatingScript ? 'Generating...' : 'Regenerate Script'}
             </Button>
           )}
-          {!isDraft && problem.test_cases && problem.test_cases.length > 0 && !isCompleted && (
+          {!isDraft && problem.test_cases && problem.test_cases.length > 0 && !isCompleted && !isExtracting && (
             <Button
               variant="outlined"
               onClick={handleGenerateOutputs}
@@ -799,7 +807,7 @@ function ProblemDetail({ platform, problemId, onBack }) {
               {generatingOutputs ? 'Generating Outputs...' : 'Regenerate Outputs'}
             </Button>
           )}
-          {isDraft && !isCompleted && (
+          {isDraft && !isCompleted && !isExtracting && (
             <Button
               variant="contained"
               startIcon={<PlayArrowIcon sx={{ fontSize: { xs: '1.125rem', sm: '1.25rem' } }} />}
@@ -813,7 +821,7 @@ function ProblemDetail({ platform, problemId, onBack }) {
               {generatingScript ? 'Generating...' : 'Generate Script'}
             </Button>
           )}
-          {!isDraft && !isCompleted && (
+          {!isDraft && !isCompleted && !isExtracting && (
             <Button
               variant="contained"
               color="success"
@@ -838,12 +846,11 @@ function ProblemDetail({ platform, problemId, onBack }) {
               Make Draft
             </Button>
           )}
-          {isDraft && !isCompleted && (
+          {isDraft && !isCompleted && !isExtracting && (
             <Button
               variant="contained"
               color="warning"
               onClick={() => setRegenerateDialogOpen(true)}
-              disabled={isExtracting}
               sx={{
                 fontSize: { xs: '0.813rem', sm: '0.875rem' },
                 py: { xs: 1, sm: 0.75 }

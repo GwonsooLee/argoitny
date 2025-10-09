@@ -1,9 +1,10 @@
 """Celery tasks for async processing - Migrated to DynamoDB"""
 from celery import shared_task
 from django.core.cache import cache
-from .services.gemini_service import GeminiService
+from .services.llm_factory import LLMServiceFactory
 from .services.code_execution_service import CodeExecutionService
 from .utils.job_helper import JobHelper
+from .tasks_solution_generation import generate_solution_with_fallback
 import base64
 import re
 import logging
@@ -30,7 +31,7 @@ CACHE_TTL_LONG = 3600  # 1 hour
     max_retries=MAX_RETRIES,
     time_limit=1800,  # 30 minutes hard limit
     soft_time_limit=1680,  # 28 minutes soft limit
-    acks_late=True,  # Acknowledge after task completion
+    acks_late=False,  # ACK immediately on consume to prevent duplicate execution
     reject_on_worker_lost=True,  # Reject task if worker crashes
     autoretry_for=(Exception,),
     retry_backoff=True,  # Exponential backoff
@@ -58,33 +59,25 @@ def generate_script_task(self, job_id):
     logger.info(f"[generate_script_task] Worker: {self.request.hostname}, Task ID: {self.request.id}")
 
     try:
-        # Get job from DynamoDB
-        job = JobHelper.get_script_generation_job(job_id)
-        if not job:
-            logger.warning(f"[generate_script_task] Job {job_id} not found, may have been deleted")
-            return {
-                'job_id': job_id,
-                'status': 'NOT_FOUND',
-                'message': 'Job not found in database'
-            }
+        # ATOMIC IDEMPOTENCY CHECK: Try to atomically update status from PENDING to PROCESSING
+        # This prevents race conditions when multiple workers consume the same message
+        logger.info(f"[generate_script_task] Attempting to claim job {job_id}")
+        success, job = JobHelper.conditional_update_script_job_to_processing(
+            job_id=job_id,
+            celery_task_id=self.request.id,
+            expected_status='PENDING'
+        )
 
-        logger.info(f"[generate_script_task] Job {job_id} loaded: {job['platform']}/{job['problem_id']} - {job['title']}")
-
-        # Skip if already processing (another worker grabbed it)
-        if job['status'] == 'PROCESSING':
-            logger.warning(f"[generate_script_task] Job {job_id} already processing, skipping")
+        if not success:
+            # Another worker already claimed this job - this is normal behavior
+            logger.info(f"[generate_script_task] Job {job_id} already claimed by another worker, skipping (race condition prevented)")
             return {
                 'job_id': job_id,
                 'status': 'SKIPPED',
-                'message': 'Job already being processed'
+                'message': 'Job already claimed by another worker'
             }
 
-        # Update status to PROCESSING
-        logger.info(f"[generate_script_task] Updating job {job_id} status to PROCESSING")
-        job = JobHelper.update_script_generation_job(job_id, {
-            'status': 'PROCESSING',
-            'celery_task_id': self.request.id
-        })
+        logger.info(f"[generate_script_task] Job {job_id} successfully claimed: {job['platform']}/{job['problem_id']} - {job['title']}")
 
         # Fetch solution_code from existing Problem using DynamoDB
         from api.dynamodb.repositories import ProblemRepository
@@ -127,10 +120,10 @@ def generate_script_task(self, job_id):
             logger.info(f"[generate_script_task] Retry attempt with previous failure context")
             logger.info(f"[generate_script_task] Previous error: {job['error_message'][:200]}...")
 
-        # Generate script using Gemini
-        logger.info(f"[generate_script_task] Calling Gemini API to generate test case generator...")
-        gemini_service = GeminiService()
-        generator_code = gemini_service.generate_test_case_generator_code(problem_info, previous_failure=previous_failure)
+        # Generate script using LLM service (Gemini or OpenAI based on settings)
+        logger.info(f"[generate_script_task] Calling LLM API to generate test case generator...")
+        llm_service = LLMServiceFactory.create_service()
+        generator_code = llm_service.generate_test_case_generator_code(problem_info, previous_failure=previous_failure)
         logger.info(f"[generate_script_task] Gemini returned generator code ({len(generator_code)} chars)")
 
         # VALIDATION: Check for placeholder code
@@ -272,7 +265,7 @@ def generate_script_task(self, job_id):
     max_retries=MAX_RETRIES,
     time_limit=900,  # 15 minutes hard limit
     soft_time_limit=840,  # 14 minutes soft limit
-    acks_late=True,
+    acks_late=False,  # ACK immediately on consume to prevent duplicate execution
     reject_on_worker_lost=True,
     autoretry_for=(Exception,),
     retry_backoff=True,
@@ -397,7 +390,7 @@ def generate_outputs_task(self, platform, problem_id):
     max_retries=MAX_RETRIES,
     time_limit=300,  # 5 minutes hard limit
     soft_time_limit=270,  # 4.5 minutes soft limit
-    acks_late=True,
+    acks_late=False,  # ACK immediately on consume to prevent duplicate execution
     reject_on_worker_lost=True,
     autoretry_for=(Exception,),
     retry_backoff=True,
@@ -650,7 +643,7 @@ def execute_code_task(self, code, language, platform=None, problem_identifier=No
     max_retries=MAX_RETRIES,
     time_limit=600,  # 10 minutes hard limit
     soft_time_limit=540,  # 9 minutes soft limit
-    acks_late=True,
+    acks_late=False,  # ACK immediately on consume to prevent duplicate execution
     reject_on_worker_lost=True,
     autoretry_for=(Exception,),
     retry_backoff=True,
@@ -685,6 +678,11 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
     """
     logger.info(f"[Worker] extract_problem_info_task received - URL: {problem_url}, Job ID: {job_id}, Additional Context: {bool(additional_context)}")
 
+    # Initialize repositories at the beginning to avoid UnboundLocalError
+    table = None
+    job_repo = None
+    problem_repo = None
+
     try:
         # OPTIMIZATION: Check cache first (skip if additional context provided)
         cache_key = f"problem_info:{problem_url}"
@@ -695,10 +693,11 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
         # Update job status if job_id provided
         if job_id:
             from api.dynamodb.client import DynamoDBClient
-            from api.dynamodb.repositories import ProblemExtractionJobRepository
+            from api.dynamodb.repositories import ProblemExtractionJobRepository, ProblemRepository
 
             table = DynamoDBClient.get_table()
             job_repo = ProblemExtractionJobRepository(table)
+            problem_repo = ProblemRepository(table)
 
             # ATOMIC IDEMPOTENCY CHECK: Try to atomically update status from PENDING to PROCESSING
             # This prevents race conditions when multiple workers consume the same message
@@ -709,19 +708,18 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
             )
 
             if not success:
-                logger.warning(f"[Worker] Job {job_id} already PROCESSING or not PENDING, skipping task (another worker claimed it)")
+                # Another worker already claimed this job - this is normal behavior with acks_late=False
+                logger.info(f"[Worker] Job {job_id} already claimed by another worker, skipping (race condition prevented)")
                 return {
                     'status': 'SKIPPED',
                     'message': 'Job already claimed by another worker',
                     'job_id': job_id
                 }
 
-            logger.info(f"[Worker] Job {job_id} atomically claimed and status updated to PROCESSING")
+            logger.info(f"[Worker] Job {job_id} successfully claimed and status updated to PROCESSING")
 
             # Update Problem metadata to PROCESSING (DynamoDB)
             try:
-                problem_repo = ProblemRepository(table)
-
                 # Try to get problem from DynamoDB
                 problem = problem_repo.get_problem(job['platform'], job['problem_id'])
                 if problem:
@@ -746,14 +744,13 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
         logger.info(f"[Worker] Parsed - Platform: {platform}, Problem ID: {problem_id}")
 
         # Helper function to update progress
-        def update_progress(progress_message, status='in_progress', update_problem_metadata=True):
+        def update_progress(progress_message, status='in_progress'):
             """
-            Update job progress and Problem metadata
+            Update Problem metadata with progress
 
             Args:
                 progress_message: Progress message to log
                 status: Progress status ('started', 'in_progress', 'completed', 'failed')
-                update_problem_metadata: Always update Problem metadata for real-time UX (default True)
             """
             logger.info(f"[Progress] {progress_message}")
 
@@ -762,34 +759,21 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
 
             try:
                 from api.dynamodb.client import DynamoDBClient
-                from api.dynamodb.repositories import ProblemRepository, JobProgressHistoryRepository
+                from api.dynamodb.repositories import ProblemRepository
 
                 table = DynamoDBClient.get_table()
-
-                # Always save to JobProgressHistory
-                progress_repo = JobProgressHistoryRepository(table)
-                progress_repo.add_progress(
-                    job_type='extraction',
-                    job_id=job_id,
-                    step=progress_message[:100],  # Limit step name to 100 chars
-                    message=progress_message,
-                    status=status
-                )
-
-                # Update Problem metadata for real-time frontend updates
-                if update_problem_metadata:
-                    problem_repo = ProblemRepository(table)
-                    problem = problem_repo.get_problem(platform, problem_id)
-                    if problem:
-                        updates = {
-                            'metadata': {
-                                **(problem.get('metadata') or {}),
-                                'extraction_status': 'PROCESSING' if status != 'completed' else 'COMPLETED',
-                                'extraction_job_id': job_id,
-                                'progress': progress_message  # Keep as 'progress' for frontend compatibility
-                            }
+                problem_repo = ProblemRepository(table)
+                problem = problem_repo.get_problem(platform, problem_id)
+                if problem:
+                    updates = {
+                        'metadata': {
+                            **(problem.get('metadata') or {}),
+                            'extraction_status': 'PROCESSING' if status != 'completed' else 'COMPLETED',
+                            'extraction_job_id': job_id,
+                            'progress': progress_message  # Keep as 'progress' for frontend compatibility
                         }
-                        problem_repo.update_problem(platform, problem_id, updates)
+                    }
+                    problem_repo.update_problem(platform, problem_id, updates)
 
             except Exception as e:
                 logger.error(f"[Progress] Failed to update progress: {e}")
@@ -797,15 +781,15 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
         # Use cached info if available
         if cached_info:
             logger.info(f"Using cached problem info for {problem_url}")
-            update_progress("Loading from cache...", update_problem_metadata=True)  # First update
+            update_progress("Loading from cache...")
             problem_info = cached_info
         else:
-            # Use Gemini with 2-step extraction (metadata first, then solution)
-            gemini_service = GeminiService()
+            # Use LLM service (Gemini or OpenAI) with 2-step extraction (metadata first, then solution)
+            llm_service = LLMServiceFactory.create_service()
 
             # STEP 1: Extract problem metadata (title, constraints, samples)
-            update_progress("📄 Step 1/2: Extracting problem metadata...", update_problem_metadata=True)
-            problem_metadata = gemini_service.extract_problem_metadata_from_url(
+            update_progress("📄 Step 1/2: Extracting problem metadata...")
+            problem_metadata = llm_service.extract_problem_metadata_from_url(
                 problem_url,
                 progress_callback=lambda msg: update_progress(f"📄 {msg}")
             )
@@ -868,70 +852,17 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
                 except Exception as e:
                     logger.error(f"Failed to update problem with metadata: {e}")
 
-            # STEP 2: Generate solution with retry logic
-            max_attempts = 3
-            solution_result = None
-            previous_attempt = None
-            validation_error = None
+            # STEP 2: Generate solution with Gemini → OpenAI fallback
+            solution_result, validation_passed, validation_error, used_service = generate_solution_with_fallback(
+                problem_metadata,
+                update_progress
+            )
 
-            for attempt in range(1, max_attempts + 1):
-                try:
-                    update_progress(f"🧠 Step 2/2: Generating solution (attempt {attempt}/{max_attempts})...", update_problem_metadata=True)
+            # Log which service was used
+            logger.info(f"Solution generated using {used_service.upper() if used_service else 'unknown service'}")
 
-                    solution_result = gemini_service.generate_solution_for_problem(
-                        problem_metadata,
-                        previous_attempt=previous_attempt,
-                        progress_callback=lambda msg: update_progress(f"🧠 {msg}")
-                    )
-
-                    solution_code = solution_result['solution_code']
-                    logger.info(f"Generated solution on attempt {attempt}: {len(solution_code)} characters")
-
-                    # Validate solution with samples
-                    samples = problem_metadata.get('samples', [])
-                    if samples:
-                        update_progress(f"✓ Testing solution with {len(samples)} sample{'s' if len(samples) > 1 else ''}...")
-
-                        validation_passed, validation_error = gemini_service._validate_solution_with_samples(
-                            solution_code,
-                            samples
-                        )
-
-                        if validation_passed:
-                            logger.info(f"✓ Solution passed all {len(samples)} samples on attempt {attempt}")
-                            update_progress(f"✓ Solution verified with {len(samples)} samples")
-                            break
-                        else:
-                            logger.warning(f"Attempt {attempt}/{max_attempts} failed validation: {validation_error}")
-
-                            if attempt < max_attempts:
-                                # Prepare retry with error context
-                                previous_attempt = {
-                                    'code': solution_code,
-                                    'error': validation_error,
-                                    'attempt_number': attempt
-                                }
-                                update_progress(f"⚠ Sample test failed, analyzing mistake...")
-                                continue
-                            else:
-                                # Last attempt failed - save with warning
-                                logger.warning(f"⚠ Solution failed after {max_attempts} attempts, saving with warning")
-                                break
-                    else:
-                        logger.warning("No samples to validate")
-                        break
-
-                except Exception as e:
-                    logger.error(f"Attempt {attempt} failed: {e}")
-                    if attempt < max_attempts:
-                        previous_attempt = {
-                            'code': solution_result['solution_code'] if solution_result else '',
-                            'error': str(e),
-                            'attempt_number': attempt
-                        }
-                        continue
-                    else:
-                        raise
+            # Get sample info for logging
+            samples = problem_metadata.get('samples', [])
 
             # Combine metadata and solution
             problem_info = {
@@ -940,12 +871,16 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
                 'constraints': problem_metadata.get('constraints', '')
             }
 
-            # Add validation info
-            if validation_error and attempt == max_attempts:
+            # Add validation info based on fallback function results
+            if validation_error and not validation_passed:
                 problem_info['validation_warning'] = f'Solution may be incorrect: {validation_error}'
                 problem_info['validation_passed'] = False
-            elif validation_error is None and samples:
+                problem_info['needs_review'] = True  # Mark for manual review when validation fails
+                logger.warning(f"⚠ Solution validation failed with {used_service} - marking problem as needs_review")
+            elif validation_passed and samples:
                 problem_info['validation_passed'] = True
+                problem_info['needs_review'] = False  # Validation passed, no review needed
+                logger.info(f"✓ Solution validation passed with {used_service}")
 
             # OPTIMIZATION: Cache the result
             cache.set(cache_key, problem_info, CACHE_TTL_LONG)
@@ -981,6 +916,7 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
                     if 'validation_warning' in problem_info:
                         metadata['validation_warning'] = problem_info['validation_warning']
                         metadata['validation_passed'] = problem_info.get('validation_passed', False)
+                        metadata['needs_review'] = problem_info.get('needs_review', False)
 
                     updates = {
                         'title': problem_info['title'],
@@ -993,7 +929,7 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
                     }
                     problem_repo.update_problem(platform, problem_id, updates)
                     logger.info(f"Updated problem {platform}/{problem_id} with extracted title: {problem_info['title']}")
-                    update_progress("Problem updated successfully", status='completed', update_problem_metadata=True)  # Final update
+                    update_progress("Problem updated successfully", status='completed')
                     created = False
                 else:
                     # Create new problem
@@ -1006,6 +942,7 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
                     if 'validation_warning' in problem_info:
                         metadata['validation_warning'] = problem_info['validation_warning']
                         metadata['validation_passed'] = problem_info.get('validation_passed', False)
+                        metadata['needs_review'] = problem_info.get('needs_review', False)
 
                     problem_repo.create_problem(
                         platform=platform,
@@ -1022,7 +959,7 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
                         }
                     )
                     logger.info(f"Created problem {platform}/{problem_id} in DynamoDB")
-                    update_progress("Problem created successfully", status='completed', update_problem_metadata=True)  # Final update
+                    update_progress("Problem created successfully", status='completed')
                     created = True
 
                 logger.info(f"Problem {platform}/{problem_id} {'created' if created else 'updated'} from job {job_id}")
@@ -1054,21 +991,9 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
                 # Update Problem metadata to FAILED in DynamoDB and log to progress
                 try:
                     from api.dynamodb.client import DynamoDBClient
-                    from api.dynamodb.repositories import ProblemRepository, JobProgressHistoryRepository
+                    from api.dynamodb.repositories import ProblemRepository
 
                     table = DynamoDBClient.get_table()
-
-                    # Log error to progress history
-                    progress_repo = JobProgressHistoryRepository(table)
-                    progress_repo.add_progress(
-                        job_type='extraction',
-                        job_id=job_id,
-                        step='Task failed',
-                        message=f'Error: {str(e)}',
-                        status='failed'
-                    )
-
-                    # Update Problem metadata
                     problem_repo = ProblemRepository(table)
                     problem = problem_repo.get_problem(job['platform'], job['problem_id'])
                     if problem:
@@ -1149,7 +1074,7 @@ def _parse_problem_url(url):
     max_retries=MAX_RETRIES,
     time_limit=600,  # 10 minutes hard limit
     soft_time_limit=540,  # 9 minutes soft limit
-    acks_late=True,
+    acks_late=False,  # ACK immediately on consume to prevent duplicate execution
     reject_on_worker_lost=True,
     autoretry_for=(Exception,),
     retry_backoff=True,
@@ -1292,16 +1217,16 @@ def generate_hints_task(self, history_id):
             'language': language
         }
 
-        # Generate hints using Gemini
-        logger.info(f"[HINTS] History {history_id}: Calling Gemini API to generate hints")
-        gemini_service = GeminiService()
-        generated_hints = gemini_service.generate_hints(
+        # Generate hints using LLM service (Gemini or OpenAI based on settings)
+        logger.info(f"[HINTS] History {history_id}: Calling LLM API to generate hints")
+        llm_service = LLMServiceFactory.create_service()
+        generated_hints = llm_service.generate_hints(
             user_code=code,
             solution_code=decoded_solution,
             test_failures=failed_tests,
             problem_info=problem_info
         )
-        logger.info(f"[HINTS] History {history_id}: Gemini API returned {len(generated_hints) if generated_hints else 0} hints")
+        logger.info(f"[HINTS] History {history_id}: LLM API returned {len(generated_hints) if generated_hints else 0} hints")
 
         # Save hints to history record in DynamoDB
         logger.info(f"[HINTS] History {history_id}: Saving hints to DynamoDB")

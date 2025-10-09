@@ -14,13 +14,13 @@ resource "aws_eks_node_group" "eks_node_group" {
   instance_types  = each.value.node_instance_types
   release_version = each.value.release_version != null ? each.value.release_version : var.node_group_release_version
 
-  tags = merge(var.tags, tomap({
+  tags = merge(var.tags, each.value.labels, tomap({
     "Name"                                      = "${var.cluster_name}-ng-${each.key}",
     "kubernetes.io/cluster/${var.cluster_name}" = "owned"
   }))
 
   labels = merge(each.value.labels, tomap({
-    capacity_type = lower(each.value.spot_enabled ? "SPOT" : "CPU_ON_DEMAND")
+    capacity_type = lower(each.value.spot_enabled ? "spot" : "on_demand")
   }))
 
   scaling_config {
@@ -30,21 +30,21 @@ resource "aws_eks_node_group" "eks_node_group" {
   }
 
   update_config {
-    max_unavailable = var.node_max_unavailable
+    max_unavailable_percentage = 33 # Allow 33% of nodes to be unavailable during update
   }
 
   depends_on = [
     aws_iam_role_policy_attachment.eks_node_AmazonEKSWorkerNodePolicy,
     aws_iam_role_policy_attachment.eks_node_AmazonEKS_CNI_Policy,
     aws_iam_role_policy_attachment.eks_node_AmazonEC2ContainerRegistryReadOnly,
+    aws_iam_role_policy_attachment.eks_node_AmazonSSMManagedInstanceCore,
     kubernetes_config_map.aws_auth,
   ]
 
   lifecycle {
+    create_before_destroy = true
     ignore_changes = [
-      scaling_config[0].min_size,
-      scaling_config[0].desired_size,
-      scaling_config[0].max_size
+      scaling_config[0].desired_size
     ]
   }
 }

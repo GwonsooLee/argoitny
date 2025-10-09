@@ -138,8 +138,20 @@ variable "public_access_cidrs" {
 
 variable "enable_public_access" {
   type        = bool
-  description = "whether or not public access to eks cluster"
+  description = "whether or not public access to eks cluster (deprecated - both private and public are now enabled)"
   default     = true
+}
+
+variable "enable_cluster_logging" {
+  type        = bool
+  description = "Enable CloudWatch logging for EKS cluster control plane"
+  default     = false
+}
+
+variable "cluster_log_retention_days" {
+  type        = number
+  description = "Number of days to retain cluster logs in CloudWatch"
+  default     = 7
 }
 
 variable "cluster_subnet_ids" {
