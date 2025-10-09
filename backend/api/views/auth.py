@@ -1,4 +1,10 @@
-"""Authentication Views"""
+"""
+Authentication Views
+
+This module handles user authentication using Google OAuth and JWT tokens.
+User data is stored in DynamoDB via UserRepository, accessed through GoogleOAuthService.
+SubscriptionPlan configuration data remains in PostgreSQL via Django ORM.
+"""
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -6,12 +12,18 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError
 from ..services.google_oauth import GoogleOAuthService
-from ..serializers import UserSerializer, SubscriptionPlanSerializer
+from ..serializers import SubscriptionPlanSerializer
 from ..models import SubscriptionPlan
+from ..utils.jwt_helper import generate_tokens_for_user
+from ..utils.serializer_helper import serialize_dynamodb_user
 
 
 class GoogleLoginView(APIView):
-    """Google OAuth login endpoint"""
+    """
+    Google OAuth login endpoint
+
+    Uses DynamoDB UserRepository (via GoogleOAuthService) for user data storage.
+    """
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -26,11 +38,19 @@ class GoogleLoginView(APIView):
 
         Returns:
             {
-                "user": {...},
+                "user": {...},  # User dict from DynamoDB
                 "access": "jwt_access_token",
                 "refresh": "jwt_refresh_token",
                 "is_new_user": true/false
             }
+
+        User data flow:
+            1. Verify Google token
+            2. Get or create user in DynamoDB (via GoogleOAuthService.get_or_create_user)
+            3. Returns user dict with fields: user_id, email, name, picture,
+               google_id, subscription_plan_id, is_active, is_staff
+            4. Generate JWT tokens from user dict
+            5. Return serialized user data and tokens
         """
         token = request.data.get('token')
         plan_name = request.data.get('plan', 'Free')
@@ -45,16 +65,23 @@ class GoogleLoginView(APIView):
             # Verify Google token and get user info
             google_user_info = GoogleOAuthService.verify_token(token)
 
-            # Get or create user with selected plan
-            user, created = GoogleOAuthService.get_or_create_user(google_user_info, plan_name)
+            # Get or create user in DynamoDB (returns dict)
+            # GoogleOAuthService internally uses UserRepository for DynamoDB operations
+            # Returns: (user_dict, created_boolean)
+            user_dict, created = GoogleOAuthService.get_or_create_user(google_user_info, plan_name)
 
-            # Generate JWT tokens
-            refresh = RefreshToken.for_user(user)
+            # Generate JWT tokens from user dict
+            # JWT helper works with user dicts (not Django User objects)
+            tokens = generate_tokens_for_user(user_dict)
+
+            # Serialize user data to match expected frontend format
+            # Converts DynamoDB user dict to API response format
+            serialized_user = serialize_dynamodb_user(user_dict)
 
             return Response({
-                'user': UserSerializer(user).data,
-                'access': str(refresh.access_token),
-                'refresh': str(refresh),
+                'user': serialized_user,
+                'access': tokens['access'],
+                'refresh': tokens['refresh'],
                 'is_new_user': created,
             }, status=status.HTTP_200_OK)
 
@@ -71,7 +98,11 @@ class GoogleLoginView(APIView):
 
 
 class TokenRefreshView(APIView):
-    """JWT token refresh endpoint"""
+    """
+    JWT token refresh endpoint
+
+    Token operations are stateless - user data from DynamoDB is not required.
+    """
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -123,7 +154,11 @@ class TokenRefreshView(APIView):
 
 
 class LogoutView(APIView):
-    """Logout endpoint"""
+    """
+    Logout endpoint
+
+    Blacklists JWT refresh token. No DynamoDB operations required.
+    """
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -169,12 +204,16 @@ class LogoutView(APIView):
 
 
 class AvailablePlansView(APIView):
-    """Get available subscription plans (excluding Admin plan)"""
+    """
+    Get available subscription plans (excluding Admin plan)
+
+    SubscriptionPlan data is now stored in DynamoDB.
+    """
     permission_classes = [AllowAny]
 
     def get(self, request):
         """
-        Get list of available subscription plans
+        Get list of available subscription plans from DynamoDB
 
         Returns:
             [
@@ -192,7 +231,29 @@ class AvailablePlansView(APIView):
                 ...
             ]
         """
-        # Get only active plans, excluding Admin plan
-        plans = SubscriptionPlan.objects.filter(is_active=True).exclude(name='Admin').order_by('name')
-        serializer = SubscriptionPlanSerializer(plans, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        try:
+            from ..dynamodb.client import DynamoDBClient
+            from ..dynamodb.repositories import SubscriptionPlanRepository
+
+            table = DynamoDBClient.get_table()
+            plan_repo = SubscriptionPlanRepository(table)
+
+            # Get all plans from DynamoDB
+            all_plans = plan_repo.list_plans()
+
+            # Filter: only active plans, exclude Admin plan
+            plans = [
+                plan for plan in all_plans
+                if plan.get('is_active', True) and plan.get('name') != 'Admin'
+            ]
+
+            # Sort by name
+            plans.sort(key=lambda p: p.get('name', ''))
+
+            return Response(plans, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to fetch plans: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

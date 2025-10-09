@@ -1,7 +1,7 @@
-import { Box, Typography, Button, Container, Stack } from '@mui/material';
-import { Info } from '@mui/icons-material';
+import { Box, Typography, Button, Container, Stack, Link } from '@mui/material';
+import { Info, Description, Policy } from '@mui/icons-material';
 
-function Footer({ onAboutClick }) {
+function Footer({ onAboutClick, onTermsClick, onPrivacyClick }) {
   return (
     <Box
       component="footer"
@@ -22,7 +22,7 @@ function Footer({ onAboutClick }) {
           alignItems="center"
           spacing={2}
         >
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', justifyContent: 'center' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 1, sm: 2 }, flexWrap: 'wrap', justifyContent: 'center' }}>
             <Button
               onClick={onAboutClick}
               startIcon={<Info />}
@@ -30,6 +30,8 @@ function Footer({ onAboutClick }) {
                 color: 'text.primary',
                 textTransform: 'none',
                 fontWeight: 500,
+                fontSize: { xs: '0.813rem', sm: '0.875rem' },
+                px: { xs: 1, sm: 1.5 },
                 '&:hover': {
                   backgroundColor: 'rgba(0, 0, 0, 0.04)',
                   transform: 'translateY(-1px)'
@@ -38,6 +40,42 @@ function Footer({ onAboutClick }) {
               }}
             >
               About
+            </Button>
+            <Button
+              onClick={onTermsClick}
+              startIcon={<Description />}
+              sx={{
+                color: 'text.primary',
+                textTransform: 'none',
+                fontWeight: 500,
+                fontSize: { xs: '0.813rem', sm: '0.875rem' },
+                px: { xs: 1, sm: 1.5 },
+                '&:hover': {
+                  backgroundColor: 'rgba(0, 0, 0, 0.04)',
+                  transform: 'translateY(-1px)'
+                },
+                transition: 'all 0.2s'
+              }}
+            >
+              Terms
+            </Button>
+            <Button
+              onClick={onPrivacyClick}
+              startIcon={<Policy />}
+              sx={{
+                color: 'text.primary',
+                textTransform: 'none',
+                fontWeight: 500,
+                fontSize: { xs: '0.813rem', sm: '0.875rem' },
+                px: { xs: 1, sm: 1.5 },
+                '&:hover': {
+                  backgroundColor: 'rgba(0, 0, 0, 0.04)',
+                  transform: 'translateY(-1px)'
+                },
+                transition: 'all 0.2s'
+              }}
+            >
+              Privacy
             </Button>
           </Box>
 

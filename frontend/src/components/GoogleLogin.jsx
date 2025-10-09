@@ -65,6 +65,10 @@ const GoogleLogin = ({ onLoginSuccess }) => {
 
       const data = await res.json();
 
+      console.log('Login response:', data);
+      console.log('Access token exists:', !!data.access);
+      console.log('User data:', data.user);
+
       // Check if this is a new user or existing user without plan
       if (data.is_new_user || !data.user.subscription_plan_name) {
         // Show plan selector for new users or users without plan
@@ -74,6 +78,12 @@ const GoogleLogin = ({ onLoginSuccess }) => {
         // Existing user with plan - login directly
         saveTokens(data.access, data.refresh);
         saveUser(data.user);
+
+        // Verify tokens are saved
+        console.log('Token saved to localStorage:', localStorage.getItem('access_token')?.substring(0, 50) + '...');
+
+        // Wait a tick to ensure tokens are saved to localStorage
+        await new Promise(resolve => setTimeout(resolve, 100));
 
         if (onLoginSuccess) {
           onLoginSuccess(data.user);
@@ -111,6 +121,9 @@ const GoogleLogin = ({ onLoginSuccess }) => {
       // Save tokens and user info
       saveTokens(data.access, data.refresh);
       saveUser(data.user);
+
+      // Wait a tick to ensure tokens are saved to localStorage
+      await new Promise(resolve => setTimeout(resolve, 0));
 
       // Notify parent component
       if (onLoginSuccess) {

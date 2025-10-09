@@ -4,7 +4,6 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from django.db import transaction
-from ..models import Problem, TestCase, ScriptGenerationJob, ProblemExtractionJob
 from ..services.gemini_service import GeminiService
 from ..services.code_executor import CodeExecutor
 from ..services.test_case_generator import TestCaseGenerator
@@ -18,6 +17,9 @@ from ..serializers import (
     ExtractProblemInfoSerializer
 )
 from ..tasks import generate_script_task, extract_problem_info_task
+from ..dynamodb.client import DynamoDBClient
+from ..dynamodb.repositories import ProblemRepository
+from ..utils.job_helper import JobHelper
 import logging
 
 logger = logging.getLogger(__name__)
@@ -67,8 +69,8 @@ class GenerateTestCasesView(APIView):
             )
 
         try:
-            # Create a job record
-            job = ScriptGenerationJob.objects.create(
+            # Create a job record using JobHelper
+            job = JobHelper.create_script_generation_job(
                 platform=serializer.validated_data['platform'],
                 problem_id=serializer.validated_data['problem_id'],
                 title=serializer.validated_data['title'],
@@ -81,15 +83,14 @@ class GenerateTestCasesView(APIView):
             )
 
             # Enqueue the job to Celery
-            task = generate_script_task.delay(job.id)
+            task = generate_script_task.delay(job['id'])
 
-            # Update job with task ID (optimized: use update_fields)
-            job.celery_task_id = task.id
-            job.save(update_fields=['celery_task_id'])
+            # Update job with task ID
+            JobHelper.update_script_generation_job(job['id'], {'celery_task_id': task.id})
 
             return Response({
-                'job_id': job.id,
-                'status': job.status,
+                'job_id': job['id'],
+                'status': job['status'],
                 'message': 'Job created and queued for processing'
             }, status=status.HTTP_202_ACCEPTED)
 
@@ -132,7 +133,6 @@ class RegisterProblemView(APIView):
             {
                 "message": "Problem registered successfully",
                 "problem": {
-                    "id": 1,
                     "platform": "baekjoon",
                     "problem_id": "1000",
                     "title": "A+B",
@@ -141,7 +141,7 @@ class RegisterProblemView(APIView):
                     "created_at": "...",
                     "test_cases": [
                         {
-                            "id": 1,
+                            "testcase_id": "1",
                             "input": "1 2",
                             "output": "3"
                         },
@@ -166,8 +166,12 @@ class RegisterProblemView(APIView):
         language = serializer.validated_data['language']
 
         try:
-            # Check if problem already exists (optimized: use only() to fetch minimal data)
-            if Problem.objects.filter(platform=platform, problem_id=problem_id).only('id').exists():
+            # Initialize DynamoDB repository
+            problem_repo = ProblemRepository()
+
+            # Check if problem already exists
+            existing_problem = problem_repo.get_problem(platform, problem_id)
+            if existing_problem:
                 return Response(
                     {'error': 'Problem already exists'},
                     status=status.HTTP_400_BAD_REQUEST
@@ -205,34 +209,38 @@ class RegisterProblemView(APIView):
                 for r in test_results
             ]
 
-            # Save problem and test cases
-            with transaction.atomic():
-                problem = Problem.objects.create(
+            # Create problem in DynamoDB
+            problem_data = {
+                'title': title,
+                'problem_url': problem_url or '',
+                'tags': tags,
+                'solution_code': solution_code,
+                'language': language,
+                'is_completed': True  # Mark as completed since we're registering with test cases
+            }
+
+            problem_item = problem_repo.create_problem(
+                platform=platform,
+                problem_id=problem_id,
+                problem_data=problem_data
+            )
+
+            # Add test cases (with numbering: 1, 2, 3...)
+            for idx, tc in enumerate(test_cases_with_outputs, start=1):
+                problem_repo.add_testcase(
                     platform=platform,
                     problem_id=problem_id,
-                    title=title,
-                    problem_url=problem_url,
-                    tags=tags
+                    testcase_id=str(idx),
+                    input_str=tc['input'],
+                    output_str=tc['output']
                 )
 
-                # Bulk create test cases
-                test_case_objects = [
-                    TestCase(
-                        problem=problem,
-                        input=tc['input'],
-                        output=tc['output']
-                    )
-                    for tc in test_cases_with_outputs
-                ]
-                TestCase.objects.bulk_create(test_case_objects)
-
             # Fetch problem with test cases for response
-            problem = Problem.objects.prefetch_related('test_cases').get(id=problem.id)
-            problem_serializer = ProblemSerializer(problem)
+            problem = problem_repo.get_problem_with_testcases(platform, problem_id)
 
             return Response({
                 'message': 'Problem registered successfully',
-                'problem': problem_serializer.data
+                'problem': problem
             }, status=status.HTTP_201_CREATED)
 
         except ValueError as e:
@@ -241,6 +249,7 @@ class RegisterProblemView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         except Exception as e:
+            logger.exception(f"Failed to register problem: {str(e)}")
             return Response(
                 {'error': f'Failed to register problem: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -324,7 +333,6 @@ class DraftProblemsView(APIView):
             {
                 "drafts": [
                     {
-                        "id": 1,
                         "platform": "baekjoon",
                         "problem_id": "1000",
                         "title": "A+B",
@@ -337,19 +345,18 @@ class DraftProblemsView(APIView):
             }
         """
         try:
-            # OPTIMIZATION: Use only() to fetch only needed fields
-            # This reduces data transfer from database significantly
-            drafts = Problem.objects.only(
-                'id', 'platform', 'problem_id', 'title', 'problem_url',
-                'tags', 'solution_code', 'language', 'constraints', 'created_at', 'metadata'
-            ).filter(is_completed=False).order_by('-created_at')
+            # Initialize DynamoDB repository
+            problem_repo = ProblemRepository()
 
-            # OPTIMIZATION: Process in Python to decode base64 (consider moving to serializer)
+            # Get draft problems from DynamoDB
+            drafts = problem_repo.list_draft_problems(limit=100)
+
+            # Process drafts to decode solution_code from base64
             import base64
             draft_data = []
             for problem in drafts:
                 # Decode solution_code from base64
-                solution_code = problem.solution_code or ''
+                solution_code = problem.get('solution_code', '')
                 if solution_code:
                     try:
                         solution_code = base64.b64decode(solution_code).decode('utf-8')
@@ -358,48 +365,54 @@ class DraftProblemsView(APIView):
                         pass
 
                 # Get extraction job status if available
-                extraction_status = problem.metadata.get('extraction_status') if problem.metadata else None
-                extraction_job_id = problem.metadata.get('extraction_job_id') if problem.metadata else None
+                metadata = problem.get('metadata', {})
+                extraction_status = metadata.get('extraction_status')
+                extraction_job_id = metadata.get('extraction_job_id')
 
                 draft_data.append({
-                    'id': problem.id,
-                    'platform': problem.platform,
-                    'problem_id': problem.problem_id,
-                    'title': problem.title,
-                    'problem_url': problem.problem_url or '',
-                    'tags': problem.tags or [],
+                    'id': f"{problem['platform']}#{problem['problem_id']}",  # Use composite key as ID
+                    'platform': problem['platform'],
+                    'problem_id': problem['problem_id'],
+                    'title': problem.get('title', ''),
+                    'problem_url': problem.get('problem_url', ''),
+                    'tags': problem.get('tags', []),
                     'solution_code': solution_code,
-                    'language': problem.language or 'python',
-                    'constraints': problem.constraints or '',
-                    'created_at': problem.created_at.isoformat(),
+                    'language': problem.get('language', 'python'),
+                    'constraints': problem.get('constraints', ''),
+                    'created_at': problem.get('created_at', ''),
                     'extraction_status': extraction_status,
                     'extraction_job_id': extraction_job_id,
                 })
 
             # Also include extraction jobs that haven't created Problems yet
-            pending_jobs = ProblemExtractionJob.objects.filter(
-                status__in=['PENDING', 'PROCESSING']
-            ).order_by('-created_at')
+            # Get both PENDING and PROCESSING jobs
+            pending_jobs = []
+            for job_status in ['PENDING', 'PROCESSING']:
+                jobs = JobHelper.list_problem_extraction_jobs(status=job_status)
+                pending_jobs.extend(jobs)
 
             # Get job IDs that are already in draft_data
             existing_job_ids = {d.get('extraction_job_id') for d in draft_data if d.get('extraction_job_id')}
 
             # Add jobs that don't have corresponding Problems yet
             for job in pending_jobs:
-                if job.id not in existing_job_ids:
+                job_id = job.get('id')
+                if job_id not in existing_job_ids:
+                    # Format job for display
+                    formatted_job = JobHelper.format_job_for_serializer(job)
                     draft_data.append({
                         'id': None,  # No Problem ID yet
-                        'platform': job.platform or 'unknown',
-                        'problem_id': job.problem_id or 'extracting',
-                        'title': job.title or 'Extracting problem info...',
-                        'problem_url': job.problem_url or '',
+                        'platform': job.get('platform') or 'unknown',
+                        'problem_id': job.get('problem_id') or 'extracting',
+                        'title': job.get('title') or 'Extracting problem info...',
+                        'problem_url': job.get('problem_url') or '',
                         'tags': [],
                         'solution_code': '',
                         'language': 'cpp',
                         'constraints': '',
-                        'created_at': job.created_at.isoformat(),
-                        'extraction_status': job.status,
-                        'extraction_job_id': job.id,
+                        'created_at': formatted_job.get('created_at', ''),
+                        'extraction_status': job.get('status'),
+                        'extraction_job_id': job_id,
                         'is_extracting': True,  # Flag to indicate this is still being extracted
                     })
 
@@ -411,6 +424,7 @@ class DraftProblemsView(APIView):
             }, status=status.HTTP_200_OK)
 
         except Exception as e:
+            logger.exception(f"Failed to fetch drafts: {str(e)}")
             return Response(
                 {'error': f'Failed to fetch drafts: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -448,36 +462,27 @@ class JobListView(APIView):
             }
         """
         try:
-            # OPTIMIZATION: Use only() to fetch only needed fields for list view
-            # This significantly reduces data transfer, especially for generator_code field
-            jobs = ScriptGenerationJob.objects.only(
-                'id', 'platform', 'problem_id', 'title', 'problem_url', 'tags',
-                'language', 'status', 'celery_task_id',
-                'created_at', 'updated_at', 'error_message'
+            # Get filter parameters
+            status_filter = request.query_params.get('status')
+            platform = request.query_params.get('platform')
+            problem_id = request.query_params.get('problem_id')
+
+            # List jobs using JobHelper
+            jobs = JobHelper.list_script_generation_jobs(
+                status=status_filter.upper() if status_filter else None,
+                platform=platform,
+                problem_id=problem_id
             )
 
-            # Filter by status if provided - uses sgj_status_created_idx composite index
-            status_filter = request.query_params.get('status')
-            if status_filter:
-                jobs = jobs.filter(status=status_filter.upper())
+            # Format jobs for serializer (convert timestamps)
+            formatted_jobs = [JobHelper.format_job_for_serializer(job) for job in jobs]
 
-            # Filter by platform if provided - uses sgj_platform_problem_idx composite index
-            platform = request.query_params.get('platform')
-            if platform:
-                jobs = jobs.filter(platform=platform)
-
-            # Filter by problem_id if provided
-            problem_id = request.query_params.get('problem_id')
-            if problem_id:
-                jobs = jobs.filter(problem_id=problem_id)
-
-            # OPTIMIZATION: Order by created_at (uses existing model ordering)
-            # Combined with filters, this uses composite indexes efficiently
-
-            serializer = ScriptGenerationJobSerializer(jobs, many=True)
+            # Exclude generator_code field from list view for optimization
+            for job in formatted_jobs:
+                job.pop('generator_code', None)
 
             return Response({
-                'jobs': serializer.data
+                'jobs': formatted_jobs
             }, status=status.HTTP_200_OK)
 
         except Exception as e:
@@ -509,15 +514,16 @@ class JobDetailView(APIView):
             }
         """
         try:
-            job = ScriptGenerationJob.objects.get(id=job_id)
-            serializer = ScriptGenerationJobSerializer(job)
-            return Response(serializer.data, status=status.HTTP_200_OK)
+            job = JobHelper.get_script_generation_job(job_id)
+            if not job:
+                return Response(
+                    {'error': 'Job not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
 
-        except ScriptGenerationJob.DoesNotExist:
-            return Response(
-                {'error': 'Job not found'},
-                status=status.HTTP_404_NOT_FOUND
-            )
+            formatted_job = JobHelper.format_job_for_serializer(job)
+            return Response(formatted_job, status=status.HTTP_200_OK)
+
         except Exception as e:
             return Response(
                 {'error': f'Failed to fetch job: {str(e)}'},
@@ -534,19 +540,21 @@ class JobDetailView(APIView):
             }
         """
         try:
-            # Get and delete the job
-            job = ScriptGenerationJob.objects.only('id').get(id=job_id)
-            job.delete()
+            # Check if job exists
+            job = JobHelper.get_script_generation_job(job_id)
+            if not job:
+                return Response(
+                    {'error': 'Job not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            # Delete the job
+            JobHelper.delete_script_generation_job(job_id)
 
             return Response({
                 'message': 'Job deleted successfully'
             }, status=status.HTTP_200_OK)
 
-        except ScriptGenerationJob.DoesNotExist:
-            return Response(
-                {'error': 'Job not found'},
-                status=status.HTTP_404_NOT_FOUND
-            )
         except Exception as e:
             return Response(
                 {'error': f'Failed to delete job: {str(e)}'},
@@ -571,67 +579,84 @@ class RetryExtractionView(APIView):
         """
         try:
             # Get the job
-            job = ProblemExtractionJob.objects.get(id=job_id)
-
-            # Check if job is in a retry-able state (FAILED or PROCESSING - to allow cancellation and retry)
-            if job.status not in ['FAILED', 'PROCESSING']:
+            job = JobHelper.get_problem_extraction_job(job_id)
+            if not job:
                 return Response(
-                    {'error': f'Job status is {job.status}. Only FAILED or PROCESSING jobs can be retried.'},
+                    {'error': 'Job not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            # Check if job is in a retry-able state
+            # Allow FAILED, PROCESSING (cancel & retry), COMPLETED (re-extract), PENDING (restart)
+            job_status = job.get('status')
+            if job_status not in ['FAILED', 'PROCESSING', 'COMPLETED', 'PENDING']:
+                return Response(
+                    {'error': f'Job status is {job_status}. Cannot retry this job.'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
             # Get the problem URL
-            if not job.problem_url:
+            problem_url = job.get('problem_url')
+            if not problem_url:
                 return Response(
                     {'error': 'Job does not have a problem_url to retry'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            # Reset job status and update Problem metadata atomically
-            job.status = 'PENDING'
-            job.error_message = None
-            job.save()
+            # Reset job status
+            JobHelper.update_problem_extraction_job(job_id, {
+                'status': 'PENDING',
+                'error_message': None
+            })
 
-            # Update Problem metadata to reflect retry
+            # Update Problem metadata to reflect retry in DynamoDB
             try:
-                problem = Problem.objects.get(
-                    platform=job.platform,
-                    problem_id=job.problem_id
-                )
-                problem.metadata = {
-                    **(problem.metadata or {}),
-                    'extraction_status': 'PENDING',
-                    'extraction_job_id': job.id,
-                    'progress': 'Retry initiated...',
-                    'error_message': None
-                }
-                problem.save(update_fields=['metadata'])
-                logger.info(f"Updated Problem {job.platform}/{job.problem_id} to PENDING")
-            except Problem.DoesNotExist:
-                logger.warning(f"Problem {job.platform}/{job.problem_id} not found")
+                from ..dynamodb.client import DynamoDBClient
+                from ..dynamodb.repositories import ProblemRepository
+
+                table = DynamoDBClient.get_table()
+                problem_repo = ProblemRepository(table)
+                platform = job.get('platform')
+                problem_id = job.get('problem_id')
+                problem = problem_repo.get_problem(platform, problem_id)
+
+                if problem:
+                    metadata = problem.get('metadata', {})
+                    metadata.update({
+                        'extraction_status': 'PENDING',
+                        'extraction_job_id': job_id,
+                        'progress': 'Retry initiated...',
+                        'error_message': None
+                    })
+                    problem_repo.update_problem(
+                        platform=platform,
+                        problem_id=problem_id,
+                        updates={'metadata': metadata}
+                    )
+                    logger.info(f"Updated Problem {platform}/{problem_id} to PENDING")
+                else:
+                    logger.warning(f"Problem {platform}/{problem_id} not found in DynamoDB")
+            except Exception as e:
+                logger.warning(f"Failed to update problem metadata: {str(e)}")
 
             # Trigger the extraction task again
             from ..tasks import extract_problem_info_task
             extract_problem_info_task.apply_async(
                 kwargs={
-                    'problem_url': job.problem_url,
-                    'job_id': job.id
+                    'problem_url': problem_url,
+                    'job_id': job_id
                 },
                 queue='ai'
             )
 
             return Response({
                 'message': 'Extraction job retry initiated',
-                'job_id': job.id,
+                'job_id': job_id,
                 'status': 'PENDING'
             }, status=status.HTTP_200_OK)
 
-        except ScriptGenerationJob.DoesNotExist:
-            return Response(
-                {'error': 'Job not found'},
-                status=status.HTTP_404_NOT_FOUND
-            )
         except Exception as e:
+            logger.exception(f"Failed to retry job: {str(e)}")
             return Response(
                 {'error': f'Failed to retry job: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -676,35 +701,45 @@ class SaveTestCaseInputsView(APIView):
             )
 
         try:
-            # Get the problem (optimized: only fetch id for filter)
-            problem = Problem.objects.only('id').get(platform=platform, problem_id=problem_id)
+            # Initialize DynamoDB repository
+            problem_repo = ProblemRepository()
 
-            # Delete existing test cases
-            with transaction.atomic():
-                TestCase.objects.filter(problem=problem).delete()
+            # Check if problem exists
+            problem = problem_repo.get_problem(platform, problem_id)
+            if not problem:
+                return Response(
+                    {'error': 'Problem not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
 
-                # Create new test cases with empty outputs
-                test_case_objects = [
-                    TestCase(
-                        problem=problem,
-                        input=inp,
-                        output=''  # Empty output for now
-                    )
-                    for inp in test_inputs
-                ]
-                TestCase.objects.bulk_create(test_case_objects)
+            # Delete existing test cases (by deleting and recreating problem with test cases)
+            # First, get the problem metadata
+            existing_testcases = problem_repo.get_testcases(platform, problem_id)
+
+            # Delete each test case
+            for tc in existing_testcases:
+                # Use delete_item from base repository
+                pk = f'PROB#{platform}#{problem_id}'
+                sk = f"TC#{tc['testcase_id']}"
+                problem_repo.delete_item(pk, sk)
+
+            # Create new test cases with empty outputs (numbered 1, 2, 3...)
+            for idx, inp in enumerate(test_inputs, start=1):
+                problem_repo.add_testcase(
+                    platform=platform,
+                    problem_id=problem_id,
+                    testcase_id=str(idx),
+                    input_str=inp,
+                    output_str=''  # Empty output for now
+                )
 
             return Response({
                 'message': 'Test cases saved successfully',
                 'count': len(test_inputs)
             }, status=status.HTTP_200_OK)
 
-        except Problem.DoesNotExist:
-            return Response(
-                {'error': 'Problem not found'},
-                status=status.HTTP_404_NOT_FOUND
-            )
         except Exception as e:
+            logger.exception(f"Failed to save test cases: {str(e)}")
             return Response(
                 {'error': f'Failed to save test cases: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -741,19 +776,25 @@ class GenerateOutputsView(APIView):
             )
 
         try:
-            # Verify problem exists and has solution code
-            problem = Problem.objects.prefetch_related('test_cases').get(
-                platform=platform,
-                problem_id=problem_id
-            )
+            # Initialize DynamoDB repository
+            problem_repo = ProblemRepository()
 
-            if not problem.solution_code:
+            # Verify problem exists and has solution code
+            problem = problem_repo.get_problem_with_testcases(platform, problem_id)
+
+            if not problem:
+                return Response(
+                    {'error': 'Problem not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            if not problem.get('solution_code'):
                 return Response(
                     {'error': 'Problem has no solution code'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            test_cases = problem.test_cases.all()
+            test_cases = problem.get('test_cases', [])
             if not test_cases:
                 return Response(
                     {'error': 'Problem has no test cases'},
@@ -769,12 +810,8 @@ class GenerateOutputsView(APIView):
                 'task_id': task.id
             }, status=status.HTTP_202_ACCEPTED)
 
-        except Problem.DoesNotExist:
-            return Response(
-                {'error': 'Problem not found'},
-                status=status.HTTP_404_NOT_FOUND
-            )
         except Exception as e:
+            logger.exception(f"Failed to start output generation: {str(e)}")
             return Response(
                 {'error': f'Failed to start output generation: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -872,22 +909,32 @@ class ToggleCompletionView(APIView):
             is_completed = bool(is_completed)
 
         try:
-            problem = Problem.objects.only('id', 'is_completed').get(platform=platform, problem_id=problem_id)
-            problem.is_completed = is_completed
-            problem.save(update_fields=['is_completed'])
+            # Initialize DynamoDB repository
+            problem_repo = ProblemRepository()
+
+            # Check if problem exists
+            problem = problem_repo.get_problem(platform, problem_id)
+            if not problem:
+                return Response(
+                    {'error': 'Problem not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            # Update completion status
+            problem_repo.update_problem(
+                platform=platform,
+                problem_id=problem_id,
+                updates={'is_completed': is_completed}
+            )
 
             message = 'Problem marked as completed' if is_completed else 'Problem marked as draft'
             return Response({
                 'message': message,
-                'is_completed': bool(problem.is_completed)
+                'is_completed': is_completed
             }, status=status.HTTP_200_OK)
 
-        except Problem.DoesNotExist:
-            return Response(
-                {'error': 'Problem not found'},
-                status=status.HTTP_404_NOT_FOUND
-            )
         except Exception as e:
+            logger.exception(f"Failed to update completion status: {str(e)}")
             return Response(
                 {'error': f'Failed to update completion status: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -915,7 +962,6 @@ class SaveProblemView(APIView):
             {
                 "message": "Problem saved successfully",
                 "problem": {
-                    "id": 1,
                     "platform": "baekjoon",
                     "problem_id": "1000",
                     "title": "A+B",
@@ -924,66 +970,77 @@ class SaveProblemView(APIView):
                 }
             }
         """
-        # Check if updating existing draft by ID
+        # Check for ID (composite key format: platform#problem_id)
         draft_id = request.data.get('id')
 
-        if draft_id:
-            # Update existing draft by ID
-            try:
-                existing_problem = Problem.objects.get(id=draft_id)
-                serializer = ProblemSaveSerializer(existing_problem, data=request.data, partial=True)
-                if not serializer.is_valid():
-                    return Response(
-                        {'error': serializer.errors},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-                serializer.save()
-                problem = existing_problem
-            except Problem.DoesNotExist:
-                return Response(
-                    {'error': 'Draft not found'},
-                    status=status.HTTP_404_NOT_FOUND
-                )
-        else:
-            # Create new or update by platform + problem_id
-            platform = request.data.get('platform')
-            problem_id = request.data.get('problem_id')
+        platform = request.data.get('platform')
+        problem_id = request.data.get('problem_id')
 
-            if not platform or not problem_id:
-                return Response(
-                    {'error': 'platform and problem_id are required'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+        # Parse ID if provided
+        if draft_id and '#' in str(draft_id):
+            parts = str(draft_id).split('#', 1)
+            platform = parts[0]
+            problem_id = parts[1] if len(parts) > 1 else problem_id
+
+        if not platform or not problem_id:
+            return Response(
+                {'error': 'platform and problem_id are required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            # Initialize DynamoDB repository
+            problem_repo = ProblemRepository()
 
             # Check if problem already exists
-            try:
-                existing_problem = Problem.objects.get(platform=platform, problem_id=problem_id)
-                # Update existing problem (partial update)
-                serializer = ProblemSaveSerializer(existing_problem, data=request.data, partial=True)
-                if not serializer.is_valid():
-                    return Response(
-                        {'error': serializer.errors},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-                serializer.save()
-                problem = existing_problem
-            except Problem.DoesNotExist:
+            existing_problem = problem_repo.get_problem(platform, problem_id)
+
+            # Prepare problem data
+            problem_data = {
+                'title': request.data.get('title', ''),
+                'problem_url': request.data.get('problem_url', ''),
+                'tags': request.data.get('tags', []),
+                'solution_code': request.data.get('solution_code', ''),
+                'language': request.data.get('language', 'python'),
+                'constraints': request.data.get('constraints', ''),
+                'is_completed': request.data.get('is_completed', False),
+                'metadata': request.data.get('metadata', {})
+            }
+
+            if existing_problem:
+                # Update existing problem
+                updates = {}
+                for key in ['title', 'problem_url', 'tags', 'solution_code', 'language',
+                           'constraints', 'is_completed', 'metadata']:
+                    if key in problem_data:
+                        updates[key] = problem_data[key]
+
+                problem_repo.update_problem(
+                    platform=platform,
+                    problem_id=problem_id,
+                    updates=updates
+                )
+                problem = problem_repo.get_problem(platform, problem_id)
+            else:
                 # Create new problem
-                serializer = ProblemSaveSerializer(data=request.data)
-                if not serializer.is_valid():
-                    return Response(
-                        {'error': serializer.errors},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-                problem = serializer.save()
+                problem_repo.create_problem(
+                    platform=platform,
+                    problem_id=problem_id,
+                    problem_data=problem_data
+                )
+                problem = problem_repo.get_problem(platform, problem_id)
 
-        # Serialize response
-        response_serializer = ProblemSaveSerializer(problem)
+            return Response({
+                'message': 'Problem saved successfully',
+                'problem': problem
+            }, status=status.HTTP_200_OK)
 
-        return Response({
-            'message': 'Problem saved successfully',
-            'problem': response_serializer.data
-        }, status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.exception(f"Failed to save problem: {str(e)}")
+            return Response(
+                {'error': f'Failed to save problem: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class ExtractProblemInfoView(APIView):
@@ -1001,7 +1058,7 @@ class ExtractProblemInfoView(APIView):
 
         Returns:
             {
-                "problem_id": 123,
+                "problem_id": "baekjoon#1000",
                 "job_id": 1,
                 "status": "PENDING",
                 "message": "Problem draft created and extraction job queued"
@@ -1017,8 +1074,6 @@ class ExtractProblemInfoView(APIView):
         problem_url = serializer.validated_data['problem_url']
 
         # Add logging
-        import logging
-        logger = logging.getLogger(__name__)
         logger.info(f"[ExtractProblemInfoView] Received URL: {problem_url}")
 
         try:
@@ -1034,12 +1089,17 @@ class ExtractProblemInfoView(APIView):
 
             logger.info(f"[ExtractProblemInfoView] Parsed URL: platform={platform}, problem_id={problem_id}")
 
-            # Create Problem immediately as draft
-            problem, created = Problem.objects.get_or_create(
-                platform=platform,
-                problem_id=problem_id,
-                defaults={
-                    'title': f'{platform.upper()} {problem_id}',  # Use problem identifier as title
+            # Initialize DynamoDB repository
+            problem_repo = ProblemRepository()
+
+            # Check if problem already exists in DynamoDB
+            existing_problem = problem_repo.get_problem(platform, problem_id)
+
+            created = False
+            if not existing_problem:
+                # Create Problem immediately as draft in DynamoDB
+                problem_data = {
+                    'title': f'{platform.upper()} {problem_id}',
                     'problem_url': problem_url,
                     'constraints': '',
                     'solution_code': '',
@@ -1050,22 +1110,31 @@ class ExtractProblemInfoView(APIView):
                         'extraction_status': 'PENDING'
                     }
                 }
-            )
-
-            logger.info(f"[ExtractProblemInfoView] {'Created' if created else 'Found existing'} Problem with ID: {problem.id}")
+                problem_repo.create_problem(
+                    platform=platform,
+                    problem_id=problem_id,
+                    problem_data=problem_data
+                )
+                created = True
+                logger.info(f"[ExtractProblemInfoView] Created Problem: {platform}/{problem_id}")
+            else:
+                logger.info(f"[ExtractProblemInfoView] Found existing Problem: {platform}/{problem_id}")
 
             # If problem already exists, check if we should create a new job
             if not created:
                 # Get extraction status
-                extraction_status = problem.metadata.get('extraction_status') if problem.metadata else None
+                metadata = existing_problem.get('metadata', {})
+                extraction_status = metadata.get('extraction_status')
+                constraints = existing_problem.get('constraints', '')
+                is_completed = existing_problem.get('is_completed', False)
 
                 # If extraction is completed or problem is marked as completed, don't create new job
-                if extraction_status == 'COMPLETED' or problem.is_completed or problem.constraints:
-                    logger.info(f"[ExtractProblemInfoView] Problem already fully extracted. extraction_status={extraction_status}, is_completed={problem.is_completed}")
+                if extraction_status == 'COMPLETED' or is_completed or constraints:
+                    logger.info(f"[ExtractProblemInfoView] Problem already fully extracted. extraction_status={extraction_status}, is_completed={is_completed}")
                     return Response({
-                        'problem_id': problem.id,
-                        'platform': problem.platform,
-                        'problem_identifier': problem.problem_id,
+                        'problem_id': f"{platform}#{problem_id}",
+                        'platform': platform,
+                        'problem_identifier': problem_id,
                         'job_id': None,
                         'status': 'COMPLETED',
                         'message': 'This problem has already been registered and extraction is complete. View your problem below.',
@@ -1074,23 +1143,23 @@ class ExtractProblemInfoView(APIView):
 
                 # If extraction is in progress or pending, return existing job info
                 if extraction_status in ['PROCESSING', 'PENDING']:
-                    existing_job_id = problem.metadata.get('extraction_job_id')
+                    existing_job_id = metadata.get('extraction_job_id')
                     if existing_job_id:
-                        try:
-                            existing_job = ScriptGenerationJob.objects.get(id=existing_job_id)
-                            logger.info(f"[ExtractProblemInfoView] Found existing job {existing_job.id} with status {existing_job.status}")
+                        existing_job = JobHelper.get_problem_extraction_job(existing_job_id)
+                        if existing_job:
+                            logger.info(f"[ExtractProblemInfoView] Found existing job {existing_job['id']} with status {existing_job['status']}")
 
                             # Return existing draft info without creating new job
                             return Response({
-                                'problem_id': problem.id,
-                                'platform': problem.platform,
-                                'problem_identifier': problem.problem_id,
-                                'job_id': existing_job.id,
-                                'status': existing_job.status,
-                                'message': f'Problem extraction is already in progress. Current status: {existing_job.status}. View your draft below.',
+                                'problem_id': f"{platform}#{problem_id}",
+                                'platform': platform,
+                                'problem_identifier': problem_id,
+                                'job_id': existing_job['id'],
+                                'status': existing_job['status'],
+                                'message': f'Problem extraction is already in progress. Current status: {existing_job["status"]}. View your draft below.',
                                 'already_exists': True
                             }, status=status.HTTP_200_OK)
-                        except ScriptGenerationJob.DoesNotExist:
+                        else:
                             logger.info(f"[ExtractProblemInfoView] Job {existing_job_id} not found, creating new job")
                             pass  # Job was deleted, create a new one
 
@@ -1098,38 +1167,41 @@ class ExtractProblemInfoView(APIView):
                 logger.info(f"[ExtractProblemInfoView] Extraction status is {extraction_status}, allowing new job creation")
 
             # Create a job record (only if problem is new or no existing job)
-            job = ProblemExtractionJob.objects.create(
+            job = JobHelper.create_problem_extraction_job(
                 platform=platform,
                 problem_id=problem_id,
                 problem_url=problem_url,
                 problem_identifier=problem_id,  # Use problem_id as identifier
                 status='PENDING'
             )
-            logger.info(f"[ExtractProblemInfoView] Created job with ID: {job.id}")
+            logger.info(f"[ExtractProblemInfoView] Created job with ID: {job['id']}")
 
-            # Update problem metadata with job_id
-            problem.metadata = {
-                **(problem.metadata or {}),
-                'extraction_job_id': job.id,
+            # Update problem metadata with job_id in DynamoDB
+            metadata = existing_problem.get('metadata', {}) if existing_problem else {}
+            metadata.update({
+                'extraction_job_id': job['id'],
                 'extraction_status': 'PENDING'
-            }
-            problem.save(update_fields=['metadata'])
+            })
+            problem_repo.update_problem(
+                platform=platform,
+                problem_id=problem_id,
+                updates={'metadata': metadata}
+            )
 
             # Enqueue the job to Celery
-            task = extract_problem_info_task.delay(problem_url, job.id)
+            task = extract_problem_info_task.delay(problem_url, job['id'])
             logger.info(f"[ExtractProblemInfoView] Enqueued task with ID: {task.id}")
 
             # Update job with task ID
-            job.celery_task_id = task.id
-            job.save(update_fields=['celery_task_id'])
-            logger.info(f"[ExtractProblemInfoView] Job {job.id} updated with task ID: {task.id}")
+            JobHelper.update_problem_extraction_job(job['id'], {'celery_task_id': task.id})
+            logger.info(f"[ExtractProblemInfoView] Job {job['id']} updated with task ID: {task.id}")
 
             return Response({
-                'problem_id': problem.id,
-                'platform': problem.platform,
-                'problem_identifier': problem.problem_id,
-                'job_id': job.id,
-                'status': job.status,
+                'problem_id': f"{platform}#{problem_id}",
+                'platform': platform,
+                'problem_identifier': problem_id,
+                'job_id': job['id'],
+                'status': job['status'],
                 'message': 'Problem draft created and extraction job queued for processing'
             }, status=status.HTTP_202_ACCEPTED)
 
@@ -1147,56 +1219,96 @@ class JobProgressHistoryView(APIView):
 
     def get(self, request, job_id):
         """
-        Get progress history for a specific job
+        Get progress history for a specific job from DynamoDB with pagination
 
         Query params:
             job_type: 'extraction' or 'generation' (default: 'extraction')
+            cursor: Pagination cursor (base64-encoded JSON from previous response)
+            limit: Number of items per page (default: 100, max: 100)
 
         Returns:
             {
                 "job_id": 123,
                 "history": [
                     {
-                        "id": 1,
+                        "id": "PROG#1696752000",
                         "step": "Fetching webpage...",
                         "message": "Fetching webpage...",
                         "status": "completed",
                         "created_at": "2025-10-07T12:00:00Z"
                     },
                     ...
-                ]
+                ],
+                "next_cursor": "base64-encoded-cursor" or null
             }
         """
         try:
-            from ..models import JobProgressHistory
-            from ..serializers import JobProgressHistorySerializer
-            from django.contrib.contenttypes.models import ContentType
+            from ..dynamodb.repositories import JobProgressHistoryRepository
+            from datetime import datetime, timezone
+            import json
+            import base64
 
             # Determine job type
             job_type = request.query_params.get('job_type', 'extraction')
 
-            if job_type == 'extraction':
-                content_type = ContentType.objects.get_for_model(ProblemExtractionJob)
-            elif job_type == 'generation':
-                content_type = ContentType.objects.get_for_model(ScriptGenerationJob)
-            else:
+            if job_type not in ['extraction', 'generation']:
                 return Response(
                     {'error': 'Invalid job_type. Must be "extraction" or "generation"'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            # Get progress history
-            history = JobProgressHistory.objects.filter(
-                content_type=content_type,
-                object_id=job_id
-            ).order_by('created_at')
+            # Get pagination parameters
+            cursor = request.query_params.get('cursor')
+            limit = min(int(request.query_params.get('limit', 100)), 100)
 
-            serializer = JobProgressHistorySerializer(history, many=True)
+            # Decode cursor if provided
+            last_evaluated_key = None
+            if cursor:
+                try:
+                    last_evaluated_key = json.loads(base64.b64decode(cursor).decode('utf-8'))
+                except Exception:
+                    return Response(
+                        {'error': 'Invalid cursor format'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+            # Initialize DynamoDB repository
+            table = DynamoDBClient.get_table()
+            progress_repo = JobProgressHistoryRepository(table)
+
+            # Get progress history from DynamoDB with pagination
+            history_items, next_key = progress_repo.get_progress_history(
+                job_type=job_type,
+                job_id=job_id,
+                limit=limit,
+                last_evaluated_key=last_evaluated_key
+            )
+
+            # Transform to response format with ISO timestamps
+            history_data = []
+            for item in history_items:
+                # Convert Unix timestamp to ISO format
+                created_timestamp = item.get('created_at', 0)
+                created_at_iso = datetime.fromtimestamp(created_timestamp, tz=timezone.utc).isoformat() if created_timestamp else None
+
+                history_data.append({
+                    'id': item['id'],
+                    'step': item['step'],
+                    'message': item['message'],
+                    'status': item['status'],
+                    'created_at': created_at_iso
+                })
+
+            # Encode next cursor if available
+            next_cursor = None
+            if next_key:
+                next_cursor = base64.b64encode(json.dumps(next_key).encode('utf-8')).decode('utf-8')
 
             return Response({
                 'job_id': job_id,
                 'job_type': job_type,
-                'history': serializer.data
+                'history': history_data,
+                'next_cursor': next_cursor
             }, status=status.HTTP_200_OK)
 
         except Exception as e:
@@ -1238,14 +1350,31 @@ class RegenerateSolutionView(APIView):
             )
 
         try:
-            # Get the problem (optimized: only fetch needed fields)
-            problem = Problem.objects.only(
-                'id', 'platform', 'problem_id', 'title', 'problem_url',
-                'tags', 'solution_code', 'language', 'constraints', 'is_completed'
-            ).get(id=problem_id)
+            # Parse problem_id (format: platform#problem_id)
+            if '#' not in str(problem_id):
+                return Response(
+                    {'error': 'Invalid problem_id format. Expected: platform#problem_id'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            parts = str(problem_id).split('#', 1)
+            platform = parts[0]
+            prob_id = parts[1]
+
+            # Initialize DynamoDB repository
+            problem_repo = ProblemRepository()
+
+            # Get the problem
+            problem = problem_repo.get_problem(platform, prob_id)
+
+            if not problem:
+                return Response(
+                    {'error': 'Problem not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
 
             # Verify it's a draft
-            if problem.is_completed:
+            if problem.get('is_completed', False):
                 return Response(
                     {'error': 'Cannot regenerate solution for completed problems. Only drafts can be regenerated.'},
                     status=status.HTTP_400_BAD_REQUEST
@@ -1255,57 +1384,56 @@ class RegenerateSolutionView(APIView):
             additional_context = request.data.get('additional_context', '')
 
             # Validate problem URL exists
-            if not problem.problem_url:
+            problem_url = problem.get('problem_url', '')
+            if not problem_url:
                 return Response(
                     {'error': 'Problem URL is required for solution regeneration'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
             # Create a new extraction job with additional context
-            job = ProblemExtractionJob.objects.create(
-                platform=problem.platform,
-                problem_id=problem.problem_id,
-                problem_url=problem.problem_url,
-                problem_identifier=problem.problem_id,
+            job = JobHelper.create_problem_extraction_job(
+                platform=platform,
+                problem_id=prob_id,
+                problem_url=problem_url,
+                problem_identifier=prob_id,
                 status='PENDING'
             )
 
             # Update problem metadata with new job info and additional context
-            problem.metadata = {
-                **(problem.metadata or {}),
-                'extraction_job_id': job.id,
+            metadata = problem.get('metadata', {})
+            metadata.update({
+                'extraction_job_id': job['id'],
                 'extraction_status': 'PENDING',
                 'additional_context': additional_context,
                 'regeneration_attempt': True
-            }
-            problem.save(update_fields=['metadata'])
+            })
+            problem_repo.update_problem(
+                platform=platform,
+                problem_id=prob_id,
+                updates={'metadata': metadata}
+            )
 
             # Enqueue the extraction task with additional context
             from ..tasks import extract_problem_info_task
             task = extract_problem_info_task.apply_async(
                 kwargs={
-                    'problem_url': problem.problem_url,
-                    'job_id': job.id,
+                    'problem_url': problem_url,
+                    'job_id': job['id'],
                     'additional_context': additional_context
                 },
                 queue='ai'
             )
 
             # Update job with task ID
-            job.celery_task_id = task.id
-            job.save(update_fields=['celery_task_id'])
+            JobHelper.update_problem_extraction_job(job['id'], {'celery_task_id': task.id})
 
             return Response({
-                'job_id': job.id,
-                'status': job.status,
+                'job_id': job['id'],
+                'status': job['status'],
                 'message': 'Solution regeneration job created and queued for processing'
             }, status=status.HTTP_202_ACCEPTED)
 
-        except Problem.DoesNotExist:
-            return Response(
-                {'error': 'Problem not found'},
-                status=status.HTTP_404_NOT_FOUND
-            )
         except Exception as e:
             logger.exception(f"[RegenerateSolutionView] Error: {str(e)}")
             return Response(

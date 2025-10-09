@@ -30,13 +30,19 @@ from .views import (
     JobProgressHistoryView,
     RegenerateSolutionView,
 )
-from .views.account import AccountStatsView, UpdatePlanView, PlanUsageView
+from .views.account import AccountStatsView, UpdatePlanView, PlanUsageView, UserProfileView
 from .views.health import health_check, readiness_check, liveness_check
 from .views.admin import (
     UserManagementView,
     SubscriptionPlanManagementView,
     UsageStatsView,
     ProblemReviewView
+)
+from .views.legal import (
+    get_active_legal_document,
+    get_legal_document_version,
+    list_legal_document_versions,
+    get_all_active_documents
 )
 
 urlpatterns = [
@@ -97,6 +103,7 @@ urlpatterns = [
     path('problems/toggle-completion/', ToggleCompletionView.as_view(), name='toggle-completion'),
 
     # Account
+    path('account/me/', UserProfileView.as_view(), name='user-profile'),
     path('account/stats/', AccountStatsView.as_view(), name='account-stats'),
     path('account/plan/', UpdatePlanView.as_view(), name='update-plan'),
     path('account/plan-usage/', PlanUsageView.as_view(), name='plan-usage'),
@@ -109,4 +116,10 @@ urlpatterns = [
     path('admin/usage-stats/', UsageStatsView.as_view(), name='admin-usage-stats'),
     path('admin/problems/review/', ProblemReviewView.as_view(), name='admin-problem-review'),
     path('admin/problems/review/<int:problem_id>/', ProblemReviewView.as_view(), name='admin-problem-review-detail'),
+
+    # Legal Documents
+    path('legal/all/', get_all_active_documents, name='legal-all-active'),
+    path('legal/<str:document_type>/', get_active_legal_document, name='legal-active'),
+    path('legal/<str:document_type>/versions/', list_legal_document_versions, name='legal-versions'),
+    path('legal/<str:document_type>/versions/<str:version>/', get_legal_document_version, name='legal-version'),
 ]

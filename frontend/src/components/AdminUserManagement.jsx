@@ -92,7 +92,8 @@ function AdminUserManagement() {
 
   const handleChangePlanClick = (user) => {
     setSelectedUser(user);
-    setSelectedPlanId(user.subscription_plan || '');
+    // subscription_plan is an object with id, name, etc.
+    setSelectedPlanId(user.subscription_plan?.id || '');
     setChangePlanDialog(true);
   };
 
@@ -330,18 +331,34 @@ function AdminUserManagement() {
                 disabled={changingPlan}
                 sx={{ mt: 2 }}
               >
-                {plans.filter(p => p.is_active).map((plan) => (
-                  <MenuItem key={plan.id} value={plan.id}>
-                    <Box>
-                      <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                        {plan.name}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {plan.description}
-                      </Typography>
-                    </Box>
-                  </MenuItem>
-                ))}
+                {plans.filter(p => p.is_active).map((plan) => {
+                  const isCurrentPlan = plan.id === selectedUser?.subscription_plan?.id;
+                  return (
+                    <MenuItem
+                      key={plan.id}
+                      value={plan.id}
+                      disabled={isCurrentPlan}
+                    >
+                      <Box>
+                        <Typography
+                          variant="body2"
+                          sx={{
+                            fontWeight: 600,
+                            color: isCurrentPlan ? 'text.disabled' : 'text.primary'
+                          }}
+                        >
+                          {plan.name} {isCurrentPlan && '(Current)'}
+                        </Typography>
+                        <Typography
+                          variant="caption"
+                          color={isCurrentPlan ? 'text.disabled' : 'text.secondary'}
+                        >
+                          {plan.description}
+                        </Typography>
+                      </Box>
+                    </MenuItem>
+                  );
+                })}
               </TextField>
             </Box>
           )}
@@ -360,7 +377,7 @@ function AdminUserManagement() {
           <Button
             variant="contained"
             onClick={handleChangePlanSubmit}
-            disabled={changingPlan || !selectedPlanId || selectedPlanId === selectedUser?.subscription_plan}
+            disabled={changingPlan || !selectedPlanId || selectedPlanId === selectedUser?.subscription_plan?.id}
           >
             {changingPlan ? 'Updating...' : 'Update Plan'}
           </Button>

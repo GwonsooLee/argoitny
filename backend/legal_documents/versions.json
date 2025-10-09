@@ -1,0 +1,26 @@
+{
+  "terms": {
+    "active_version": "2025-01-09",
+    "versions": [
+      {
+        "version": "2025-01-09",
+        "effective_date": "2025-01-09",
+        "file": "terms/2025-01-09.md",
+        "title": "Terms of Service",
+        "is_active": true
+      }
+    ]
+  },
+  "privacy": {
+    "active_version": "2025-01-09",
+    "versions": [
+      {
+        "version": "2025-01-09",
+        "effective_date": "2025-01-09",
+        "file": "privacy/2025-01-09.md",
+        "title": "Privacy Policy",
+        "is_active": true
+      }
+    ]
+  }
+}

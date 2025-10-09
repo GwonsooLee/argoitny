@@ -67,6 +67,14 @@ export const API_ENDPOINTS = {
   adminPlans: '/admin/plans/',
   adminPlanDetail: (planId) => `/admin/plans/${planId}/`,
   adminUsageStats: '/admin/usage-stats/',
+
+  // Legal Documents
+  legal: '/legal',
+  legalAll: '/legal/all/',
+  legalTerms: '/legal/terms/',
+  legalPrivacy: '/legal/privacy/',
+  legalVersions: (docType) => `/legal/${docType}/versions/`,
+  legalVersion: (docType, version) => `/legal/${docType}/versions/${version}/`,
 };
 
 /**

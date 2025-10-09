@@ -125,7 +125,7 @@ const PlanSelector = ({ onSelectPlan, selectedPlan = 'Free', showComingSoon = tr
           </button>
         </div>
       )}
-      <style jsx>{`
+      <style>{`
         .plan-selector {
           padding: 20px;
           max-width: 1200px;

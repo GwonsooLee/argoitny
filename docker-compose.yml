@@ -1,25 +1,4 @@
 services:
-  mysql:
-    image: mysql:8.0
-    container_name: algoitny-mysql
-    env_file:
-      - ./backend/.env
-    environment:
-      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
-      MYSQL_DATABASE: ${DB_NAME}
-    ports:
-      - "3306:3306"
-    volumes:
-      - mysql_data:/var/lib/mysql
-      - ./mysql-init:/docker-entrypoint-initdb.d
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_PASSWORD}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - algoitny-network
-
   localstack:
     image: localstack/localstack:3.0.2
     container_name: algoitny-localstack
@@ -48,22 +27,19 @@ services:
       retries: 5
 
 
-  migration-init:
+  dynamodb-init:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: algoitny-migration-init
+    container_name: algoitny-dynamodb-init
     env_file:
       - ./backend/.env
     environment:
-      DB_HOST: mysql
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
       AWS_DEFAULT_REGION: us-east-1
       LOCALSTACK_URL: http://localstack:4566
     depends_on:
-      mysql:
-        condition: service_healthy
       localstack:
         condition: service_healthy
     volumes:
@@ -71,7 +47,7 @@ services:
       - /app/.venv
     networks:
       - algoitny-network
-    command: sh -c "python init_db.py"
+    command: sh -c "python scripts/init_dynamodb.py && python scripts/seed_default_plans.py"
     restart: "no"
 
   backend:
@@ -82,7 +58,6 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      DB_HOST: mysql
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
       AWS_DEFAULT_REGION: us-east-1
@@ -90,11 +65,9 @@ services:
     ports:
       - "8000:8000"
     depends_on:
-      mysql:
-        condition: service_healthy
       localstack:
         condition: service_healthy
-      migration-init:
+      dynamodb-init:
         condition: service_completed_successfully
     volumes:
       - ./backend:/app
@@ -111,7 +84,6 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      DB_HOST: mysql
       DJANGO_SETTINGS_MODULE: config.settings
       CONFIG_FILE: /app/config/config.yaml
       AWS_ACCESS_KEY_ID: test
@@ -119,11 +91,9 @@ services:
       AWS_DEFAULT_REGION: us-east-1
       LOCALSTACK_URL: http://localstack:4566
     depends_on:
-      mysql:
-        condition: service_healthy
       localstack:
         condition: service_healthy
-      migration-init:
+      dynamodb-init:
         condition: service_completed_successfully
     volumes:
       - ./backend:/app
@@ -148,7 +118,6 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      DB_HOST: mysql
       DJANGO_SETTINGS_MODULE: config.settings
       CONFIG_FILE: /app/config/config.yaml
       AWS_ACCESS_KEY_ID: test
@@ -156,11 +125,9 @@ services:
       AWS_DEFAULT_REGION: us-east-1
       LOCALSTACK_URL: http://localstack:4566
     depends_on:
-      mysql:
-        condition: service_healthy
       localstack:
         condition: service_healthy
-      migration-init:
+      dynamodb-init:
         condition: service_completed_successfully
     volumes:
       - ./backend:/app
@@ -185,7 +152,6 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      DB_HOST: mysql
       DJANGO_SETTINGS_MODULE: config.settings
       CONFIG_FILE: /app/config/config.yaml
       AWS_ACCESS_KEY_ID: test
@@ -193,11 +159,9 @@ services:
       AWS_DEFAULT_REGION: us-east-1
       LOCALSTACK_URL: http://localstack:4566
     depends_on:
-      mysql:
-        condition: service_healthy
       localstack:
         condition: service_healthy
-      migration-init:
+      dynamodb-init:
         condition: service_completed_successfully
     volumes:
       - ./backend:/app
@@ -213,6 +177,22 @@ services:
           memory: 2G
         reservations:
           memory: 512M
+
+  dynamodb-admin:
+    image: aaronshaf/dynamodb-admin:latest
+    container_name: algoitny-dynamodb-admin
+    ports:
+      - "8001:8001"
+    environment:
+      - DYNAMO_ENDPOINT=http://localstack:4566
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+    depends_on:
+      localstack:
+        condition: service_healthy
+    networks:
+      - algoitny-network
 
   frontend:
     image: node:20-alpine
@@ -232,7 +212,6 @@ services:
     command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
 
 volumes:
-  mysql_data:
   localstack_data:
 
 networks:

@@ -34,12 +34,14 @@ import JobDetail from './components/JobDetail';
 import GoogleLogin from './components/GoogleLogin';
 import Footer from './components/Footer';
 import About from './components/About';
+import TermsOfService from './components/TermsOfService';
+import PrivacyPolicy from './components/PrivacyPolicy';
 import AccountDetail from './components/AccountDetail';
 import AdminUserManagement from './components/AdminUserManagement';
 import AdminPlanManagement from './components/AdminPlanManagement';
 import AdminStats from './components/AdminStats';
 import PlanSelectionModal from './components/PlanSelectionModal';
-import { getUser, logout, isAuthenticated, refreshToken } from './utils/auth';
+import { getUser, saveUser, logout, isAuthenticated, refreshToken } from './utils/auth';
 import { apiGet } from './utils/api-client';
 import { API_ENDPOINTS } from './config/api';
 
@@ -81,6 +83,19 @@ function App() {
       const currentUser = getUser();
       setUser(currentUser);
 
+      // Fetch latest user profile from server to get updated plan name
+      apiGet('/account/me/', { requireAuth: true })
+        .then(res => res.json())
+        .then(data => {
+          // Update user with latest data from server
+          setUser(data);
+          saveUser(data);
+        })
+        .catch(err => {
+          console.error('Failed to fetch user profile:', err);
+          // Keep using cached user data if API fails
+        });
+
       // Fetch plan usage
       fetchPlanUsage();
 
@@ -112,6 +127,10 @@ function App() {
       setCurrentView('admin-plans');
     } else if (path === '/admin/stats') {
       setCurrentView('admin-stats');
+    } else if (path === '/terms') {
+      setCurrentView('terms');
+    } else if (path === '/privacy') {
+      setCurrentView('privacy');
     } else if (path === '/jobs') {
       const jobId = urlParams.get('job_id');
       if (jobId) {
@@ -223,15 +242,20 @@ function App() {
     setUser(userData);
     showSnackbar('Successfully logged in!', 'success');
 
-    // Fetch plan usage
-    fetchPlanUsage();
-
     // Check if user has subscription plan (but not for admin users)
     if (!userData.subscription_plan_name && !userData.is_admin) {
       setShowPlanModal(true);
       // Don't navigate yet - wait for plan selection
       return;
     }
+
+    // Fetch plan usage in background (non-blocking) after a delay
+    setTimeout(() => {
+      fetchPlanUsage().catch(err => {
+        console.error('Failed to fetch plan usage on login:', err);
+        // Don't block login flow if plan usage fetch fails
+      });
+    }, 500); // Wait 500ms to ensure tokens are ready
 
     // Return to the view user was trying to access
     if (returnToView) {
@@ -754,11 +778,38 @@ function App() {
             {currentView === 'admin-stats' && (
               <AdminStats />
             )}
+
+            {currentView === 'terms' && (
+              <TermsOfService onBack={() => {
+                setCurrentView('search');
+                window.history.pushState({}, '', '/');
+              }} />
+            )}
+
+            {currentView === 'privacy' && (
+              <PrivacyPolicy onBack={() => {
+                setCurrentView('search');
+                window.history.pushState({}, '', '/');
+              }} />
+            )}
           </Container>
         )}
       </Box>
 
-      <Footer onAboutClick={() => setCurrentView('about')} />
+      <Footer
+        onAboutClick={() => {
+          setCurrentView('about');
+          window.history.pushState({}, '', '/about');
+        }}
+        onTermsClick={() => {
+          setCurrentView('terms');
+          window.history.pushState({}, '', '/terms');
+        }}
+        onPrivacyClick={() => {
+          setCurrentView('privacy');
+          window.history.pushState({}, '', '/privacy');
+        }}
+      />
 
       {/* Snackbar for notifications */}
       <Snackbar

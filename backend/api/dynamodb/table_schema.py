@@ -22,6 +22,9 @@ def get_table_schema():
             # GSI2 attributes
             {'AttributeName': 'GSI2PK', 'AttributeType': 'S'},
             {'AttributeName': 'GSI2SK', 'AttributeType': 'S'},
+            # GSI3 attributes (Problem status index)
+            {'AttributeName': 'GSI3PK', 'AttributeType': 'S'},
+            {'AttributeName': 'GSI3SK', 'AttributeType': 'N'},
         ],
         'BillingMode': 'PAY_PER_REQUEST',  # On-demand billing for development
         'GlobalSecondaryIndexes': [
@@ -42,6 +45,15 @@ def get_table_schema():
                     {'AttributeName': 'GSI2SK', 'KeyType': 'RANGE'}
                 ],
                 'Projection': {'ProjectionType': 'KEYS_ONLY'}
+            },
+            {
+                # GSI3: Problem status index (completed/draft problems)
+                'IndexName': 'GSI3',
+                'KeySchema': [
+                    {'AttributeName': 'GSI3PK', 'KeyType': 'HASH'},
+                    {'AttributeName': 'GSI3SK', 'KeyType': 'RANGE'}
+                ],
+                'Projection': {'ProjectionType': 'ALL'}
             }
         ],
         'StreamSpecification': {

@@ -79,7 +79,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-    # Subscription plan
+    # Subscription plan (legacy Django ORM field - kept for compatibility)
     subscription_plan = models.ForeignKey(
         SubscriptionPlan,
         on_delete=models.SET_NULL,
@@ -88,6 +88,9 @@ class User(AbstractBaseUser, PermissionsMixin):
         related_name='users',
         db_index=True
     )
+
+    # DynamoDB subscription plan ID (used for actual plan lookups)
+    subscription_plan_id_dynamodb = models.IntegerField(null=True, blank=True, db_index=True)
 
     # Fix reverse accessor clashes
     groups = models.ManyToManyField(
@@ -127,7 +130,27 @@ class User(AbstractBaseUser, PermissionsMixin):
         return self.email in settings.ADMIN_EMAILS
 
     def get_plan_limits(self):
-        """Get subscription plan limits, or defaults if no plan"""
+        """Get subscription plan limits from DynamoDB, or defaults if no plan"""
+        # Try to get plan from DynamoDB first
+        if self.subscription_plan_id_dynamodb:
+            try:
+                from api.dynamodb.client import DynamoDBClient
+                from api.dynamodb.repositories import SubscriptionPlanRepository
+
+                table = DynamoDBClient.get_table()
+                plan_repo = SubscriptionPlanRepository(table)
+                plan = plan_repo.get_plan(self.subscription_plan_id_dynamodb)
+
+                if plan:
+                    return {
+                        'max_hints_per_day': plan.get('max_hints_per_day', 5),
+                        'max_executions_per_day': plan.get('max_executions_per_day', 50),
+                    }
+            except Exception:
+                # If DynamoDB lookup fails, fall through to defaults
+                pass
+
+        # Fallback: check legacy Django ORM subscription_plan
         if self.subscription_plan:
             return {
                 'max_hints_per_day': self.subscription_plan.max_hints_per_day,
@@ -136,6 +159,7 @@ class User(AbstractBaseUser, PermissionsMixin):
                 'can_view_all_problems': self.subscription_plan.can_view_all_problems,
                 'can_register_problems': self.subscription_plan.can_register_problems,
             }
+
         # Default limits for users without a plan
         return {
             'max_hints_per_day': 5,

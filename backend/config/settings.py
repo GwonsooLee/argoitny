@@ -85,6 +85,7 @@ if config.get_bool('middleware.enable_debug_toolbar', env_var='ENABLE_DEBUG_TOOL
     MIDDLEWARE.insert(0, 'debug_toolbar.middleware.DebugToolbarMiddleware')
 
 MIDDLEWARE.extend([
+    'api.middleware.SecurityHeadersMiddleware',  # Security headers (COOP, COEP)
     'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -118,36 +119,18 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # ============================================
 # Database Configuration
 # ============================================
+# NOTE: This project uses DynamoDB as the primary database.
+# SQLite is used as a dummy database only for Django's internal requirements
+# (sessions, admin, etc.). All application data is stored in DynamoDB.
 
-# Override database for tests if testing mode is enabled
-if config.get_bool('testing.use_sqlite', env_var='TESTING', default=False):
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': ':memory:',
-            'ATOMIC_REQUESTS': False,
-            'AUTOCOMMIT': True,
-        }
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',
+        'ATOMIC_REQUESTS': False,
+        'AUTOCOMMIT': True,
     }
-else:
-    DATABASES = {
-        'default': {
-            'ENGINE': config.get('database.engine', env_var='DB_ENGINE', default='django.db.backends.mysql'),
-            'NAME': config.get('database.name', env_var='DB_NAME', default='algoitny'),
-            'USER': config.get('database.user', env_var='DB_USER', default='algoitny'),
-            'PASSWORD': secrets.get('DB_PASSWORD', default=''),  # From Secrets Manager
-            'HOST': config.get('database.host', env_var='DB_HOST', default='localhost'),
-            'PORT': config.get_int('database.port', env_var='DB_PORT', default=3306),
-            'OPTIONS': config.get_dict('database.options', default={
-                'charset': 'utf8mb4',
-                'init_command': "SET sql_mode='STRICT_TRANS_TABLES'",
-            }),
-            'CONN_MAX_AGE': config.get_int('database.conn_max_age', default=600),
-            'CONN_HEALTH_CHECKS': config.get_bool('database.conn_health_checks', default=True),
-            'ATOMIC_REQUESTS': config.get_bool('database.atomic_requests', default=False),
-            'AUTOCOMMIT': config.get_bool('database.autocommit', default=True),
-        }
-    }
+}
 
 # ============================================
 # Password Validation

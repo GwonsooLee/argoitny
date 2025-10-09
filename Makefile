@@ -9,7 +9,7 @@ help:
 	@echo "📦 개발 환경:"
 	@echo "  make up           - 모든 서비스 시작 (백그라운드)"
 	@echo "  make down         - 모든 서비스 중지 및 제거"
-	@echo "  make restart      - 모든 서비스 재시작"
+	@echo "  make restart      - 프론트엔드, 백엔드, 워커 재시작 (LocalStack 제외)"
 	@echo "  make stop         - 모든 서비스 중지 (제거하지 않음)"
 	@echo "  make start        - 중지된 서비스 다시 시작"
 	@echo "  make build        - 이미지 다시 빌드 후 시작"
@@ -29,6 +29,11 @@ help:
 	@echo "🗄️  Django:"
 	@echo "  make migrate      - Django 마이그레이션 실행"
 	@echo "  make makemigrations- Django 마이그레이션 파일 생성"
+	@echo ""
+	@echo "🗄️  DynamoDB:"
+	@echo "  make dynamodb-help - DynamoDB 명령어 도움말"
+	@echo "  make dynamodb-init - DynamoDB 테이블 초기화"
+	@echo "  make dynamodb-migrate - MySQL → DynamoDB 마이그레이션"
 	@echo ""
 	@echo "🧪 테스트:"
 	@echo "  make test         - 모든 테스트 실행"
@@ -99,9 +104,9 @@ start:
 	@echo "✅ 서비스가 시작되었습니다!"
 
 restart:
-	@echo "🔄 모든 서비스를 재시작합니다..."
-	docker-compose restart
-	@echo "✅ 서비스가 재시작되었습니다!"
+	@echo "🔄 프론트엔드, 백엔드, 워커를 재시작합니다..."
+	docker-compose restart frontend backend celery-worker-1 celery-worker-2 celery-worker-3
+	@echo "✅ 모든 서비스가 재시작되었습니다!"
 
 restart-backend:
 	@echo "🔄 백엔드를 재시작합니다..."
@@ -177,6 +182,67 @@ makemigrations:
 createsuperuser:
 	@echo "👤 Django 슈퍼유저를 생성합니다..."
 	docker-compose exec backend python manage.py createsuperuser
+
+# DynamoDB 관련
+dynamodb-init:
+	@echo "🚀 DynamoDB 테이블을 초기화합니다..."
+	docker-compose exec backend python scripts/init_dynamodb.py
+	@echo "✅ DynamoDB 테이블이 초기화되었습니다!"
+
+dynamodb-migrate:
+	@echo "🔄 MySQL에서 DynamoDB로 데이터를 마이그레이션합니다..."
+	@read -p "⚠️  이 작업은 시간이 걸릴 수 있습니다. 계속하시겠습니까? (y/N) " -n 1 -r; \
+	echo; \
+	if [[ $$REPLY =~ ^[Yy]$$ ]]; then \
+		docker-compose exec backend python scripts/migrate_to_dynamodb.py --entity all --batch-size 25; \
+	else \
+		echo "❌ 마이그레이션 취소됨"; \
+	fi
+
+dynamodb-migrate-dry-run:
+	@echo "🧪 DynamoDB 마이그레이션 Dry Run (실제 마이그레이션 없음)..."
+	docker-compose exec backend python scripts/migrate_to_dynamodb.py --entity all --dry-run
+
+dynamodb-migrate-users:
+	@echo "🔄 사용자 데이터만 마이그레이션합니다..."
+	docker-compose exec backend python scripts/migrate_to_dynamodb.py --entity user --batch-size 25
+
+dynamodb-migrate-problems:
+	@echo "🔄 문제 데이터만 마이그레이션합니다..."
+	docker-compose exec backend python scripts/migrate_to_dynamodb.py --entity problem --batch-size 25
+
+dynamodb-migrate-history:
+	@echo "🔄 검색 기록만 마이그레이션합니다..."
+	docker-compose exec backend python scripts/migrate_to_dynamodb.py --entity history --batch-size 25
+
+dynamodb-verify:
+	@echo "🔍 DynamoDB 마이그레이션을 검증합니다..."
+	docker-compose exec backend python scripts/verify_migration.py
+
+dynamodb-help:
+	@echo "════════════════════════════════════════════════════════════════"
+	@echo "🗄️  AlgoItny - DynamoDB 명령어"
+	@echo "════════════════════════════════════════════════════════════════"
+	@echo ""
+	@echo "📦 초기화:"
+	@echo "  make dynamodb-init          - DynamoDB 테이블 생성"
+	@echo ""
+	@echo "🔄 마이그레이션:"
+	@echo "  make dynamodb-migrate       - 전체 데이터 마이그레이션 (MySQL → DynamoDB)"
+	@echo "  make dynamodb-migrate-dry-run - Dry run (실제 마이그레이션 없음)"
+	@echo "  make dynamodb-migrate-users - 사용자 데이터만"
+	@echo "  make dynamodb-migrate-problems - 문제 데이터만"
+	@echo "  make dynamodb-migrate-history - 검색 기록만"
+	@echo ""
+	@echo "🔍 검증:"
+	@echo "  make dynamodb-verify        - 마이그레이션 검증"
+	@echo ""
+	@echo "💡 팁:"
+	@echo "  1. 먼저 테이블을 초기화하세요: make dynamodb-init"
+	@echo "  2. Dry run으로 테스트: make dynamodb-migrate-dry-run"
+	@echo "  3. 전체 마이그레이션: make dynamodb-migrate"
+	@echo "  4. 검증: make dynamodb-verify"
+	@echo "════════════════════════════════════════════════════════════════"
 
 # 정리
 clean:

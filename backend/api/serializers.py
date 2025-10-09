@@ -1,6 +1,6 @@
 """Serializers for API"""
 from rest_framework import serializers
-from .models import User, Problem, TestCase, SearchHistory, ScriptGenerationJob, ProblemExtractionJob, SubscriptionPlan, UsageLog, JobProgressHistory
+from .models import User, Problem, TestCase, SearchHistory, SubscriptionPlan, UsageLog, JobProgressHistory
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -284,29 +284,52 @@ class ProblemSaveSerializer(serializers.ModelSerializer):
         return data
 
 
-class ScriptGenerationJobSerializer(serializers.ModelSerializer):
-    """ScriptGenerationJob serializer"""
-    class Meta:
-        model = ScriptGenerationJob
-        fields = [
-            'id', 'platform', 'problem_id', 'title', 'problem_url', 'tags',
-            'solution_code', 'language', 'constraints', 'status',
-            'celery_task_id', 'generator_code', 'error_message',
-            'created_at', 'updated_at'
-        ]
-        read_only_fields = ['id', 'status', 'celery_task_id', 'generator_code', 'error_message', 'created_at', 'updated_at']
+class ScriptGenerationJobSerializer(serializers.Serializer):
+    """
+    ScriptGenerationJob serializer for DynamoDB dictionaries
+
+    Handles job dictionaries from JobHelper.format_job_for_serializer()
+    which provides timestamps as ISO strings.
+    """
+    id = serializers.CharField(read_only=True)
+    platform = serializers.CharField(max_length=50)
+    problem_id = serializers.CharField(max_length=50)
+    title = serializers.CharField(max_length=255)
+    problem_url = serializers.URLField(required=False, allow_blank=True)
+    tags = serializers.ListField(
+        child=serializers.CharField(max_length=50),
+        required=False,
+        default=list
+    )
+    solution_code = serializers.CharField(required=False, allow_blank=True)
+    language = serializers.CharField(max_length=50)
+    constraints = serializers.CharField(required=False, allow_blank=True)
+    status = serializers.CharField(read_only=True)
+    celery_task_id = serializers.CharField(read_only=True, required=False, allow_blank=True)
+    generator_code = serializers.CharField(read_only=True, required=False, allow_blank=True)
+    error_message = serializers.CharField(read_only=True, required=False, allow_blank=True)
+    created_at = serializers.CharField(read_only=True)  # ISO string from JobHelper
+    updated_at = serializers.CharField(read_only=True)  # ISO string from JobHelper
 
 
-class ProblemExtractionJobSerializer(serializers.ModelSerializer):
-    """ProblemExtractionJob serializer"""
-    class Meta:
-        model = ProblemExtractionJob
-        fields = [
-            'id', 'platform', 'problem_id', 'problem_url', 'problem_identifier',
-            'status', 'celery_task_id', 'error_message',
-            'created_at', 'updated_at'
-        ]
-        read_only_fields = ['id', 'status', 'celery_task_id', 'error_message', 'created_at', 'updated_at']
+class ProblemExtractionJobSerializer(serializers.Serializer):
+    """
+    ProblemExtractionJob serializer for DynamoDB dictionaries
+
+    Handles job dictionaries from JobHelper.format_job_for_serializer()
+    which provides timestamps as ISO strings.
+    """
+    id = serializers.CharField(read_only=True)
+    platform = serializers.CharField(max_length=50, required=False, allow_blank=True)
+    problem_id = serializers.CharField(max_length=50, required=False, allow_blank=True)
+    problem_url = serializers.URLField()
+    problem_identifier = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    title = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    status = serializers.CharField(read_only=True)
+    celery_task_id = serializers.CharField(read_only=True, required=False, allow_blank=True)
+    error_message = serializers.CharField(read_only=True, required=False, allow_blank=True)
+    created_at = serializers.CharField(read_only=True)  # ISO string from JobHelper
+    updated_at = serializers.CharField(read_only=True)  # ISO string from JobHelper
 
 
 class ExtractProblemInfoSerializer(serializers.Serializer):
