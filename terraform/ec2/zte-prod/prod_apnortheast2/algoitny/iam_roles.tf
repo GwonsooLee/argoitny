@@ -106,10 +106,7 @@ resource "aws_iam_policy" "api_server" {
           "sqs:GetQueueUrl",
           "sqs:GetQueueAttributes"
         ]
-        Resource = [
-          "arn:aws:sqs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:algoitny-jobs-*",
-          "arn:aws:sqs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:algoitny-dlq-*"
-        ]
+        Resource = "arn:aws:sqs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:algoitny-jobs-*"
       }
     ]
   })
@@ -257,10 +254,7 @@ resource "aws_iam_policy" "worker" {
           "sqs:SendMessage",
           "sqs:ChangeMessageVisibility"
         ]
-        Resource = [
-          "arn:aws:sqs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:algoitny-jobs-*",
-          "arn:aws:sqs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:algoitny-dlq-*"
-        ]
+        Resource = "arn:aws:sqs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:algoitny-jobs-*"
       }
     ]
   })
