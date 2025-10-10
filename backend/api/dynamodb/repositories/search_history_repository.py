@@ -1,5 +1,6 @@
 """SearchHistory repository for DynamoDB operations - New Model"""
 import time
+import base64
 from typing import Dict, List, Optional, Any, Tuple
 from decimal import Decimal
 from boto3.dynamodb.conditions import Key
@@ -52,7 +53,7 @@ class SearchHistoryRepository(BaseRepository):
             'pno': '1000',
             'ptt': 'A+B',
             'lng': 'python',
-            'cod': 'print(...)',
+            'cod': 'cHJpbnQoLi4uKQ==',  # base64 encoded
             'res': 'passed',
             'psc': 95,
             'fsc': 5,
@@ -128,6 +129,15 @@ class SearchHistoryRepository(BaseRepository):
         item = self.get_history(history_id)
         if not item:
             return None
+
+        # Decode base64-encoded code
+        cod = item.get('dat', {}).get('cod', '')
+        if cod:
+            try:
+                item['dat']['cod'] = base64.b64decode(cod.encode('utf-8')).decode('utf-8')
+            except Exception:
+                # If decoding fails, keep the original value (backward compatibility)
+                pass
 
         # Load from S3 if test results are offloaded
         trs = item.get('dat', {}).get('trs')
@@ -316,6 +326,9 @@ class SearchHistoryRepository(BaseRepository):
 
         timestamp = int(time.time())
 
+        # Base64 encode the code
+        encoded_code = base64.b64encode(code.encode('utf-8')).decode('utf-8')
+
         # Prepare data object with short field names
         dat = {
             'uid': user_id,
@@ -324,7 +337,7 @@ class SearchHistoryRepository(BaseRepository):
             'pno': problem_number,
             'ptt': problem_title,
             'lng': language,
-            'cod': code,
+            'cod': encoded_code,
             'res': result_summary,
             'psc': passed_count,
             'fsc': failed_count,

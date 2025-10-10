@@ -78,9 +78,9 @@ class GoogleOAuthService:
         plan_id = 1  # Default to plan ID 1 (Free)
 
         if is_admin_user:
-            # Admin users get Admin plan automatically (ID: 2)
+            # Admin users get Admin plan automatically (ID: 3)
             admin_plan = next((p for p in all_plans if p['name'] == 'Admin' and p.get('is_active', True)), None)
-            plan_id = admin_plan['id'] if admin_plan else 2
+            plan_id = admin_plan['id'] if admin_plan else 3
         elif plan_name:
             # Use provided plan name (must be active and not Admin)
             custom_plan = next((p for p in all_plans if p['name'] == plan_name and p.get('is_active', True) and p['name'] != 'Admin'), None)

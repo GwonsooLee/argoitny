@@ -20,7 +20,7 @@ fullnameOverride: ""
 serviceAccount:
   create: true
   annotations:
-    eks.amazonaws.com/role-arn: "arn:aws:iam::ACCOUNT_ID:role/algoitny-backend-role"
+    eks.amazonaws.com/role-arn: "arn:aws:iam::ACCOUNT_ID:role/eks-CLUSTER_NAME-algoitny-backend"
   name: "algoitny-backend-sa"
 
 # External Secrets Operator
@@ -74,7 +74,6 @@ gunicorn:
   env:
     DJANGO_SETTINGS_MODULE: config.settings_production
     WORKERS: "4"
-    WORKER_CLASS: sync
     TIMEOUT: "120"
 
 # Celery Worker deployment
@@ -215,6 +214,10 @@ config:
   CELERY_TASK_ALWAYS_EAGER: "False"
   CELERY_RESULT_BACKEND: "django-db"
   JUDGE0_ENDPOINT: "http://judge0-api:2358"
+
+  # AWS Resources
+  DYNAMODB_TABLE_NAME: "algoitny_main"
+  AWS_STORAGE_BUCKET_NAME: "algoitny-testcases-zteapne2"
 
 # Pod annotations
 podAnnotations: {}

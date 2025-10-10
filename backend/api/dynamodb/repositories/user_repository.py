@@ -224,23 +224,6 @@ class UserRepository(BaseRepository):
         """
         return self.update_user(user_id, {'subscription_plan_id': plan_id})
 
-    def list_users(self, limit: int = 100) -> List[Dict[str, Any]]:
-        """
-        List all users (scan operation - expensive, use sparingly)
-
-        Args:
-            limit: Maximum number of users to return
-
-        Returns:
-            List of user dicts
-        """
-        items = self.scan(
-            filter_expression=Attr('tp').eq('usr') & Attr('SK').eq('META'),
-            limit=limit
-        )
-
-        return [self._item_to_user_dict(item) for item in items]
-
     def list_active_users(self, limit: int = 1000) -> List[Dict[str, Any]]:
         """
         List all active users (scan operation - expensive, use sparingly)
@@ -317,29 +300,6 @@ class UserRepository(BaseRepository):
             True if deleted, False otherwise
         """
         return self.delete_item(f'USR#{user_id}', 'META')
-
-    def get_users_by_plan(self, plan_id: int, limit: int = 100) -> List[Dict[str, Any]]:
-        """
-        Get all users with a specific subscription plan (scan operation)
-
-        Args:
-            plan_id: Subscription plan ID
-            limit: Maximum number of users to return
-
-        Returns:
-            List of user dicts
-        """
-        items = self.scan(
-            filter_expression=(
-                Attr('tp').eq('usr') &
-                Attr('SK').eq('META') &
-                Attr('dat.plan').eq(plan_id) &
-                Attr('dat.act').eq(True)
-            ),
-            limit=limit
-        )
-
-        return [self._item_to_user_dict(item) for item in items]
 
     def batch_create_users(self, users_data: List[Dict[str, Any]]) -> bool:
         """

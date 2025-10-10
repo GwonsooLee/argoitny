@@ -107,25 +107,6 @@ resource "aws_autoscaling_group_tag" "aws_node_termination_handler_asg" {
 }
 
 
-# Event Bridge - only create if node groups exist
-resource "aws_cloudwatch_event_rule" "aws_node_termination_handler" {
-  for_each      = length(var.node_group_configurations) > 0 ? local.event_bridge_rules : {}
-  name          = each.value.name
-  event_pattern = jsonencode(each.value.event_pattern)
-}
-
-resource "aws_cloudwatch_event_target" "aws_node_termination_handler" {
-  for_each = length(var.node_group_configurations) > 0 ? local.event_bridge_rules : {}
-  rule     = each.value.name
-  arn      = aws_sqs_queue.aws_node_termination_handler_queue[0].arn
-
-  depends_on = [
-    aws_sqs_queue.aws_node_termination_handler_queue,
-    aws_cloudwatch_event_rule.aws_node_termination_handler
-  ]
-}
-
-
 # OIDC ( IAM Role for "aws_node_termination_handler" Pod ) - only create if node groups exist
 resource "aws_iam_role" "aws_node_termination_handler" {
   count              = length(var.node_group_configurations) > 0 ? 1 : 0

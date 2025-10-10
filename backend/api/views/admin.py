@@ -25,6 +25,33 @@ from api.serializers import (
 logger = logging.getLogger(__name__)
 
 
+async def get_cached_active_users(user_repo):
+    """
+    Get active users with caching (10 minutes TTL)
+
+    Caches the expensive list_active_users() SCAN operation
+    to reduce DynamoDB costs for admin operations.
+    """
+    cache_key = 'admin:active_users'
+
+    # Try cache first
+    cached_users = await sync_to_async(cache.get)(cache_key)
+    if cached_users is not None:
+        logger.debug(f"Cache HIT: {cache_key}")
+        return cached_users
+
+    logger.debug(f"Cache MISS: {cache_key}")
+
+    # Fetch from DynamoDB
+    users = await user_repo.list_active_users()
+
+    # Cache for 10 minutes
+    await sync_to_async(cache.set)(cache_key, users, 600)
+    logger.debug(f"Cached: {cache_key} (TTL: 600s)")
+
+    return users
+
+
 class IsAdminUser:
     """Permission class to check if user is admin"""
     def has_permission(self, request, view):
@@ -62,8 +89,8 @@ class UserManagementView(APIView):
                 # AsyncUsageLogRepository uses sync wrapper, don't pass async table
                 usage_repo = AsyncUsageLogRepository()
 
-                # Get all active users - async
-                users = await user_repo.list_active_users()
+                # Get all active users - async (cached for 10 minutes)
+                users = await get_cached_active_users(user_repo)
 
                 # Filter by subscription plan if provided
                 plan_id = request.query_params.get('plan_id')
@@ -99,19 +126,19 @@ class UserManagementView(APIView):
                             }
 
                     # Get usage stats for today - async
-                    user_id = user.get('id')
+                    user_email = user.get('email')
                     hints_today = 0
                     executions_today = 0
 
-                    if user_id:
-                        # Use get_daily_usage_count which is optimized for rate limiting
-                        hints_today = await usage_repo.get_daily_usage_count(
-                            user_id=user_id,
+                    if user_email:
+                        # Use email-based count (same as header usage)
+                        hints_today = await usage_repo.get_daily_usage_count_by_email(
+                            email=user_email,
                             action='hint',
                             date_str=today
                         )
-                        executions_today = await usage_repo.get_daily_usage_count(
-                            user_id=user_id,
+                        executions_today = await usage_repo.get_daily_usage_count_by_email(
+                            email=user_email,
                             action='execution',
                             date_str=today
                         )
@@ -271,8 +298,8 @@ class SubscriptionPlanManagementView(APIView):
                             status=status.HTTP_404_NOT_FOUND
                         )
 
-                    # Count users with this plan - async
-                    users = await user_repo.list_active_users()
+                    # Count users with this plan - async (cached)
+                    users = await get_cached_active_users(user_repo)
                     user_count = sum(1 for u in users if u.get('subscription_plan_id') == int(plan_id))
 
                     plan_data = {
@@ -293,7 +320,7 @@ class SubscriptionPlanManagementView(APIView):
 
                 # Get all plans - async
                 plans = await plan_repo.list_plans()
-                users = await user_repo.list_active_users()
+                users = await get_cached_active_users(user_repo)
 
             # Count users per plan (outside async context)
             plan_user_counts = {}
@@ -473,8 +500,8 @@ class SubscriptionPlanManagementView(APIView):
                         status=status.HTTP_404_NOT_FOUND
                     )
 
-                # Check if any users have this plan - async
-                users = await user_repo.list_active_users()
+                # Check if any users have this plan - async (cached)
+                users = await get_cached_active_users(user_repo)
                 user_count = sum(1 for u in users if u.get('subscription_plan_id') == int(plan_id))
 
                 if user_count > 0:
@@ -540,8 +567,8 @@ class UsageStatsView(APIView):
                 usage_repo = AsyncUsageLogRepository(table)
                 plan_repo = AsyncSubscriptionPlanRepository(table)
 
-                # Overall stats - async
-                active_users = await user_repo.list_active_users()
+                # Overall stats - async (cached)
+                active_users = await get_cached_active_users(user_repo)
                 total_users = len(active_users)
 
                 # Count total problems (completed only) - uses efficient GSI3 Query now - async

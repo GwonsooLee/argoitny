@@ -182,6 +182,9 @@ class ScriptGenerationJobRepository(BaseRepository):
             if key in field_mapping:
                 path, attr = field_mapping[key]
                 update_parts.append(f'{path} = :{attr}')
+                # Base64 encode generator_code
+                if key == 'generator_code' and value:
+                    value = base64.b64encode(value.encode('utf-8')).decode('utf-8')
                 expression_values[f':{attr}'] = value
 
         # Update GSI1PK and GSI1SK if status is being updated
@@ -426,6 +429,15 @@ class ScriptGenerationJobRepository(BaseRepository):
         """
         dat = item.get('dat', {})
 
+        # Decode base64-encoded generator_code
+        generator_code = dat.get('gen', '')
+        if generator_code:
+            try:
+                generator_code = base64.b64decode(generator_code.encode('utf-8')).decode('utf-8')
+            except Exception:
+                # If decoding fails, use the original value (backward compatibility)
+                pass
+
         return {
             'id': job_id,
             'job_id': job_id,  # Add job_id alias for compatibility
@@ -436,7 +448,7 @@ class ScriptGenerationJobRepository(BaseRepository):
             'tags': dat.get('tag', []),
             'language': dat.get('lng', ''),
             'constraints': dat.get('con', ''),
-            'generator_code': dat.get('gen', ''),
+            'generator_code': generator_code,
             'status': dat.get('sts', 'PENDING'),
             'celery_task_id': dat.get('tid', ''),
             'error_message': dat.get('err', ''),

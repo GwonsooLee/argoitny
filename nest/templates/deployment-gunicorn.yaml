@@ -62,10 +62,10 @@ spec:
           - /bin/sh
           - -c
           - |
-            gunicorn config.wsgi:application \
+            gunicorn config.asgi:application \
               --bind 0.0.0.0:8000 \
               --workers ${WORKERS} \
-              --worker-class ${WORKER_CLASS} \
+              --worker-class uvicorn.workers.UvicornWorker \
               --timeout ${TIMEOUT} \
               --access-logfile - \
               --error-logfile - \
@@ -84,8 +84,6 @@ spec:
           value: {{ .Values.gunicorn.env.DJANGO_SETTINGS_MODULE }}
         - name: WORKERS
           value: {{ .Values.gunicorn.env.WORKERS | quote }}
-        - name: WORKER_CLASS
-          value: {{ .Values.gunicorn.env.WORKER_CLASS }}
         - name: TIMEOUT
           value: {{ .Values.gunicorn.env.TIMEOUT | quote }}
         - name: POD_NAME

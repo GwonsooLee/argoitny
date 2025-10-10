@@ -1,25 +1,39 @@
 {
   "terms": {
-    "active_version": "2025-01-09",
+    "active_version": "2025-01-11",
     "versions": [
+      {
+        "version": "2025-01-11",
+        "effective_date": "2025-01-11",
+        "file": "terms/2025-01-11.md",
+        "title": "Terms of Service",
+        "is_active": true
+      },
       {
         "version": "2025-01-09",
         "effective_date": "2025-01-09",
         "file": "terms/2025-01-09.md",
         "title": "Terms of Service",
-        "is_active": true
+        "is_active": false
       }
     ]
   },
   "privacy": {
-    "active_version": "2025-01-09",
+    "active_version": "2025-01-11",
     "versions": [
+      {
+        "version": "2025-01-11",
+        "effective_date": "2025-01-11",
+        "file": "privacy/2025-01-11.md",
+        "title": "Privacy Policy",
+        "is_active": true
+      },
       {
         "version": "2025-01-09",
         "effective_date": "2025-01-09",
         "file": "privacy/2025-01-09.md",
         "title": "Privacy Policy",
-        "is_active": true
+        "is_active": false
       }
     ]
   }

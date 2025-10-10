@@ -50,7 +50,7 @@ resource "aws_fis_experiment_template" "aws_node_termination_handler_fis" {
 }
 
 resource "aws_iam_role" "aws_node_termination_handler_fis" {
-  name               = "eks-${local.handler_name}-fis-role"
+  name               = "eks-fis-role"
   assume_role_policy = <<-EOF
 {
     "Version": "2012-10-17",

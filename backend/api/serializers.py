@@ -192,16 +192,6 @@ class HintRequestSerializer(serializers.Serializer):
     test_results = serializers.ListField(child=serializers.DictField())
 
 
-class AccountStatsSerializer(serializers.Serializer):
-    """Account statistics serializer"""
-    total_executions = serializers.IntegerField()
-    by_platform = serializers.DictField()
-    by_language = serializers.DictField()
-    total_problems = serializers.IntegerField()
-    passed_executions = serializers.IntegerField()
-    failed_executions = serializers.IntegerField()
-
-
 class LLMConfigSerializer(serializers.Serializer):
     """
     LLM configuration serializer for SOLUTION CODE GENERATION ONLY

@@ -1,6 +1,15 @@
 # DynamoDB Table for AlgoItny
-# Based on Single Table Design V2
-# Reference: backend/api/dynamodb/table_schema.py
+# Single Table Design with optimized access patterns
+# Reference: backend/api/dynamodb/repositories/
+#
+# Entities: User, Problem, SearchHistory, UsageLog, SubscriptionPlan, UserStats, Jobs
+#
+# Access Pattern Optimizations (from dynamodb-architect analysis):
+# - Removed expensive SCAN operations (list_users, get_users_by_plan, list_problems_needing_review)
+# - Added caching for list_active_users (10min TTL, 90% cost reduction)
+# - UsageLog with date-partitioned PK for efficient rate limiting (1-3ms latency, 0.5 RCU)
+# - UserStats for O(1) unique problem counting (125 RCU → 0.5 RCU)
+# - TTL-based auto-cleanup for usage logs (90 days)
 
 resource "aws_dynamodb_table" "algoitny_main" {
   name           = "${var.project_name}_main"
@@ -22,7 +31,8 @@ resource "aws_dynamodb_table" "algoitny_main" {
     type = "S"
   }
 
-  # GSI1 Attributes: User authentication by email/google_id
+  # GSI1 Attributes: User email lookups & user history queries
+  # Used by: UserRepository (email→user), SearchHistoryRepository (user→history)
   attribute {
     name = "GSI1PK"
     type = "S"
@@ -33,7 +43,8 @@ resource "aws_dynamodb_table" "algoitny_main" {
     type = "S"
   }
 
-  # GSI2 Attributes: Public history timeline
+  # GSI2 Attributes: Google OAuth & public history timeline
+  # Used by: UserRepository (google_id→user), SearchHistoryRepository (public timeline)
   attribute {
     name = "GSI2PK"
     type = "S"
@@ -44,7 +55,8 @@ resource "aws_dynamodb_table" "algoitny_main" {
     type = "S"
   }
 
-  # GSI3 Attributes: Problem status index (completed/draft)
+  # GSI3 Attributes: Problem status queries (completed/draft/needs_review)
+  # Used by: ProblemRepository (status-based problem queries)
   attribute {
     name = "GSI3PK"
     type = "S"
@@ -55,7 +67,13 @@ resource "aws_dynamodb_table" "algoitny_main" {
     type = "N"
   }
 
-  # GSI1: User Authentication Index
+  # GSI1: Multi-purpose index for user and history access patterns
+  # Pattern 1: User email lookup
+  #   - GSI1PK = "EMAIL#{email}"
+  #   - GSI1SK = "USR#{user_id}"
+  # Pattern 2: User's search history
+  #   - GSI1PK = "USER#{user_id}"
+  #   - GSI1SK = "HIST#{timestamp}"
   global_secondary_index {
     name            = "GSI1"
     hash_key        = "GSI1PK"
@@ -63,7 +81,13 @@ resource "aws_dynamodb_table" "algoitny_main" {
     projection_type = "ALL"
   }
 
-  # GSI2: Public History Timeline Index
+  # GSI2: Multi-purpose index for Google auth and public content
+  # Pattern 1: Google OAuth lookup (no SK needed)
+  #   - GSI2PK = "GID#{google_id}"
+  # Pattern 2: Public history timeline (time-partitioned to avoid hot partition)
+  #   - GSI2PK = "PUBLIC#HIST" or "PUBLIC#HIST#{YYYYMMDDHH}"
+  #   - GSI2SK = "{timestamp}"
+  # Note: KEYS_ONLY projection for cost efficiency (fetch full items separately if needed)
   global_secondary_index {
     name            = "GSI2"
     hash_key        = "GSI2PK"
@@ -71,7 +95,10 @@ resource "aws_dynamodb_table" "algoitny_main" {
     projection_type = "KEYS_ONLY"
   }
 
-  # GSI3: Problem Status Index
+  # GSI3: Problem status index for admin/filtering queries
+  # Pattern: Query problems by status
+  #   - GSI3PK = "STATUS#{completed|draft|needs_review}"
+  #   - GSI3SK = {timestamp_numeric} (sorted chronologically)
   global_secondary_index {
     name            = "GSI3"
     hash_key        = "GSI3PK"
@@ -94,7 +121,9 @@ resource "aws_dynamodb_table" "algoitny_main" {
   }
 
   # Time to Live (TTL) for automatic data expiration
-  # Can be used for usage logs, sessions, etc.
+  # Used by: UsageLog (90-day auto-cleanup of rate limit logs)
+  # Items with ttl attribute set will be automatically deleted after the specified timestamp
+  # Cost optimization: Eliminates need for manual cleanup jobs
   ttl {
     attribute_name = "ttl"
     enabled        = true

@@ -51,7 +51,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy Python packages from builder (only necessary files)
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
-COPY --from=builder /usr/local/bin/gunicorn /usr/local/bin/celery /usr/local/bin/django-admin /usr/local/bin/
+COPY --from=builder /usr/local/bin/gunicorn /usr/local/bin/uvicorn /usr/local/bin/celery /usr/local/bin/django-admin /usr/local/bin/
 
 # Create non-root user
 RUN groupadd -r django && useradd -r -g django -u 1000 -m django
@@ -61,12 +61,15 @@ WORKDIR /app
 
 # Copy application code
 COPY --chown=django:django manage.py ./
+COPY --chown=django:django gunicorn.conf.py ./
 COPY --chown=django:django config ./config
 COPY --chown=django:django api ./api
+COPY --chown=django:django scripts ./scripts
 
 # Create necessary directories and collect static files
-RUN mkdir -p /app/staticfiles /app/mediafiles && \
-    chown -R django:django /app
+RUN mkdir -p /app/staticfiles /app/mediafiles /app/logs /app/tmp && \
+    chown -R django:django /app && \
+    chmod +x /app/scripts/*.sh
 
 # Switch to non-root user for collectstatic
 USER django
@@ -91,4 +94,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 
 # Default command (can be overridden in Kubernetes)
-CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120"]
+CMD ["gunicorn", "config.asgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--worker-class", "uvicorn.workers.UvicornWorker", "--timeout", "120"]

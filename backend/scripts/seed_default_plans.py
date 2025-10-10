@@ -127,6 +127,17 @@ def seed_default_plans():
         },
         {
             'id': 2,
+            'name': 'Pro',
+            'description': 'Pro plan with enhanced features',
+            'max_hints_per_day': 30,
+            'max_executions_per_day': 200,
+            'max_problems': -1,  # Unlimited
+            'can_view_all_problems': True,
+            'can_register_problems': False,
+            'is_active': True,
+        },
+        {
+            'id': 3,
             'name': 'Admin',
             'description': 'Full access plan for administrators',
             'max_hints_per_day': -1,  # Unlimited

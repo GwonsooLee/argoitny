@@ -36,9 +36,9 @@ const PlanSelector = ({ onSelectPlan, selectedPlan = 'Free', showComingSoon = tr
     }
   };
 
-  // Check if plan is coming soon (Pro or Pro+)
+  // Check if plan is coming soon (Pro only - payment module not available yet)
   const isComingSoon = (planName) => {
-    return showComingSoon && (planName === 'Pro' || planName === 'Pro+');
+    return showComingSoon && planName === 'Pro';
   };
 
   const handlePlanClick = (planName) => {

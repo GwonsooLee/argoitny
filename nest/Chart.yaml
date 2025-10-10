@@ -1,14 +1,18 @@
 apiVersion: v2
 name: algoitny-backend
-description: AlgoItny Backend Service - Django REST API with Celery
+description: AlgoItny Backend Service - Django ASGI REST API with Gunicorn/Uvicorn and Celery
 type: application
 version: 1.0.0
 appVersion: "1.0.0"
 keywords:
   - django
+  - gunicorn
+  - uvicorn
+  - asgi
   - celery
   - rest-api
   - algoitny
+  - async
 maintainers:
   - name: AlgoItny Team
 home: https://testcase.run

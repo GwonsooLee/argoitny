@@ -18,7 +18,6 @@ import {
 import {
   History as HistoryIcon,
   Add as AddIcon,
-  Settings as SettingsIcon,
   Logout as LogoutIcon,
   AdminPanelSettings as AdminIcon
 } from '@mui/icons-material';
@@ -36,10 +35,8 @@ import Footer from './components/Footer';
 import About from './components/About';
 import TermsOfService from './components/TermsOfService';
 import PrivacyPolicy from './components/PrivacyPolicy';
-import AccountDetail from './components/AccountDetail';
 import AdminUserManagement from './components/AdminUserManagement';
 import AdminPlanManagement from './components/AdminPlanManagement';
-import AdminStats from './components/AdminStats';
 import PlanSelectionModal from './components/PlanSelectionModal';
 import { getUser, saveUser, logout, isAuthenticated, refreshToken } from './utils/auth';
 import { apiGet } from './utils/api-client';
@@ -149,14 +146,10 @@ function App() {
       setCurrentView('problems');
     } else if (path === '/history') {
       setCurrentView('history');
-    } else if (path === '/account') {
-      setCurrentView('account');
     } else if (path === '/admin/users') {
       setCurrentView('admin-users');
     } else if (path === '/admin/plans') {
       setCurrentView('admin-plans');
-    } else if (path === '/admin/stats') {
-      setCurrentView('admin-stats');
     } else if (path === '/terms') {
       setCurrentView('terms');
     } else if (path === '/privacy') {
@@ -291,7 +284,6 @@ function App() {
       setCurrentView(returnToView);
       const viewUrlMap = {
         'history': '/history',
-        'account': '/account',
         'problems': '/problems',
         'register': '/register'
       };
@@ -567,15 +559,6 @@ function App() {
                       </Box>
                     )}
                   </Box>
-                  <Divider />
-                  <MenuItem onClick={() => {
-                    setAnchorEl(null);
-                    setCurrentView('account');
-                    window.history.pushState({}, '', '/account');
-                  }}>
-                    <SettingsIcon sx={{ mr: 1 }} fontSize="small" />
-                    Account Statistics
-                  </MenuItem>
                   {user.is_admin && [
                     <Divider key="admin-divider-1" />,
                     <MenuItem key="admin-users" onClick={() => {
@@ -593,14 +576,6 @@ function App() {
                     }}>
                       <AdminIcon sx={{ mr: 1 }} fontSize="small" />
                       Plan Management
-                    </MenuItem>,
-                    <MenuItem key="admin-stats" onClick={() => {
-                      setAnchorEl(null);
-                      setCurrentView('admin-stats');
-                      window.history.pushState({}, '', '/admin/stats');
-                    }}>
-                      <AdminIcon sx={{ mr: 1 }} fontSize="small" />
-                      Usage Statistics
                     </MenuItem>
                   ]}
                   <Divider />
@@ -761,10 +736,6 @@ function App() {
               <SearchHistory onRequestLogin={() => handleRequestLogin('history')} />
             )}
 
-            {currentView === 'account' && (
-              <AccountDetail onRequestLogin={() => handleRequestLogin('account')} />
-            )}
-
             {currentView === 'problems' && (
               <Problems
                 onViewProblem={(platform, problemId) => {
@@ -803,10 +774,6 @@ function App() {
 
             {currentView === 'admin-plans' && (
               <AdminPlanManagement />
-            )}
-
-            {currentView === 'admin-stats' && (
-              <AdminStats />
             )}
 
             {currentView === 'terms' && (
@@ -868,7 +835,6 @@ function App() {
               setCurrentView(returnToView);
               const viewUrlMap = {
                 'history': '/history',
-                'account': '/account',
                 'problems': '/problems',
                 'register': '/register'
               };

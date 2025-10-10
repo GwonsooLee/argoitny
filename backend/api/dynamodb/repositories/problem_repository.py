@@ -643,52 +643,6 @@ class ProblemRepository(BaseRepository):
 
         return problems, next_key
 
-    def list_problems_needing_review(
-        self,
-        limit: int = 100
-    ) -> List[Dict[str, Any]]:
-        """
-        List problems that need admin review (scan operation)
-
-        Args:
-            limit: Maximum number of problems to return
-
-        Returns:
-            List of problem dictionaries needing review
-        """
-        items = self.scan(
-            filter_expression=Attr('tp').eq('prob') &
-                            Attr('dat.nrv').eq(True) &
-                            Attr('dat.del').eq(False) &
-                            Attr('SK').eq('META'),
-            limit=limit
-        )
-
-        problems = []
-        for item in items:
-            pk_parts = item['PK'].split('#')
-            if len(pk_parts) >= 3:
-                platform = pk_parts[1]
-                problem_id = '#'.join(pk_parts[2:])
-
-                problems.append({
-                    'platform': platform,
-                    'problem_id': problem_id,
-                    'title': item['dat'].get('tit', ''),
-                    'problem_url': item['dat'].get('url', ''),
-                    'tags': item['dat'].get('tag', []),
-                    'language': item['dat'].get('lng', ''),
-                    'needs_review': item['dat'].get('nrv', False),
-                    'review_notes': item['dat'].get('rvn'),
-                    'verified_by_admin': item['dat'].get('vrf', False),
-                    'created_at': item.get('crt'),
-                    'updated_at': item.get('upd')
-                })
-
-        # Sort by created_at ascending (oldest first)
-        problems.sort(key=lambda x: x.get('created_at', 0))
-        return problems
-
     def soft_delete_problem(
         self,
         platform: str,

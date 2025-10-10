@@ -12,3 +12,8 @@ data:
   CELERY_TASK_ALWAYS_EAGER: {{ .Values.config.CELERY_TASK_ALWAYS_EAGER | quote }}
   CELERY_RESULT_BACKEND: {{ .Values.config.CELERY_RESULT_BACKEND | quote }}
   JUDGE0_ENDPOINT: {{ .Values.config.JUDGE0_ENDPOINT | quote }}
+
+  # AWS Resources
+  AWS_REGION: {{ .Values.global.region | quote }}
+  DYNAMODB_TABLE_NAME: {{ .Values.config.DYNAMODB_TABLE_NAME | quote }}
+  AWS_STORAGE_BUCKET_NAME: {{ .Values.config.AWS_STORAGE_BUCKET_NAME | quote }}
