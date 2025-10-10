@@ -17,6 +17,6 @@ worker_max_size         = 5
 worker_desired_capacity = 1
 
 # Application Configuration
-image_tag        = "v0.0.6"
+image_tag        = "v0.0.7"
 allowed_hosts    = "api.testcase.run,*.testcase.run"
 gunicorn_workers = 4

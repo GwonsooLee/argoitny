@@ -97,11 +97,11 @@ echo ""
 echo "========================================="
 echo "🚀 Starting Celery Worker"
 echo "========================================="
-echo "Command: celery -A config worker --loglevel=INFO --concurrency=4 --pool=threads --prefetch-multiplier=1 --queues=celery,ai,generation,execution,maintenance"
+echo "Command: celery -A config worker --loglevel=INFO --concurrency=4 --pool=threads --prefetch-multiplier=1 --queues=jobs,celery,ai,generation,execution,maintenance"
 echo ""
 
 # Run celery with explicit settings and all queues
 # --prefetch-multiplier=1: Each worker prefetches only 1 task at a time
 # With 4 workers, total prefetch = 4 (not 16)
 export DJANGO_SETTINGS_MODULE=config.settings
-exec celery -A config worker --loglevel=INFO --concurrency=4 --pool=threads --prefetch-multiplier=1 --queues=celery,ai,generation,execution,maintenance
+exec celery -A config worker --loglevel=INFO --concurrency=4 --pool=threads --prefetch-multiplier=1 --queues=jobs,celery,ai,generation,execution,maintenance
