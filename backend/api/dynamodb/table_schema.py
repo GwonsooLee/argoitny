@@ -21,7 +21,7 @@ def get_table_schema():
             {'AttributeName': 'GSI1SK', 'AttributeType': 'S'},  # String for job timestamps and user IDs
             # GSI2 attributes (Google ID lookup - HASH only, no RANGE key)
             {'AttributeName': 'GSI2PK', 'AttributeType': 'S'},
-            # GSI3 attributes (Problem status index)
+            # GSI3 attributes (Problem status index - completed/draft)
             {'AttributeName': 'GSI3PK', 'AttributeType': 'S'},
             {'AttributeName': 'GSI3SK', 'AttributeType': 'N'},
         ],

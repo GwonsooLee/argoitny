@@ -197,7 +197,7 @@ function Problems({ onViewProblem }) {
             gap: { xs: 1, sm: 0 }
           }}>
             <Box sx={{ flexGrow: 1, width: { xs: '100%', sm: 'auto' } }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5, flexWrap: 'wrap' }}>
                 {isExtracting && (
                   <CircularProgress
                     size={20}
@@ -216,6 +216,17 @@ function Problems({ onViewProblem }) {
                 >
                   {problem.title}
                 </Typography>
+                {problem.needs_review && (
+                  <Chip
+                    label="Needs Review"
+                    color="warning"
+                    size="small"
+                    sx={{
+                      fontSize: { xs: '0.688rem', sm: '0.75rem' },
+                      fontWeight: 600
+                    }}
+                  />
+                )}
                 {problem.extraction_status && (
                   <Chip
                     label={problem.extraction_status}
@@ -288,10 +299,11 @@ function Problems({ onViewProblem }) {
                   e.stopPropagation();
                   handleGenerateScript(problem);
                 }}
-                disabled={executingJobs[problem.id] || !problem.solution_code || !problem.constraints || problem.is_extracting || problem.extraction_status === 'PROCESSING' || problem.extraction_status === 'PENDING'}
+                disabled={executingJobs[problem.id] || !problem.solution_code || !problem.constraints || problem.is_extracting || problem.extraction_status === 'PROCESSING' || problem.extraction_status === 'PENDING' || problem.needs_review}
                 sx={{
                   p: { xs: 1, sm: 1 }
                 }}
+                title={problem.needs_review ? "Cannot generate script - needs review" : "Generate test cases"}
               >
                 <PlayArrowIcon sx={{ fontSize: { xs: '1.125rem', sm: '1.25rem' } }} />
               </IconButton>

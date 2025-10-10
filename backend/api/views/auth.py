@@ -1,21 +1,30 @@
 """
-Authentication Views
+Authentication Views - Async Version
 
 This module handles user authentication using Google OAuth and JWT tokens.
 User data is stored in DynamoDB via UserRepository, accessed through GoogleOAuthService.
 SubscriptionPlan configuration data remains in PostgreSQL via Django ORM.
 """
 from rest_framework import status
-from rest_framework.views import APIView
+from adrf.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError
+from asgiref.sync import sync_to_async
 from ..services.google_oauth import GoogleOAuthService
 from ..serializers import SubscriptionPlanSerializer
-# from ..models import SubscriptionPlan  # REMOVED - using DynamoDB SubscriptionPlanRepository
 from ..utils.jwt_helper import generate_tokens_for_user
 from ..utils.serializer_helper import serialize_dynamodb_user
+from ..dynamodb.async_client import AsyncDynamoDBClient
+from ..dynamodb.async_repositories import (
+    AsyncUserRepository,
+    AsyncSubscriptionPlanRepository
+)
+from ..dynamodb.client import DynamoDBClient
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class GoogleLoginView(APIView):
@@ -26,7 +35,7 @@ class GoogleLoginView(APIView):
     """
     permission_classes = [AllowAny]
 
-    def post(self, request):
+    async def post(self, request):
         """
         Login with Google ID token
 
@@ -62,21 +71,24 @@ class GoogleLoginView(APIView):
             )
 
         try:
-            # Verify Google token and get user info
-            google_user_info = GoogleOAuthService.verify_token(token)
+            # Verify Google token (sync operation wrapped in async)
+            google_user_info = await sync_to_async(GoogleOAuthService.verify_token)(token)
 
-            # Get or create user in DynamoDB (returns dict)
+            # Get or create user in DynamoDB (sync operation wrapped in async)
             # GoogleOAuthService internally uses UserRepository for DynamoDB operations
             # Returns: (user_dict, created_boolean)
-            user_dict, created = GoogleOAuthService.get_or_create_user(google_user_info, plan_name)
+            user_dict, created = await sync_to_async(GoogleOAuthService.get_or_create_user)(
+                google_user_info,
+                plan_name
+            )
 
-            # Generate JWT tokens from user dict
+            # Generate JWT tokens from user dict (sync operation wrapped in async)
             # JWT helper works with user dicts (not Django User objects)
-            tokens = generate_tokens_for_user(user_dict)
+            tokens = await sync_to_async(generate_tokens_for_user)(user_dict)
 
-            # Serialize user data to match expected frontend format
+            # Serialize user data to match expected frontend format (sync operation wrapped in async)
             # Converts DynamoDB user dict to API response format
-            serialized_user = serialize_dynamodb_user(user_dict)
+            serialized_user = await sync_to_async(serialize_dynamodb_user)(user_dict)
 
             return Response({
                 'user': serialized_user,
@@ -91,6 +103,7 @@ class GoogleLoginView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED
             )
         except Exception as e:
+            logger.error(f"Login failed: {str(e)}")
             return Response(
                 {'error': f'Login failed: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -105,7 +118,7 @@ class TokenRefreshView(APIView):
     """
     permission_classes = [AllowAny]
 
-    def post(self, request):
+    async def post(self, request):
         """
         Refresh JWT access token
 
@@ -128,16 +141,31 @@ class TokenRefreshView(APIView):
             )
 
         try:
-            refresh = RefreshToken(refresh_token)
+            # RefreshToken operations are synchronous, wrap in sync_to_async
+            def create_refresh_token():
+                return RefreshToken(refresh_token)
+
+            refresh = await sync_to_async(create_refresh_token)()
 
             # Get new access token
+            def get_access_token():
+                return str(refresh.access_token)
+
+            access_token = await sync_to_async(get_access_token)()
+
             response_data = {
-                'access': str(refresh.access_token),
+                'access': access_token,
             }
 
             # If token rotation is enabled, return new refresh token
-            if hasattr(refresh, 'refresh_token'):
-                response_data['refresh'] = str(refresh)
+            def check_rotation():
+                if hasattr(refresh, 'refresh_token'):
+                    return str(refresh)
+                return None
+
+            new_refresh = await sync_to_async(check_rotation)()
+            if new_refresh:
+                response_data['refresh'] = new_refresh
 
             return Response(response_data, status=status.HTTP_200_OK)
 
@@ -147,6 +175,7 @@ class TokenRefreshView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED
             )
         except Exception as e:
+            logger.error(f"Token refresh failed: {str(e)}")
             return Response(
                 {'error': f'Token refresh failed: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -161,7 +190,7 @@ class LogoutView(APIView):
     """
     permission_classes = [IsAuthenticated]
 
-    def post(self, request):
+    async def post(self, request):
         """
         Logout by blacklisting refresh token
 
@@ -183,8 +212,12 @@ class LogoutView(APIView):
             )
 
         try:
-            token = RefreshToken(refresh_token)
-            token.blacklist()
+            # Wrap token operations in sync_to_async
+            def blacklist_token():
+                token = RefreshToken(refresh_token)
+                token.blacklist()
+
+            await sync_to_async(blacklist_token)()
 
             return Response(
                 {'message': 'Logged out successfully'},
@@ -197,6 +230,7 @@ class LogoutView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED
             )
         except Exception as e:
+            logger.error(f"Logout failed: {str(e)}")
             return Response(
                 {'error': f'Logout failed: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -211,7 +245,7 @@ class AvailablePlansView(APIView):
     """
     permission_classes = [AllowAny]
 
-    def get(self, request):
+    async def get(self, request):
         """
         Get list of available subscription plans from DynamoDB
 
@@ -232,14 +266,13 @@ class AvailablePlansView(APIView):
             ]
         """
         try:
-            from ..dynamodb.client import DynamoDBClient
-            from ..dynamodb.repositories import SubscriptionPlanRepository
+            # Initialize async DynamoDB repository with aioboto3 table
+            async with AsyncDynamoDBClient.get_resource() as resource:
+                table = await resource.Table(AsyncDynamoDBClient._table_name)
+                plan_repo = AsyncSubscriptionPlanRepository(table)
 
-            table = DynamoDBClient.get_table()
-            plan_repo = SubscriptionPlanRepository(table)
-
-            # Get all plans from DynamoDB
-            all_plans = plan_repo.list_plans()
+                # Get all plans from DynamoDB (async)
+                all_plans = await plan_repo.list_plans()
 
             # Filter: only active plans, exclude Admin plan
             plans = [
@@ -253,6 +286,7 @@ class AvailablePlansView(APIView):
             return Response(plans, status=status.HTTP_200_OK)
 
         except Exception as e:
+            logger.error(f"Failed to fetch plans: {str(e)}")
             return Response(
                 {'error': f'Failed to fetch plans: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR

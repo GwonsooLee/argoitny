@@ -1,14 +1,16 @@
-"""Search History Views - DynamoDB Implementation"""
+"""Search History Views - Async DynamoDB Implementation"""
 import base64
 import json
 from rest_framework import status
-from rest_framework.views import APIView
+from adrf.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from django.core.exceptions import ValidationError
+from asgiref.sync import sync_to_async
+from django.core.cache import cache
 
-from api.dynamodb.client import DynamoDBClient
-from api.dynamodb.repositories import SearchHistoryRepository
+from api.dynamodb.async_client import AsyncDynamoDBClient
+from api.dynamodb.async_repositories import AsyncSearchHistoryRepository
 # DISABLED: from ..tasks import generate_hints_task
 # DISABLED: from ..utils.rate_limit import check_rate_limit, log_usage
 
@@ -17,7 +19,7 @@ class SearchHistoryListView(APIView):
     """Search history list endpoint with cursor-based pagination"""
     permission_classes = [AllowAny]
 
-    def get(self, request):
+    async def get(self, request):
         """
         Get search history with cursor-based pagination
 
@@ -68,16 +70,20 @@ class SearchHistoryListView(APIView):
                         status=status.HTTP_400_BAD_REQUEST
                     )
 
-            # Initialize DynamoDB repository
-            table = DynamoDBClient.get_table()
-            history_repo = SearchHistoryRepository(table)
+            # Initialize async DynamoDB repository
+            # Note: AsyncSearchHistoryRepository wraps sync repository with sync_to_async
+            # so we don't pass async table - let it create its own sync table
+            history_repo = AsyncSearchHistoryRepository()
 
             # Fetch history based on filters
             if my_only:
-                if request.user.is_authenticated:
+                # Check if user is authenticated (sync operation)
+                is_authenticated = await sync_to_async(lambda: request.user.is_authenticated)()
+                if is_authenticated:
                     # Show only current user's history
-                    items, next_key = history_repo.list_user_history(
-                        user_id=request.user.id,
+                    user_id = await sync_to_async(lambda: request.user.id)()
+                    items, next_key = await history_repo.list_user_history(
+                        user_id=user_id,
                         limit=limit,
                         last_evaluated_key=last_evaluated_key
                     )
@@ -89,7 +95,8 @@ class SearchHistoryListView(APIView):
                 # For public timeline, always show public history
                 # Note: User's own private history requires separate implementation
                 # since we need to merge two queries (user history + public history)
-                if request.user.is_authenticated:
+                is_authenticated = await sync_to_async(lambda: request.user.is_authenticated)()
+                if is_authenticated:
                     # TODO: For authenticated users showing "my history + public history",
                     # we need to implement a merge strategy or use two separate queries.
                     # For now, we'll show public history only.
@@ -97,13 +104,13 @@ class SearchHistoryListView(APIView):
                     # 1. Query user's history separately
                     # 2. Query public history separately
                     # 3. Merge and sort by timestamp
-                    items, next_key = history_repo.list_public_history(
+                    items, next_key = await history_repo.list_public_history(
                         limit=limit,
                         last_evaluated_key=last_evaluated_key
                     )
                 else:
                     # Anonymous users see only public history
-                    items, next_key = history_repo.list_public_history(
+                    items, next_key = await history_repo.list_public_history(
                         limit=limit,
                         last_evaluated_key=last_evaluated_key
                     )
@@ -112,7 +119,7 @@ class SearchHistoryListView(APIView):
             results = []
             for item in items:
                 try:
-                    serialized = self._transform_item_to_list_format(item, request)
+                    serialized = await self._transform_item_to_list_format(item, request)
                     results.append(serialized)
                 except Exception as e:
                     # Skip invalid items
@@ -142,7 +149,7 @@ class SearchHistoryListView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-    def _transform_item_to_list_format(self, item: dict, request) -> dict:
+    async def _transform_item_to_list_format(self, item: dict, request) -> dict:
         """
         Transform DynamoDB item to SearchHistoryListSerializer format
 
@@ -189,10 +196,16 @@ class SearchHistoryListView(APIView):
         # Check if code should be visible
         is_public = dat.get('pub', False)
         is_owner = False
-        if request.user.is_authenticated:
-            if dat.get('uid') == request.user.id:
+
+        # Check authentication and ownership (sync operations)
+        is_authenticated = await sync_to_async(lambda: request.user.is_authenticated)()
+        if is_authenticated:
+            user_id = await sync_to_async(lambda: request.user.id)()
+            user_email_current = await sync_to_async(lambda: request.user.email)()
+
+            if dat.get('uid') == user_id:
                 is_owner = True
-            elif dat.get('uidt') == request.user.email:
+            elif dat.get('uidt') == user_email_current:
                 is_owner = True
 
         show_code = is_public or is_owner
@@ -241,7 +254,7 @@ class SearchHistoryDetailView(APIView):
     """Search history detail endpoint - Owner only"""
     permission_classes = [IsAuthenticated]
 
-    def get(self, request, history_id):
+    async def get(self, request, history_id):
         """
         Get detailed search history with full code (Owner only)
 
@@ -268,12 +281,13 @@ class SearchHistoryDetailView(APIView):
             }
         """
         try:
-            # Initialize DynamoDB repository
-            table = DynamoDBClient.get_table()
-            history_repo = SearchHistoryRepository(table)
+            # Initialize async DynamoDB repository
+            # Note: AsyncSearchHistoryRepository wraps sync repository with sync_to_async
+            # so we don't pass async table - let it create its own sync table
+            history_repo = AsyncSearchHistoryRepository()
 
             # Get history with test cases
-            item = history_repo.get_history_with_testcases(history_id)
+            item = await history_repo.get_history_with_testcases(history_id)
 
             if not item:
                 return Response(
@@ -285,10 +299,13 @@ class SearchHistoryDetailView(APIView):
 
             # Verify ownership: Only the owner can view detailed history
             is_owner = False
+            user_id = await sync_to_async(lambda: request.user.id)()
+            user_email = await sync_to_async(lambda: request.user.email)()
+
             if dat.get('uid'):
-                is_owner = dat['uid'] == request.user.id
+                is_owner = dat['uid'] == user_id
             elif dat.get('uidt'):
-                is_owner = dat['uidt'] == request.user.email
+                is_owner = dat['uidt'] == user_email
 
             if not is_owner:
                 return Response(
@@ -303,7 +320,7 @@ class SearchHistoryDetailView(APIView):
             # Note: In DynamoDB, test results may already be embedded in the history
             # If we need to fetch from Django TestCase model, we can do it here
             if result.get('test_results'):
-                result['test_results'] = self._enrich_test_results(result['test_results'])
+                result['test_results'] = await self._enrich_test_results(result['test_results'])
 
             return Response(result, status=status.HTTP_200_OK)
 
@@ -349,7 +366,7 @@ class SearchHistoryDetailView(APIView):
 
         return result
 
-    def _enrich_test_results(self, test_results: list) -> list:
+    async def _enrich_test_results(self, test_results: list) -> list:
         """
         Enrich test results with input and expected output from Django TestCase model
 
@@ -368,8 +385,10 @@ class SearchHistoryDetailView(APIView):
         # Import Django model for test cases
         from ..models import TestCase
 
-        # Fetch test cases efficiently
-        test_cases = TestCase.objects.filter(id__in=test_case_ids).only('id', 'input', 'output').in_bulk()
+        # Fetch test cases efficiently (use sync_to_async for Django ORM)
+        test_cases = await sync_to_async(
+            lambda: dict(TestCase.objects.filter(id__in=test_case_ids).only('id', 'input', 'output').in_bulk())
+        )()
 
         # Enrich results
         enriched = []
@@ -396,7 +415,7 @@ class GenerateHintsView(APIView):
     """Generate hints for a failed code execution"""
     permission_classes = [IsAuthenticated]
 
-    def post(self, request, history_id):
+    async def post(self, request, history_id):
         """
         Request hint generation for a specific execution
 
@@ -410,25 +429,26 @@ class GenerateHintsView(APIView):
                 "message": "Hint generation started"
             }
         """
-        # Check rate limit
-        allowed, current_count, limit, message = check_rate_limit(request.user, 'hint')
-        if not allowed:
-            return Response(
-                {
-                    'error': message,
-                    'current_count': current_count,
-                    'limit': limit
-                },
-                status=status.HTTP_429_TOO_MANY_REQUESTS
-            )
+        # Check rate limit (disabled for now)
+        # allowed, current_count, limit, message = await sync_to_async(check_rate_limit)(request.user, 'hint')
+        # if not allowed:
+        #     return Response(
+        #         {
+        #             'error': message,
+        #             'current_count': current_count,
+        #             'limit': limit
+        #         },
+        #         status=status.HTTP_429_TOO_MANY_REQUESTS
+        #     )
 
         try:
-            # Initialize DynamoDB repository
-            table = DynamoDBClient.get_table()
-            history_repo = SearchHistoryRepository(table)
+            # Initialize async DynamoDB repository
+            # Note: AsyncSearchHistoryRepository wraps sync repository with sync_to_async
+            # so we don't pass async table - let it create its own sync table
+            history_repo = AsyncSearchHistoryRepository()
 
             # Get the history record
-            item = history_repo.get_history(history_id)
+            item = await history_repo.get_history(history_id)
 
             if not item:
                 return Response(
@@ -453,35 +473,40 @@ class GenerateHintsView(APIView):
                     'message': 'Hints already exist'
                 }, status=status.HTTP_200_OK)
 
-            # Start async task
-            task = generate_hints_task.delay(history_id)
+            # Start async task (disabled for now)
+            # task = await sync_to_async(generate_hints_task.delay)(history_id)
 
-            # Log usage
-            # Note: problem reference might need to be fetched from Django if needed
-            from ..models import Problem
-            problem = None
-            if dat.get('pid'):
-                try:
-                    problem = Problem.objects.get(id=dat['pid'])
-                except Problem.DoesNotExist:
-                    pass
+            # # Log usage
+            # # Note: problem reference might need to be fetched from Django if needed
+            # from ..models import Problem
+            # problem = None
+            # if dat.get('pid'):
+            #     try:
+            #         problem = await sync_to_async(Problem.objects.get)(id=dat['pid'])
+            #     except Problem.DoesNotExist:
+            #         pass
 
-            log_usage(
-                user=request.user,
-                action='hint',
-                problem=problem,
-                metadata={'history_id': history_id, 'task_id': task.id}
+            # await sync_to_async(log_usage)(
+            #     user=request.user,
+            #     action='hint',
+            #     problem=problem,
+            #     metadata={'history_id': history_id, 'task_id': task.id}
+            # )
+
+            # return Response({
+            #     'task_id': task.id,
+            #     'status': 'PENDING',
+            #     'message': 'Hint generation started',
+            #     'usage': {
+            #         'current_count': current_count + 1,
+            #         'limit': limit
+            #     }
+            # }, status=status.HTTP_202_ACCEPTED)
+
+            return Response(
+                {'error': 'Hint generation is currently disabled'},
+                status=status.HTTP_501_NOT_IMPLEMENTED
             )
-
-            return Response({
-                'task_id': task.id,
-                'status': 'PENDING',
-                'message': 'Hint generation started',
-                'usage': {
-                    'current_count': current_count + 1,
-                    'limit': limit
-                }
-            }, status=status.HTTP_202_ACCEPTED)
 
         except Exception as e:
             return Response(
@@ -494,7 +519,7 @@ class GetHintsView(APIView):
     """Get hints for a specific execution"""
     permission_classes = [AllowAny]
 
-    def get(self, request, history_id):
+    async def get(self, request, history_id):
         """
         Get hints for a specific execution
 
@@ -505,12 +530,13 @@ class GetHintsView(APIView):
             }
         """
         try:
-            # Initialize DynamoDB repository
-            table = DynamoDBClient.get_table()
-            history_repo = SearchHistoryRepository(table)
+            # Initialize async DynamoDB repository
+            # Note: AsyncSearchHistoryRepository wraps sync repository with sync_to_async
+            # so we don't pass async table - let it create its own sync table
+            history_repo = AsyncSearchHistoryRepository()
 
             # Get the history record
-            item = history_repo.get_history(history_id)
+            item = await history_repo.get_history(history_id)
 
             if not item:
                 return Response(

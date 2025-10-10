@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 class S3TestCaseService:
     """Service for storing and retrieving large test cases in S3 (Singleton)"""
 
-    # Size threshold: 50KB (conservative, allows for metadata overhead)
-    SIZE_THRESHOLD_BYTES = 50 * 1024
+    # Size threshold: 100KB (conservative, allows for metadata overhead)
+    SIZE_THRESHOLD_BYTES = 100 * 1024
 
     # Singleton instance
     _instance = None
@@ -147,10 +147,14 @@ class S3TestCaseService:
         size = S3TestCaseService.calculate_size(input_str, output_str)
         return size >= S3TestCaseService.SIZE_THRESHOLD_BYTES
 
-    def _get_s3_key(self, platform: str, problem_id: str) -> str:
-        """Generate S3 key for all test cases of a problem"""
-        # Use hierarchical key structure for better organization
-        return f"testcases/{platform}/{problem_id}/testcases.json.gz"
+    def _get_s3_key(self, platform: str, problem_id: str, testcase_id: str = None) -> str:
+        """Generate S3 key for test cases"""
+        if testcase_id:
+            # Individual test case
+            return f"testcases/{platform}/{problem_id}/tc_{testcase_id}.json.gz"
+        else:
+            # All test cases
+            return f"testcases/{platform}/{problem_id}/testcases.json.gz"
 
     def store_testcases(
         self,
@@ -256,6 +260,116 @@ class S3TestCaseService:
             raise
         except (gzip.BadGzipFile, json.JSONDecodeError) as e:
             logger.error(f"Failed to decompress/parse test cases from S3 ({s3_key}): {e}")
+            raise
+
+    def store_testcase(
+        self,
+        platform: str,
+        problem_id: str,
+        testcase_id: str,
+        input_str: str,
+        output_str: str
+    ) -> Dict[str, Any]:
+        """
+        Store a single test case in S3 with gzip compression
+
+        Args:
+            platform: Platform name
+            problem_id: Problem identifier
+            testcase_id: Test case identifier
+            input_str: Test case input
+            output_str: Expected output
+
+        Returns:
+            Dict with S3 metadata: {'s3_key': str, 'size': int, 'compressed_size': int}
+        """
+        s3_key = self._get_s3_key(platform, problem_id, testcase_id)
+
+        # Create JSON payload for single test case
+        payload = {
+            'platform': platform,
+            'problem_id': problem_id,
+            'testcase_id': testcase_id,
+            'input': input_str,
+            'output': output_str
+        }
+
+        # Compress with gzip
+        json_data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+        compressed_data = gzip.compress(json_data, compresslevel=6)
+
+        def _put_object():
+            return self.s3_client.put_object(
+                Bucket=self.bucket_name,
+                Key=s3_key,
+                Body=compressed_data,
+                ContentType='application/json',
+                ContentEncoding='gzip'
+            )
+
+        try:
+            # Upload to S3 with retry
+            self._execute_with_retry(_put_object)
+
+            logger.info(
+                f"Stored test case in S3: {s3_key} "
+                f"(original: {len(json_data)} bytes, compressed: {len(compressed_data)} bytes)"
+            )
+
+            return {
+                's3_key': s3_key,
+                'size': len(json_data),
+                'compressed_size': len(compressed_data)
+            }
+
+        except ClientError as e:
+            logger.error(f"Failed to store test case in S3: {e}")
+            raise
+
+    def retrieve_testcase(
+        self,
+        platform: str,
+        problem_id: str,
+        testcase_id: str
+    ) -> Optional[Dict[str, str]]:
+        """
+        Retrieve a single test case from S3
+
+        Args:
+            platform: Platform name
+            problem_id: Problem identifier
+            testcase_id: Test case identifier
+
+        Returns:
+            Dict with 'input' and 'output', or None if not found
+        """
+        s3_key = self._get_s3_key(platform, problem_id, testcase_id)
+
+        def _get_object():
+            return self.s3_client.get_object(Bucket=self.bucket_name, Key=s3_key)
+
+        try:
+            # Retrieve from S3 with retry
+            response = self._execute_with_retry(_get_object)
+            compressed_data = response['Body'].read()
+
+            # Decompress and parse JSON
+            json_data = gzip.decompress(compressed_data)
+            payload = json.loads(json_data.decode('utf-8'))
+
+            return {
+                'input': payload.get('input', ''),
+                'output': payload.get('output', '')
+            }
+
+        except ClientError as e:
+            if e.response.get('Error', {}).get('Code') == 'NoSuchKey':
+                logger.warning(f"No S3 test case found for {platform}/{problem_id}/{testcase_id}")
+                return None
+            logger.error(f"Failed to retrieve test case from S3 ({s3_key}): {e}")
+            raise
+        except (gzip.BadGzipFile, json.JSONDecodeError) as e:
+            logger.error(f"Failed to decompress/parse test case from S3 ({s3_key}): {e}")
             raise
 
     def delete_testcases(

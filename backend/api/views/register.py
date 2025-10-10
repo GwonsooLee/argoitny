@@ -1,21 +1,27 @@
-"""Problem Registration Views"""
+"""Problem Registration Views - Async Version"""
 from rest_framework import status
-from rest_framework.views import APIView
+from adrf.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
-from django.db import transaction
+from asgiref.sync import sync_to_async
 from ..services.gemini_service import GeminiService
 from ..serializers import (
     ProblemRegisterSerializer,
     ProblemSerializer,
     ProblemSaveSerializer,
     ScriptGenerationJobSerializer,
-    ExtractProblemInfoSerializer
+    ExtractProblemInfoSerializer,
+    GenerateTestCasesSerializer
 )
 from ..tasks import generate_script_task, extract_problem_info_task
+from ..dynamodb.async_client import AsyncDynamoDBClient
+from ..dynamodb.async_repositories import (
+    AsyncProblemRepository,
+    AsyncProblemExtractionJobRepository,
+    AsyncScriptGenerationJobRepository,
+    AsyncJobProgressHistoryRepository
+)
 from ..dynamodb.client import DynamoDBClient
-from ..dynamodb.repositories import ProblemRepository, ProblemExtractionJobRepository, ScriptGenerationJobRepository
-from ..utils.job_helper import JobHelper
 import logging
 
 logger = logging.getLogger(__name__)
@@ -25,11 +31,12 @@ class GenerateTestCasesView(APIView):
     """Generate test case generator code using Gemini AI"""
     permission_classes = [AllowAny]  # Allow for development
 
-    def post(self, request):
+    async def post(self, request):
         # Check if user is authenticated and has permission
-        if request.user and request.user.is_authenticated:
-            if not request.user.is_staff:
-                limits = request.user.get_plan_limits()
+        if request.user and await sync_to_async(lambda: request.user.is_authenticated)():
+            is_staff = await sync_to_async(lambda: request.user.is_staff)()
+            if not is_staff:
+                limits = await sync_to_async(request.user.get_plan_limits)()
                 if not limits.get('can_register_problems', False):
                     return Response(
                         {'error': 'You do not have permission to register problems'},
@@ -65,8 +72,9 @@ class GenerateTestCasesView(APIView):
             )
 
         try:
-            # Create a job record using JobHelper
-            job = JobHelper.create_script_generation_job(
+            # Create a job record using JobHelper (sync operation wrapped)
+            from ..utils.job_helper import JobHelper
+            job = await sync_to_async(JobHelper.create_script_generation_job)(
                 platform=serializer.validated_data['platform'],
                 problem_id=serializer.validated_data['problem_id'],
                 title=serializer.validated_data['title'],
@@ -77,11 +85,11 @@ class GenerateTestCasesView(APIView):
                 status='PENDING'
             )
 
-            # Enqueue the job to Celery
-            task = generate_script_task.delay(job['id'])
+            # Enqueue the job to Celery (sync operation)
+            task = await sync_to_async(generate_script_task.delay)(job['id'])
 
             # Update job with task ID
-            JobHelper.update_script_generation_job(job['id'], {'celery_task_id': task.id})
+            await sync_to_async(JobHelper.update_script_generation_job)(job['id'], {'celery_task_id': task.id})
 
             return Response({
                 'job_id': job['id'],
@@ -100,10 +108,11 @@ class RegisterProblemView(APIView):
     """Register problem with test cases"""
     permission_classes = [IsAuthenticated]
 
-    def post(self, request):
+    async def post(self, request):
         # Check if user has permission to register problems
-        if not request.user.is_admin():
-            limits = request.user.get_plan_limits()
+        is_admin = await sync_to_async(request.user.is_admin)()
+        if not is_admin:
+            limits = await sync_to_async(request.user.get_plan_limits)()
             if not limits.get('can_register_problems', False):
                 return Response(
                     {'error': 'You do not have permission to register problems'},
@@ -161,11 +170,12 @@ class RegisterProblemView(APIView):
         language = serializer.validated_data['language']
 
         try:
-            # Initialize DynamoDB repository
-            problem_repo = ProblemRepository()
+            # Initialize async DynamoDB repository
+            table = await sync_to_async(DynamoDBClient.get_table)()
+            problem_repo = AsyncProblemRepository(table)
 
             # Check if problem already exists
-            existing_problem = problem_repo.get_problem(platform, problem_id)
+            existing_problem = await problem_repo.get_problem(platform, problem_id)
             if existing_problem:
                 return Response(
                     {'error': 'Problem already exists'},
@@ -181,7 +191,8 @@ class RegisterProblemView(APIView):
                 )
 
             # Use CodeExecutionService (Judge0 or local based on config)
-            test_results = CodeExecutionService.execute_with_test_cases(
+            from ..services.code_execution_service import CodeExecutionService
+            test_results = await sync_to_async(CodeExecutionService.execute_with_test_cases)(
                 code=solution_code,
                 language=language,
                 test_inputs=test_case_inputs
@@ -214,7 +225,7 @@ class RegisterProblemView(APIView):
                 'is_completed': True  # Mark as completed since we're registering with test cases
             }
 
-            problem_item = problem_repo.create_problem(
+            problem_item = await problem_repo.create_problem(
                 platform=platform,
                 problem_id=problem_id,
                 problem_data=problem_data
@@ -222,7 +233,7 @@ class RegisterProblemView(APIView):
 
             # Add test cases (with numbering: 1, 2, 3...)
             for idx, tc in enumerate(test_cases_with_outputs, start=1):
-                problem_repo.add_testcase(
+                await problem_repo.add_testcase(
                     platform=platform,
                     problem_id=problem_id,
                     testcase_id=str(idx),
@@ -231,7 +242,7 @@ class RegisterProblemView(APIView):
                 )
 
             # Fetch problem with test cases for response
-            problem = problem_repo.get_problem_with_testcases(platform, problem_id)
+            problem = await problem_repo.get_problem_with_testcases(platform, problem_id)
 
             return Response({
                 'message': 'Problem registered successfully',
@@ -252,26 +263,31 @@ class RegisterProblemView(APIView):
 
 
 class ExecuteTestCasesView(APIView):
-    """Execute generator code to produce test cases"""
+    """Execute generator code to produce test cases (async task)"""
     permission_classes = [AllowAny]
 
-    def post(self, request):
+    async def post(self, request):
         """
-        Execute test case generator code to produce test case inputs
+        Execute test case generator code to produce test case inputs (async task)
 
         Request body:
             {
                 "generator_code": "def generate_test_cases(n):...",
-                "num_cases": 10
+                "num_cases": 10,
+                "platform": "baekjoon",  // optional, for tracking
+                "problem_id": "1000"     // optional, for tracking
             }
 
         Returns:
             {
-                "test_cases": ["1 2", "3 4", ...]
+                "message": "Test case execution started",
+                "task_id": "abc123..."
             }
         """
         generator_code = request.data.get('generator_code')
         num_cases = request.data.get('num_cases', 10)
+        platform = request.data.get('platform')
+        problem_id = request.data.get('problem_id')
 
         if not generator_code:
             return Response(
@@ -293,25 +309,36 @@ class ExecuteTestCasesView(APIView):
             )
 
         try:
-            # Execute the generator code
-            test_cases = TestCaseGenerator.execute_generator_code(
-                code=generator_code,
+            # Start async task
+            from api.tasks import execute_test_cases_task
+            task = await sync_to_async(execute_test_cases_task.delay)(
+                generator_code=generator_code,
                 num_cases=num_cases
             )
 
-            return Response({
-                'test_cases': test_cases,
-                'count': len(test_cases)
-            }, status=status.HTTP_200_OK)
+            # Save task_id to Problem metadata if platform and problem_id provided
+            if platform and problem_id:
+                from api.dynamodb.client import DynamoDBClient
+                table = await sync_to_async(DynamoDBClient.get_table)()
+                from api.dynamodb.async_repositories import AsyncProblemRepository
+                problem_repo = AsyncProblemRepository(table)
 
-        except ValueError as e:
-            return Response(
-                {'error': str(e)},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+                await problem_repo.update_problem(
+                    platform=platform,
+                    problem_id=problem_id,
+                    updates={
+                        'script_execution_task_id': task.id
+                    }
+                )
+
+            return Response({
+                'message': 'Test case execution started',
+                'task_id': task.id
+            }, status=status.HTTP_202_ACCEPTED)
+
         except Exception as e:
             return Response(
-                {'error': f'Failed to execute generator code: {str(e)}'},
+                {'error': f'Failed to start test case execution: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
@@ -320,7 +347,7 @@ class DraftProblemsView(APIView):
     """Get list of draft problems (problems without test cases)"""
     permission_classes = [AllowAny]
 
-    def get(self, request):
+    async def get(self, request):
         """
         Get all draft problems (is_completed=False)
 
@@ -340,11 +367,12 @@ class DraftProblemsView(APIView):
             }
         """
         try:
-            # Initialize DynamoDB repository
-            problem_repo = ProblemRepository()
+            # Initialize async DynamoDB repository
+            table = await sync_to_async(DynamoDBClient.get_table)()
+            problem_repo = AsyncProblemRepository(table)
 
             # Get draft problems from DynamoDB
-            drafts = problem_repo.list_draft_problems(limit=100)
+            drafts = await problem_repo.list_draft_problems(limit=100)
 
             # Process drafts to decode solution_code from base64
             import base64
@@ -380,10 +408,12 @@ class DraftProblemsView(APIView):
                 })
 
             # Also include extraction jobs that haven't created Problems yet
+            from ..utils.job_helper import JobHelper
+
             # Get both PENDING and PROCESSING jobs
             pending_jobs = []
             for job_status in ['PENDING', 'PROCESSING']:
-                jobs, _ = JobHelper.list_problem_extraction_jobs(status=job_status)
+                jobs, _ = await sync_to_async(JobHelper.list_problem_extraction_jobs)(status=job_status)
                 pending_jobs.extend(jobs)
 
             # Get job IDs that are already in draft_data
@@ -394,7 +424,7 @@ class DraftProblemsView(APIView):
                 job_id = job.get('id')
                 if job_id not in existing_job_ids:
                     # Format job for display
-                    formatted_job = JobHelper.format_job_for_serializer(job)
+                    formatted_job = await sync_to_async(JobHelper.format_job_for_serializer)(job)
                     draft_data.append({
                         'id': None,  # No Problem ID yet
                         'platform': job.get('platform') or 'unknown',
@@ -430,7 +460,7 @@ class JobListView(APIView):
     """List all script generation jobs"""
     permission_classes = [AllowAny]
 
-    def get(self, request):
+    async def get(self, request):
         """
         Get all script generation jobs, ordered by creation date (newest first)
 
@@ -463,14 +493,18 @@ class JobListView(APIView):
             problem_id = request.query_params.get('problem_id')
 
             # List jobs using JobHelper
-            jobs, _ = JobHelper.list_script_generation_jobs(
+            from ..utils.job_helper import JobHelper
+            jobs, _ = await sync_to_async(JobHelper.list_script_generation_jobs)(
                 status=status_filter.upper() if status_filter else None,
                 platform=platform,
                 problem_id=problem_id
             )
 
             # Format jobs for serializer (convert timestamps)
-            formatted_jobs = [JobHelper.format_job_for_serializer(job) for job in jobs]
+            formatted_jobs = []
+            for job in jobs:
+                formatted_job = await sync_to_async(JobHelper.format_job_for_serializer)(job)
+                formatted_jobs.append(formatted_job)
 
             # Exclude generator_code field from list view for optimization
             for job in formatted_jobs:
@@ -491,7 +525,7 @@ class JobDetailView(APIView):
     """Get details of a specific job"""
     permission_classes = [AllowAny]
 
-    def get(self, request, job_id):
+    async def get(self, request, job_id):
         """
         Get details of a specific job
 
@@ -509,14 +543,15 @@ class JobDetailView(APIView):
             }
         """
         try:
-            job = JobHelper.get_script_generation_job(job_id)
+            from ..utils.job_helper import JobHelper
+            job = await sync_to_async(JobHelper.get_script_generation_job)(job_id)
             if not job:
                 return Response(
                     {'error': 'Job not found'},
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-            formatted_job = JobHelper.format_job_for_serializer(job)
+            formatted_job = await sync_to_async(JobHelper.format_job_for_serializer)(job)
             return Response(formatted_job, status=status.HTTP_200_OK)
 
         except Exception as e:
@@ -525,7 +560,7 @@ class JobDetailView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-    def delete(self, request, job_id):
+    async def delete(self, request, job_id):
         """
         Delete a specific job synchronously
 
@@ -535,8 +570,9 @@ class JobDetailView(APIView):
             }
         """
         try:
+            from ..utils.job_helper import JobHelper
             # Check if job exists
-            job = JobHelper.get_script_generation_job(job_id)
+            job = await sync_to_async(JobHelper.get_script_generation_job)(job_id)
             if not job:
                 return Response(
                     {'error': 'Job not found'},
@@ -544,7 +580,7 @@ class JobDetailView(APIView):
                 )
 
             # Delete the job
-            JobHelper.delete_script_generation_job(job_id)
+            await sync_to_async(JobHelper.delete_script_generation_job)(job_id)
 
             return Response({
                 'message': 'Job deleted successfully'
@@ -561,7 +597,7 @@ class RetryExtractionView(APIView):
     """Retry a failed problem extraction job"""
     permission_classes = [AllowAny]
 
-    def post(self, request, job_id):
+    async def post(self, request, job_id):
         """
         Retry a failed extraction job
 
@@ -573,8 +609,10 @@ class RetryExtractionView(APIView):
             }
         """
         try:
+            from ..utils.job_helper import JobHelper
+
             # Get the job
-            job = JobHelper.get_problem_extraction_job(job_id)
+            job = await sync_to_async(JobHelper.get_problem_extraction_job)(job_id)
             if not job:
                 return Response(
                     {'error': 'Job not found'},
@@ -604,14 +642,14 @@ class RetryExtractionView(APIView):
             title = job.get('title', '')
 
             # Cancel the old job (mark as CANCELLED to prevent race conditions)
-            JobHelper.update_problem_extraction_job(job_id, {
+            await sync_to_async(JobHelper.update_problem_extraction_job)(job_id, {
                 'status': 'CANCELLED',
                 'error_message': 'Cancelled for retry'
             })
             logger.info(f"Cancelled old job {job_id}")
 
             # Create a NEW job for the retry
-            new_job = JobHelper.create_problem_extraction_job(
+            new_job = await sync_to_async(JobHelper.create_problem_extraction_job)(
                 platform=platform,
                 problem_id=problem_id,
                 problem_url=problem_url,
@@ -624,12 +662,9 @@ class RetryExtractionView(APIView):
 
             # Update Problem metadata to reflect retry in DynamoDB
             try:
-                from ..dynamodb.client import DynamoDBClient
-                from ..dynamodb.repositories import ProblemRepository
-
-                table = DynamoDBClient.get_table()
-                problem_repo = ProblemRepository(table)
-                problem = problem_repo.get_problem(platform, problem_id)
+                table = await sync_to_async(DynamoDBClient.get_table)()
+                problem_repo = AsyncProblemRepository(table)
+                problem = await problem_repo.get_problem(platform, problem_id)
 
                 if problem:
                     metadata = problem.get('metadata', {})
@@ -639,7 +674,7 @@ class RetryExtractionView(APIView):
                         'progress': 'Retry initiated...',
                         'error_message': None
                     })
-                    problem_repo.update_problem(
+                    await problem_repo.update_problem(
                         platform=platform,
                         problem_id=problem_id,
                         updates={'metadata': metadata}
@@ -652,7 +687,7 @@ class RetryExtractionView(APIView):
 
             # Trigger the extraction task with NEW job_id
             from ..tasks import extract_problem_info_task
-            extract_problem_info_task.apply_async(
+            await sync_to_async(extract_problem_info_task.apply_async)(
                 kwargs={
                     'problem_url': problem_url,
                     'job_id': new_job_id
@@ -679,7 +714,7 @@ class SaveTestCaseInputsView(APIView):
     """Save test case inputs to problem (without outputs)"""
     permission_classes = [AllowAny]
 
-    def post(self, request):
+    async def post(self, request):
         """
         Save test case inputs to a problem
 
@@ -713,11 +748,12 @@ class SaveTestCaseInputsView(APIView):
             )
 
         try:
-            # Initialize DynamoDB repository
-            problem_repo = ProblemRepository()
+            # Initialize async DynamoDB repository
+            table = await sync_to_async(DynamoDBClient.get_table)()
+            problem_repo = AsyncProblemRepository(table)
 
             # Check if problem exists
-            problem = problem_repo.get_problem(platform, problem_id)
+            problem = await problem_repo.get_problem(platform, problem_id)
             if not problem:
                 return Response(
                     {'error': 'Problem not found'},
@@ -726,24 +762,33 @@ class SaveTestCaseInputsView(APIView):
 
             # Delete existing test cases (by deleting and recreating problem with test cases)
             # First, get the problem metadata
-            existing_testcases = problem_repo.get_testcases(platform, problem_id)
+            existing_testcases = await problem_repo.get_testcases(platform, problem_id)
 
             # Delete each test case
             for tc in existing_testcases:
                 # Use delete_item from base repository
                 pk = f'PROB#{platform}#{problem_id}'
                 sk = f"TC#{tc['testcase_id']}"
-                problem_repo.delete_item(pk, sk)
+                await sync_to_async(problem_repo._repo.delete_item)(pk, sk)
 
             # Create new test cases with empty outputs (numbered 1, 2, 3...)
             for idx, inp in enumerate(test_inputs, start=1):
-                problem_repo.add_testcase(
+                await problem_repo.add_testcase(
                     platform=platform,
                     problem_id=problem_id,
                     testcase_id=str(idx),
                     input_str=inp,
                     output_str=''  # Empty output for now
                 )
+
+            # Clear script_execution_task_id from metadata
+            await problem_repo.update_problem(
+                platform=platform,
+                problem_id=problem_id,
+                updates={
+                    'script_execution_task_id': ''
+                }
+            )
 
             return Response({
                 'message': 'Test cases saved successfully',
@@ -762,7 +807,7 @@ class GenerateOutputsView(APIView):
     """Generate outputs for existing test case inputs (async)"""
     permission_classes = [AllowAny]
 
-    def post(self, request):
+    async def post(self, request):
         """
         Generate outputs for test cases using solution code (async task)
 
@@ -788,11 +833,12 @@ class GenerateOutputsView(APIView):
             )
 
         try:
-            # Initialize DynamoDB repository
-            problem_repo = ProblemRepository()
+            # Initialize async DynamoDB repository
+            table = await sync_to_async(DynamoDBClient.get_table)()
+            problem_repo = AsyncProblemRepository(table)
 
             # Verify problem exists and has solution code
-            problem = problem_repo.get_problem_with_testcases(platform, problem_id)
+            problem = await problem_repo.get_problem_with_testcases(platform, problem_id)
 
             if not problem:
                 return Response(
@@ -815,7 +861,7 @@ class GenerateOutputsView(APIView):
 
             # Start async task
             from api.tasks import generate_outputs_task
-            task = generate_outputs_task.delay(platform, problem_id)
+            task = await sync_to_async(generate_outputs_task.delay)(platform, problem_id)
 
             return Response({
                 'message': 'Output generation task started',
@@ -832,9 +878,9 @@ class GenerateOutputsView(APIView):
 
 class CheckTaskStatusView(APIView):
     """Check the status of an async task"""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
-    def get(self, request, task_id):
+    async def get(self, request, task_id):
         """
         Check the status of a Celery task
 
@@ -846,38 +892,44 @@ class CheckTaskStatusView(APIView):
         """
         from celery.result import AsyncResult
 
-        task = AsyncResult(task_id)
+        # Wrap synchronous Celery operations
+        task = await sync_to_async(AsyncResult)(task_id)
+        state = await sync_to_async(lambda: task.state)()
 
-        if task.state == 'PENDING':
+        if state == 'PENDING':
             response = {
                 'status': 'PENDING',
                 'message': 'Task is waiting to be executed'
             }
-        elif task.state == 'PROCESSING':
+        elif state == 'PROCESSING':
             response = {
                 'status': 'PROCESSING',
                 'message': 'Task is being processed'
             }
-        elif task.state == 'PROGRESS':
+        elif state == 'PROGRESS':
             # Handle progress updates from task
+            info = await sync_to_async(lambda: task.info)()
             response = {
                 'status': 'PROGRESS',
-                'result': task.info if task.info else {}
+                'result': info if info else {}
             }
-        elif task.state == 'SUCCESS':
+        elif state == 'SUCCESS':
+            result = await sync_to_async(lambda: task.result)()
             response = {
                 'status': 'COMPLETED',
-                'result': task.result
+                'result': result
             }
-        elif task.state == 'FAILURE':
+        elif state == 'FAILURE':
+            info = await sync_to_async(lambda: task.info)()
             response = {
                 'status': 'FAILED',
-                'error': str(task.info)
+                'error': str(info)
             }
         else:
+            info = await sync_to_async(lambda: task.info)()
             response = {
-                'status': task.state,
-                'message': str(task.info)
+                'status': state,
+                'message': str(info)
             }
 
         return Response(response, status=status.HTTP_200_OK)
@@ -887,7 +939,7 @@ class ToggleCompletionView(APIView):
     """Toggle problem completion status"""
     permission_classes = [AllowAny]
 
-    def post(self, request):
+    async def post(self, request):
         """
         Toggle problem completion status
 
@@ -921,11 +973,12 @@ class ToggleCompletionView(APIView):
             is_completed = bool(is_completed)
 
         try:
-            # Initialize DynamoDB repository
-            problem_repo = ProblemRepository()
+            # Initialize async DynamoDB repository
+            table = await sync_to_async(DynamoDBClient.get_table)()
+            problem_repo = AsyncProblemRepository(table)
 
             # Check if problem exists
-            problem = problem_repo.get_problem(platform, problem_id)
+            problem = await problem_repo.get_problem(platform, problem_id)
             if not problem:
                 return Response(
                     {'error': 'Problem not found'},
@@ -933,7 +986,7 @@ class ToggleCompletionView(APIView):
                 )
 
             # Update completion status
-            problem_repo.update_problem(
+            await problem_repo.update_problem(
                 platform=platform,
                 problem_id=problem_id,
                 updates={'is_completed': is_completed}
@@ -957,7 +1010,7 @@ class SaveProblemView(APIView):
     """Save problem draft without test cases"""
     permission_classes = [AllowAny]
 
-    def post(self, request):
+    async def post(self, request):
         """
         Save problem draft (without test case generation)
 
@@ -1001,11 +1054,12 @@ class SaveProblemView(APIView):
             )
 
         try:
-            # Initialize DynamoDB repository
-            problem_repo = ProblemRepository()
+            # Initialize async DynamoDB repository
+            table = await sync_to_async(DynamoDBClient.get_table)()
+            problem_repo = AsyncProblemRepository(table)
 
             # Check if problem already exists
-            existing_problem = problem_repo.get_problem(platform, problem_id)
+            existing_problem = await problem_repo.get_problem(platform, problem_id)
 
             # Prepare problem data
             problem_data = {
@@ -1027,20 +1081,20 @@ class SaveProblemView(APIView):
                     if key in problem_data:
                         updates[key] = problem_data[key]
 
-                problem_repo.update_problem(
+                await problem_repo.update_problem(
                     platform=platform,
                     problem_id=problem_id,
                     updates=updates
                 )
-                problem = problem_repo.get_problem(platform, problem_id)
+                problem = await problem_repo.get_problem(platform, problem_id)
             else:
                 # Create new problem
-                problem_repo.create_problem(
+                await problem_repo.create_problem(
                     platform=platform,
                     problem_id=problem_id,
                     problem_data=problem_data
                 )
-                problem = problem_repo.get_problem(platform, problem_id)
+                problem = await problem_repo.get_problem(platform, problem_id)
 
             return Response({
                 'message': 'Problem saved successfully',
@@ -1059,7 +1113,7 @@ class ExtractProblemInfoView(APIView):
     """Extract problem information from URL using Gemini AI"""
     permission_classes = [AllowAny]
 
-    def post(self, request):
+    async def post(self, request):
         """
         Extract problem information from a problem URL (async)
 
@@ -1084,14 +1138,16 @@ class ExtractProblemInfoView(APIView):
             )
 
         problem_url = serializer.validated_data['problem_url']
+        samples = serializer.validated_data.get('samples', [])
 
         # Add logging
         logger.info(f"[ExtractProblemInfoView] Received URL: {problem_url}")
+        logger.info(f"[ExtractProblemInfoView] User-provided samples: {len(samples)}")
 
         try:
             # Parse URL to extract platform and problem_id
             from ..utils.url_parser import ProblemURLParser
-            platform, problem_id = ProblemURLParser.parse_url(problem_url)
+            platform, problem_id = await sync_to_async(ProblemURLParser.parse_url)(problem_url)
 
             if not platform or not problem_id:
                 return Response(
@@ -1101,11 +1157,12 @@ class ExtractProblemInfoView(APIView):
 
             logger.info(f"[ExtractProblemInfoView] Parsed URL: platform={platform}, problem_id={problem_id}")
 
-            # Initialize DynamoDB repository
-            problem_repo = ProblemRepository()
+            # Initialize async DynamoDB repository
+            table = await sync_to_async(DynamoDBClient.get_table)()
+            problem_repo = AsyncProblemRepository(table)
 
             # Check if problem already exists in DynamoDB
-            existing_problem = problem_repo.get_problem(platform, problem_id)
+            existing_problem = await problem_repo.get_problem(platform, problem_id)
 
             created = False
             if not existing_problem:
@@ -1122,7 +1179,7 @@ class ExtractProblemInfoView(APIView):
                         'extraction_status': 'PENDING'
                     }
                 }
-                problem_repo.create_problem(
+                await problem_repo.create_problem(
                     platform=platform,
                     problem_id=problem_id,
                     problem_data=problem_data
@@ -1157,7 +1214,8 @@ class ExtractProblemInfoView(APIView):
                 if extraction_status in ['PROCESSING', 'PENDING']:
                     existing_job_id = metadata.get('extraction_job_id')
                     if existing_job_id:
-                        existing_job = JobHelper.get_problem_extraction_job(existing_job_id)
+                        from ..utils.job_helper import JobHelper
+                        existing_job = await sync_to_async(JobHelper.get_problem_extraction_job)(existing_job_id)
                         if existing_job:
                             logger.info(f"[ExtractProblemInfoView] Found existing job {existing_job['id']} with status {existing_job['status']}")
 
@@ -1179,7 +1237,8 @@ class ExtractProblemInfoView(APIView):
                 logger.info(f"[ExtractProblemInfoView] Extraction status is {extraction_status}, allowing new job creation")
 
             # Create a job record (only if problem is new or no existing job)
-            job = JobHelper.create_problem_extraction_job(
+            from ..utils.job_helper import JobHelper
+            job = await sync_to_async(JobHelper.create_problem_extraction_job)(
                 platform=platform,
                 problem_id=problem_id,
                 problem_url=problem_url,
@@ -1194,18 +1253,25 @@ class ExtractProblemInfoView(APIView):
                 'extraction_job_id': job['id'],
                 'extraction_status': 'PENDING'
             })
-            problem_repo.update_problem(
+            await problem_repo.update_problem(
                 platform=platform,
                 problem_id=problem_id,
                 updates={'metadata': metadata}
             )
 
-            # Enqueue the job to Celery
-            task = extract_problem_info_task.delay(problem_url, job['id'])
+            # Enqueue the job to Celery with samples if provided
+            task = await sync_to_async(extract_problem_info_task.apply_async)(
+                kwargs={
+                    'problem_url': problem_url,
+                    'job_id': job['id'],
+                    'samples': samples if samples else None
+                },
+                queue='ai'
+            )
             logger.info(f"[ExtractProblemInfoView] Enqueued task with ID: {task.id}")
 
             # Update job with task ID
-            JobHelper.update_problem_extraction_job(job['id'], {'celery_task_id': task.id})
+            await sync_to_async(JobHelper.update_problem_extraction_job)(job['id'], {'celery_task_id': task.id})
             logger.info(f"[ExtractProblemInfoView] Job {job['id']} updated with task ID: {task.id}")
 
             return Response({
@@ -1229,7 +1295,7 @@ class JobProgressHistoryView(APIView):
     """Get progress history for a job"""
     permission_classes = [AllowAny]
 
-    def get(self, request, job_id):
+    async def get(self, request, job_id):
         """
         Get progress history for a specific job from DynamoDB with pagination
 
@@ -1255,7 +1321,6 @@ class JobProgressHistoryView(APIView):
             }
         """
         try:
-            from ..dynamodb.repositories import JobProgressHistoryRepository
             from datetime import datetime, timezone
             import json
             import base64
@@ -1284,12 +1349,13 @@ class JobProgressHistoryView(APIView):
                         status=status.HTTP_400_BAD_REQUEST
                     )
 
-            # Initialize DynamoDB repository
-            table = DynamoDBClient.get_table()
+            # Initialize async DynamoDB repository
+            table = await sync_to_async(DynamoDBClient.get_table)()
+            from ..dynamodb.repositories import JobProgressHistoryRepository
             progress_repo = JobProgressHistoryRepository(table)
 
             # Get progress history from DynamoDB with pagination
-            history_items, next_key = progress_repo.get_progress_history(
+            history_items, next_key = await sync_to_async(progress_repo.get_progress_history)(
                 job_type=job_type,
                 job_id=job_id,
                 limit=limit,
@@ -1347,7 +1413,7 @@ class RegenerateSolutionView(APIView):
     """Regenerate solution code for a draft problem with additional context"""
     permission_classes = [AllowAny]  # Changed to AllowAny - admin check done in method
 
-    def post(self, request, platform, problem_id):
+    async def post(self, request, platform, problem_id):
         """
         Regenerate solution code for a draft problem with additional context
 
@@ -1367,7 +1433,7 @@ class RegenerateSolutionView(APIView):
             }
         """
         # Check if user is authenticated and admin
-        if not request.user or not request.user.is_authenticated:
+        if not request.user or not await sync_to_async(lambda: request.user.is_authenticated)():
             return Response(
                 {'error': 'Authentication required'},
                 status=status.HTTP_401_UNAUTHORIZED
@@ -1375,7 +1441,8 @@ class RegenerateSolutionView(APIView):
 
         try:
             # Check if user is admin
-            if not request.user.is_admin():
+            is_admin = await sync_to_async(request.user.is_admin)()
+            if not is_admin:
                 return Response(
                     {'error': 'Admin access required'},
                     status=status.HTTP_403_FORBIDDEN
@@ -1388,12 +1455,12 @@ class RegenerateSolutionView(APIView):
             )
 
         try:
-
-            # Initialize DynamoDB repository
-            problem_repo = ProblemRepository()
+            # Initialize async DynamoDB repository
+            table = await sync_to_async(DynamoDBClient.get_table)()
+            problem_repo = AsyncProblemRepository(table)
 
             # Get the problem
-            problem = problem_repo.get_problem(platform, problem_id)
+            problem = await problem_repo.get_problem(platform, problem_id)
 
             if not problem:
                 return Response(
@@ -1420,7 +1487,8 @@ class RegenerateSolutionView(APIView):
                 )
 
             # Create a new extraction job with additional context
-            job = JobHelper.create_problem_extraction_job(
+            from ..utils.job_helper import JobHelper
+            job = await sync_to_async(JobHelper.create_problem_extraction_job)(
                 platform=platform,
                 problem_id=problem_id,
                 problem_url=problem_url,
@@ -1436,7 +1504,7 @@ class RegenerateSolutionView(APIView):
                 'additional_context': additional_context,
                 'regeneration_attempt': True
             })
-            problem_repo.update_problem(
+            await problem_repo.update_problem(
                 platform=platform,
                 problem_id=problem_id,
                 updates={'metadata': metadata}
@@ -1444,7 +1512,7 @@ class RegenerateSolutionView(APIView):
 
             # Enqueue the extraction task with additional context
             from ..tasks import extract_problem_info_task
-            task = extract_problem_info_task.apply_async(
+            task = await sync_to_async(extract_problem_info_task.apply_async)(
                 kwargs={
                     'problem_url': problem_url,
                     'job_id': job['id'],
@@ -1454,7 +1522,7 @@ class RegenerateSolutionView(APIView):
             )
 
             # Update job with task ID
-            JobHelper.update_problem_extraction_job(job['id'], {'celery_task_id': task.id})
+            await sync_to_async(JobHelper.update_problem_extraction_job)(job['id'], {'celery_task_id': task.id})
 
             return Response({
                 'job_id': job['id'],

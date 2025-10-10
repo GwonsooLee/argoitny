@@ -1,24 +1,25 @@
-"""Problem Views with DynamoDB Backend"""
+"""Problem Views with DynamoDB Backend - True Async Version"""
 from rest_framework import status
-from rest_framework.views import APIView
+from adrf.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from django.conf import settings
 from django.core.cache import cache
+from asgiref.sync import sync_to_async
 from datetime import datetime
 from decimal import Decimal
-from ..dynamodb.client import DynamoDBClient
-from ..dynamodb.repositories import ProblemRepository, SearchHistoryRepository
+from ..dynamodb.async_client import AsyncDynamoDBClient
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
 
 class ProblemListView(APIView):
-    """Problem list and search endpoint with DynamoDB backend"""
+    """Problem list and search endpoint with async DynamoDB backend"""
     permission_classes = [AllowAny]
 
-    def get(self, request):
+    async def get(self, request):
         """
         Get problems with optional search and filtering
 
@@ -37,6 +38,7 @@ class ProblemListView(APIView):
                     "tags": [...],
                     "language": "python",
                     "is_completed": true,
+                    "needs_review": false,
                     "test_case_count": 5,
                     "created_at": "..."
                 },
@@ -48,33 +50,59 @@ class ProblemListView(APIView):
             platform = request.query_params.get('platform')
             search = request.query_params.get('search')
 
-            # Initialize repository
-            problem_repo = ProblemRepository()
+            problems = []
 
-            # Get completed problems from DynamoDB (now returns tuple)
-            problems, _ = problem_repo.list_completed_problems(limit=1000)
+            # Async DynamoDB query using GSI3
+            async with AsyncDynamoDBClient.get_resource() as resource:
+                table = await resource.Table(AsyncDynamoDBClient._table_name)
+
+                # Query for completed problems using GSI3
+                # GSI3PK = 'PROB#COMPLETED' for completed problems
+                # GSI3SK = timestamp (sort key)
+                response = await table.query(
+                    IndexName='GSI3',
+                    KeyConditionExpression='GSI3PK = :pk',
+                    ExpressionAttributeValues={
+                        ':pk': 'PROB#COMPLETED'
+                    },
+                    ScanIndexForward=False,  # Newest first (descending by timestamp)
+                    Limit=1000
+                )
+
+                problems = response.get('Items', [])
+
+            # Filter out deleted problems (dat.del field)
+            problems = [p for p in problems if not p.get('dat', {}).get('del', False)]
+
+            # Extract platform and problem_id from PK
+            # PK format: PROB#<platform>#<problem_id>
+            for problem in problems:
+                pk_parts = problem['PK'].split('#')
+                if len(pk_parts) >= 3:
+                    problem['platform'] = pk_parts[1]
+                    problem['problem_id'] = '#'.join(pk_parts[2:])  # Handle IDs with # in them
 
             # Filter by platform if specified
             if platform:
-                problems = [p for p in problems if p['platform'] == platform]
+                problems = [p for p in problems if p.get('platform') == platform]
 
             # Search by title or problem_id (case-insensitive)
+            # Note: dat.tit is the title field in the compact storage format
             if search:
                 search_lower = search.lower()
                 problems = [
                     p for p in problems
-                    if search_lower in p.get('title', '').lower() or
+                    if search_lower in p.get('dat', {}).get('tit', '').lower() or
                        search_lower in p.get('problem_id', '').lower()
                 ]
 
             # Build result with denormalized test_case_count (no N+1 queries)
             result = []
-            from datetime import datetime
-            from decimal import Decimal
             for problem in problems:
+                dat = problem.get('dat', {})
                 # Convert Unix timestamp to ISO format for frontend
                 # DynamoDB returns Decimal, convert to float first
-                created_timestamp = problem.get('created_at', 0)
+                created_timestamp = problem.get('crt', 0)
                 if isinstance(created_timestamp, Decimal):
                     created_timestamp = float(created_timestamp)
                 created_at_iso = datetime.fromtimestamp(created_timestamp).isoformat() if created_timestamp else None
@@ -82,12 +110,13 @@ class ProblemListView(APIView):
                 result.append({
                     'platform': problem['platform'],
                     'problem_id': problem['problem_id'],
-                    'title': problem['title'],
-                    'problem_url': problem.get('problem_url', ''),
-                    'tags': problem.get('tags', []),
-                    'language': problem.get('language', ''),
-                    'is_completed': problem.get('is_completed', False),
-                    'test_case_count': problem.get('test_case_count', 0),  # Use denormalized count
+                    'title': dat.get('tit', ''),
+                    'problem_url': dat.get('url', ''),
+                    'tags': dat.get('tag', []),
+                    'language': dat.get('lng', ''),
+                    'is_completed': dat.get('cmp', False),
+                    'needs_review': dat.get('nrv', False),
+                    'test_case_count': dat.get('tcc', 0),  # Use denormalized count
                     'created_at': created_at_iso
                 })
 
@@ -109,7 +138,7 @@ class ProblemDetailView(APIView):
     """Problem detail endpoint - Admin only"""
     permission_classes = [IsAuthenticated]
 
-    def get(self, request, problem_id=None, platform=None, problem_identifier=None):
+    async def get(self, request, problem_id=None, platform=None, problem_identifier=None):
         """
         Get problem with test cases (Admin only)
 
@@ -124,10 +153,12 @@ class ProblemDetailView(APIView):
                 "language": "python",
                 "constraints": "...",
                 "is_completed": true,
+                "needs_review": false,
+                "verified_by_admin": false,
                 "created_at": "...",
                 "test_cases": [
                     {
-                        "testcase_id": "1",
+                        "id": "1",
                         "input": "1 2",
                         "output": "3"
                     },
@@ -136,62 +167,113 @@ class ProblemDetailView(APIView):
             }
         """
         # Check if user is admin
-        if not request.user.is_admin():
+        try:
+            is_admin = await sync_to_async(lambda: request.user.is_admin())()
+        except (AttributeError, Exception):
+            is_admin = False
+
+        if not is_admin:
             return Response(
                 {'error': 'Admin access required'},
                 status=status.HTTP_403_FORBIDDEN
             )
 
         try:
-            # Initialize repository
-            problem_repo = ProblemRepository()
-
-            # Fetch from DynamoDB
-            if platform and problem_identifier:
-                problem = problem_repo.get_problem_with_testcases(
-                    platform=platform,
-                    problem_id=problem_identifier
-                )
-            else:
-                # If only problem_id is provided, we need to scan (inefficient)
-                # This is a legacy endpoint - should use platform + problem_id
+            # Validate parameters
+            if not platform or not problem_identifier:
                 return Response(
                     {'error': 'Please provide both platform and problem_identifier'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            if not problem:
-                return Response(
-                    {'error': 'Problem not found'},
-                    status=status.HTTP_404_NOT_FOUND
+            # Async DynamoDB operations
+            async with AsyncDynamoDBClient.get_resource() as resource:
+                table = await resource.Table(AsyncDynamoDBClient._table_name)
+
+                # Get problem metadata
+                problem_response = await table.get_item(
+                    Key={
+                        'PK': f'PROB#{platform}#{problem_identifier}',
+                        'SK': 'META'
+                    }
                 )
 
-            # Format response to match serializer output
+                if 'Item' not in problem_response:
+                    return Response(
+                        {'error': 'Problem not found'},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+
+                problem = problem_response['Item']
+
+                # Check if problem is deleted
+                if problem.get('is_deleted', False):
+                    return Response(
+                        {'error': 'Problem not found'},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+
+                # Get test cases
+                testcases_response = await table.query(
+                    KeyConditionExpression='PK = :pk AND begins_with(SK, :sk)',
+                    ExpressionAttributeValues={
+                        ':pk': f'PROB#{platform}#{problem_identifier}',
+                        ':sk': 'TESTCASE#'
+                    }
+                )
+
+                test_cases = testcases_response.get('Items', [])
+
+            # Extract platform and problem_id from PK
+            # PK format: PROB#<platform>#<problem_id>
+            pk_parts = problem['PK'].split('#')
+            parsed_platform = pk_parts[1] if len(pk_parts) >= 3 else platform
+            parsed_problem_id = '#'.join(pk_parts[2:]) if len(pk_parts) >= 3 else problem_identifier
+
+            # Extract data from compact storage format (dat field)
+            dat = problem.get('dat', {})
+
+            # Parse timestamps
+            created_timestamp = problem.get('crt', 0)
+            if isinstance(created_timestamp, Decimal):
+                created_timestamp = float(created_timestamp)
+            created_at_iso = datetime.fromtimestamp(created_timestamp).isoformat() if created_timestamp else None
+
+            # Decode solution code if it exists (stored as base64)
+            solution_code = dat.get('sol', '')
+            if solution_code:
+                try:
+                    import base64
+                    solution_code = base64.b64decode(solution_code).decode('utf-8')
+                except Exception as e:
+                    logger.warning(f"Failed to decode solution code: {e}")
+                    solution_code = ''
+
             response_data = {
-                'platform': problem['platform'],
-                'problem_id': problem['problem_id'],
-                'title': problem['title'],
-                'problem_url': problem.get('problem_url', ''),
-                'tags': problem.get('tags', []),
-                'solution_code': problem.get('solution_code', ''),
-                'language': problem.get('language', ''),
-                'constraints': problem.get('constraints', ''),
-                'is_completed': problem.get('is_completed', False),
-                'needs_review': problem.get('needs_review', False),
-                'review_notes': problem.get('review_notes'),
-                'verified_by_admin': problem.get('verified_by_admin', False),
-                'reviewed_at': problem.get('reviewed_at'),
-                'metadata': problem.get('metadata', {}),
-                'created_at': (lambda ts: datetime.fromtimestamp(float(ts) if isinstance(ts, Decimal) else ts).isoformat() if ts else None)(problem.get('created_at', 0)),
+                'platform': parsed_platform,
+                'problem_id': parsed_problem_id,
+                'title': dat.get('tit', ''),
+                'problem_url': dat.get('url', ''),
+                'tags': dat.get('tag', []),
+                'solution_code': solution_code,
+                'language': dat.get('lng', ''),
+                'constraints': dat.get('con', ''),
+                'is_completed': dat.get('cmp', False),
+                'needs_review': dat.get('nrv', False),
+                'review_notes': dat.get('met', {}).get('review_notes'),
+                'verified_by_admin': dat.get('vrf', False),
+                'reviewed_at': dat.get('met', {}).get('reviewed_at'),
+                'metadata': dat.get('met', {}),
+                'created_at': created_at_iso,
                 'test_cases': [
                     {
-                        'id': tc['testcase_id'],
-                        'input': tc['input'],
-                        'output': tc['output']
+                        'id': tc.get('testcase_id', tc.get('SK', '').split('#')[-1]),
+                        'input': tc.get('input', ''),
+                        'output': tc.get('output', '')
                     }
-                    for tc in problem.get('test_cases', [])
+                    for tc in test_cases
                 ],
-                'test_case_count': len(problem.get('test_cases', []))
+                'test_case_count': len(test_cases)
             }
 
             return Response(response_data, status=status.HTTP_200_OK)
@@ -203,31 +285,25 @@ class ProblemDetailView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-    def delete(self, request, problem_id=None, platform=None, problem_identifier=None):
+    async def delete(self, request, problem_id=None, platform=None, problem_identifier=None):
         """
-        Delete a problem (Admin only, soft delete for completed problems)
+        Delete a problem (Admin only, hard delete immediately)
 
         Returns:
             {"message": "Problem deleted successfully"}
         """
         logger.info(f"[DELETE] Request from user: {request.user}, authenticated: {request.user.is_authenticated}")
-        try:
-            is_admin_status = request.user.is_admin() if request.user.is_authenticated else False
-            logger.info(f"[DELETE] User email: {getattr(request.user, 'email', None)}, is_admin: {is_admin_status}")
-        except (AttributeError, Exception) as e:
-            logger.warning(f"[DELETE] Error checking admin status: {e}")
-            is_admin_status = False
 
         # Check if user is admin
         try:
-            if not request.user.is_admin():
-                logger.warning(f"[DELETE] Access denied - user is not admin")
-                return Response(
-                    {'error': 'Admin access required'},
-                    status=status.HTTP_403_FORBIDDEN
-                )
-        except (AttributeError, Exception):
-            # is_admin() method doesn't exist or failed
+            is_admin = await sync_to_async(lambda: request.user.is_admin())()
+            user_email = await sync_to_async(lambda: request.user.email)()
+            logger.info(f"[DELETE] User email: {user_email}, is_admin: {is_admin}")
+        except (AttributeError, Exception) as e:
+            logger.warning(f"[DELETE] Error checking admin status: {e}")
+            is_admin = False
+
+        if not is_admin:
             logger.warning(f"[DELETE] Access denied - user is not admin")
             return Response(
                 {'error': 'Admin access required'},
@@ -235,80 +311,79 @@ class ProblemDetailView(APIView):
             )
 
         try:
-            # Initialize repository
-            problem_repo = ProblemRepository()
-
-            # Support both /problems/:id/ and /problems/:platform/:problem_id/
-            if platform and problem_identifier:
-                logger.info(f"Attempting to delete problem: platform={platform}, problem_id={problem_identifier}")
-
-                # Check if problem exists
-                problem = problem_repo.get_problem(
-                    platform=platform,
-                    problem_id=problem_identifier
-                )
-                logger.info(f"Problem found: {problem is not None}")
-            else:
+            # Validate parameters
+            if not platform or not problem_identifier:
                 return Response(
                     {'error': 'Please provide both platform and problem_identifier'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            if not problem:
-                return Response(
-                    {'error': 'Problem not found'},
-                    status=status.HTTP_404_NOT_FOUND
+            logger.info(f"Attempting to hard delete problem: platform={platform}, problem_id={problem_identifier}")
+
+            # Async DynamoDB operations
+            async with AsyncDynamoDBClient.get_resource() as resource:
+                table = await resource.Table(AsyncDynamoDBClient._table_name)
+
+                # Check if problem exists
+                problem_response = await table.get_item(
+                    Key={
+                        'PK': f'PROB#{platform}#{problem_identifier}',
+                        'SK': 'META'
+                    }
                 )
 
-            # Use soft delete to avoid GSI consistency issues
-            # Hard delete causes the item to still appear in GSI queries for a few seconds
-            import time
-            logger.info(f"Marking problem as deleted (soft delete): platform={platform}, problem_id={problem_identifier}")
-            updated_problem = problem_repo.update_problem(
-                platform=platform,
-                problem_id=problem_identifier,
-                updates={
-                    'is_deleted': True,
-                    'deleted_at': int(time.time()),
-                    'deleted_reason': f'Deleted by admin {request.user.email}'
-                }
+                if 'Item' not in problem_response:
+                    return Response(
+                        {'error': 'Problem not found'},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+
+                logger.info(f"Problem found, proceeding with hard delete")
+
+                pk = f'PROB#{platform}#{problem_identifier}'
+
+                # Delete all test cases first
+                testcases_response = await table.query(
+                    KeyConditionExpression='PK = :pk AND begins_with(SK, :sk)',
+                    ExpressionAttributeValues={
+                        ':pk': pk,
+                        ':sk': 'TESTCASE#'
+                    }
+                )
+
+                test_cases = testcases_response.get('Items', [])
+                logger.info(f"Found {len(test_cases)} test cases to delete")
+
+                # Delete test cases in parallel
+                for tc in test_cases:
+                    await table.delete_item(
+                        Key={
+                            'PK': tc['PK'],
+                            'SK': tc['SK']
+                        }
+                    )
+
+                logger.info(f"Deleted {len(test_cases)} test cases")
+
+                # Delete the problem metadata
+                await table.delete_item(
+                    Key={
+                        'PK': pk,
+                        'SK': 'META'
+                    }
+                )
+
+                logger.info(f"Hard delete completed successfully for {platform}/{problem_identifier}")
+
+            # Invalidate caches - async
+            await sync_to_async(cache.delete)("problem_drafts:all")
+            await sync_to_async(cache.delete)("problem_registered:all")
+            logger.info(f"[DELETE] Cache invalidated for problem_drafts:all and problem_registered:all")
+
+            return Response(
+                {'message': 'Problem deleted successfully'},
+                status=status.HTTP_200_OK
             )
-            success = updated_problem is not None
-            logger.info(f"Soft delete result: {success}")
-
-            if success:
-                # Invalidate caches
-                cache.delete("problem_drafts:all")
-                cache.delete("problem_registered:all")
-                logger.info(f"[DELETE] Cache invalidated for problem_drafts:all and problem_registered:all")
-
-                # Verify cache was deleted
-                if cache.get("problem_drafts:all") is not None:
-                    logger.warning(f"[DELETE] Cache problem_drafts:all still exists after delete!")
-                if cache.get("problem_registered:all") is not None:
-                    logger.warning(f"[DELETE] Cache problem_registered:all still exists after delete!")
-
-                # Schedule hard delete task (async, delayed by 5 seconds)
-                from ..tasks import hard_delete_problem_task
-                hard_delete_problem_task.apply_async(
-                    kwargs={
-                        'platform': platform,
-                        'problem_id': problem_identifier
-                    },
-                    countdown=5,  # Wait 5 seconds before hard delete
-                    queue='default'
-                )
-                logger.info(f"[DELETE] Scheduled hard delete task for {platform}/{problem_identifier}")
-
-                return Response(
-                    {'message': 'Problem deleted successfully'},
-                    status=status.HTTP_200_OK
-                )
-            else:
-                return Response(
-                    {'error': 'Failed to delete problem'},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                )
 
         except Exception as e:
             logger.error(f"Error deleting problem: {e}")
@@ -317,7 +392,195 @@ class ProblemDetailView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-    def patch(self, request, problem_id=None, platform=None, problem_identifier=None):
+    async def post(self, request, problem_id=None, platform=None, problem_identifier=None):
+        """
+        Update problem samples and solution code
+        Admin only - requires authentication
+
+        Request body:
+            {
+                "user_samples": [{"input": "...", "output": "..."}],
+                "solution_code": "..."
+            }
+
+        Returns:
+            {
+                "message": "Problem updated successfully",
+                "problem": {...}
+            }
+        """
+        # Check admin permission
+        try:
+            is_admin = await sync_to_async(lambda: request.user.is_admin())()
+            user_email = await sync_to_async(lambda: request.user.email)()
+        except (AttributeError, Exception):
+            is_admin = False
+            user_email = None
+
+        if not is_admin:
+            return Response(
+                {'error': 'Admin permission required'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            # Validate parameters
+            if not platform or not problem_identifier:
+                return Response(
+                    {'error': 'Please provide both platform and problem_identifier'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            user_samples = request.data.get('user_samples', [])
+            solution_code = request.data.get('solution_code')
+
+            # Async DynamoDB operations
+            async with AsyncDynamoDBClient.get_resource() as resource:
+                table = await resource.Table(AsyncDynamoDBClient._table_name)
+
+                # Check if problem exists
+                problem_response = await table.get_item(
+                    Key={
+                        'PK': f'PROB#{platform}#{problem_identifier}',
+                        'SK': 'META'
+                    }
+                )
+
+                if 'Item' not in problem_response:
+                    return Response(
+                        {'error': 'Problem not found'},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+
+                problem = problem_response['Item']
+                dat = problem.get('dat', {})
+                metadata = dat.get('met', {})
+
+                # Prepare update expressions
+                update_parts = []
+                expr_values = {}
+
+                # Update user samples in metadata
+                if user_samples is not None:
+                    metadata['user_samples'] = user_samples
+                    dat['met'] = metadata
+                    update_parts.append('dat.met = :metadata')
+                    expr_values[':metadata'] = metadata
+
+                # Update solution code (encode as base64)
+                if solution_code is not None:
+                    import base64
+                    encoded_solution = base64.b64encode(solution_code.encode('utf-8')).decode('utf-8')
+                    update_parts.append('dat.sol = :solution')
+                    expr_values[':solution'] = encoded_solution
+
+                if not update_parts:
+                    return Response(
+                        {'error': 'No valid fields to update provided'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                # Update in DynamoDB
+                update_expression = 'SET ' + ', '.join(update_parts)
+                await table.update_item(
+                    Key={
+                        'PK': f'PROB#{platform}#{problem_identifier}',
+                        'SK': 'META'
+                    },
+                    UpdateExpression=update_expression,
+                    ExpressionAttributeValues=expr_values
+                )
+
+                logger.info(f"Admin {user_email} updated problem {platform}#{problem_identifier}: samples={len(user_samples) if user_samples else 0}, solution_code={bool(solution_code)}")
+
+                # Invalidate caches
+                await sync_to_async(cache.delete)("problem_drafts:all")
+                await sync_to_async(cache.delete)("problem_registered:all")
+
+                # Get updated problem with test cases
+                updated_problem_response = await table.get_item(
+                    Key={
+                        'PK': f'PROB#{platform}#{problem_identifier}',
+                        'SK': 'META'
+                    }
+                )
+                updated_problem = updated_problem_response['Item']
+
+                # Get test cases
+                testcases_response = await table.query(
+                    KeyConditionExpression='PK = :pk AND begins_with(SK, :sk)',
+                    ExpressionAttributeValues={
+                        ':pk': f'PROB#{platform}#{problem_identifier}',
+                        ':sk': 'TESTCASE#'
+                    }
+                )
+                test_cases = testcases_response.get('Items', [])
+
+                # Extract platform and problem_id from PK
+                pk_parts = updated_problem['PK'].split('#')
+                parsed_platform = pk_parts[1] if len(pk_parts) >= 3 else platform
+                parsed_problem_id = '#'.join(pk_parts[2:]) if len(pk_parts) >= 3 else problem_identifier
+
+                # Extract data from compact storage format
+                updated_dat = updated_problem.get('dat', {})
+
+                # Format response
+                created_timestamp = updated_problem.get('crt', 0)
+                if isinstance(created_timestamp, Decimal):
+                    created_timestamp = float(created_timestamp)
+                created_at_iso = datetime.fromtimestamp(created_timestamp).isoformat() if created_timestamp else None
+
+                # Decode solution code if exists
+                decoded_solution_code = updated_dat.get('sol', '')
+                if decoded_solution_code:
+                    try:
+                        import base64
+                        decoded_solution_code = base64.b64decode(decoded_solution_code).decode('utf-8')
+                    except Exception as e:
+                        logger.warning(f"Failed to decode solution code: {e}")
+                        decoded_solution_code = ''
+
+                response_data = {
+                    'platform': parsed_platform,
+                    'problem_id': parsed_problem_id,
+                    'title': updated_dat.get('tit', ''),
+                    'problem_url': updated_dat.get('url', ''),
+                    'tags': updated_dat.get('tag', []),
+                    'solution_code': decoded_solution_code,
+                    'language': updated_dat.get('lng', ''),
+                    'constraints': updated_dat.get('con', ''),
+                    'is_completed': updated_dat.get('cmp', False),
+                    'needs_review': updated_dat.get('nrv', False),
+                    'verified_by_admin': updated_dat.get('vrf', False),
+                    'metadata': updated_dat.get('met', {}),
+                    'created_at': created_at_iso,
+                    'test_cases': [
+                        {
+                            'id': tc.get('testcase_id', tc.get('SK', '').split('#')[-1]),
+                            'input': tc.get('input', ''),
+                            'output': tc.get('output', '')
+                        }
+                        for tc in test_cases
+                    ],
+                    'test_case_count': len(test_cases)
+                }
+
+                return Response(
+                    {
+                        'message': 'Problem updated successfully',
+                        'problem': response_data
+                    },
+                    status=status.HTTP_200_OK
+                )
+
+        except Exception as e:
+            logger.error(f"Error updating problem: {e}")
+            return Response(
+                {'error': f'Failed to update problem: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    async def patch(self, request, problem_id=None, platform=None, problem_identifier=None):
         """
         Update problem (currently supports marking as complete)
         Admin only - requires authentication
@@ -333,92 +596,147 @@ class ProblemDetailView(APIView):
                 "problem": {...}
             }
         """
-        # Check admin permission
-        if not request.user.is_authenticated or not request.user.is_admin():
+        # Check admin permission - async
+        try:
+            is_admin = await sync_to_async(lambda: request.user.is_admin())()
+            user_email = await sync_to_async(lambda: request.user.email)()
+        except (AttributeError, Exception):
+            is_admin = False
+            user_email = None
+
+        if not is_admin:
             return Response(
                 {'error': 'Admin permission required'},
                 status=status.HTTP_403_FORBIDDEN
             )
 
         try:
-            # Initialize repository
-            problem_repo = ProblemRepository()
-
-            # Get problem
-            if platform and problem_identifier:
-                problem = problem_repo.get_problem(
-                    platform=platform,
-                    problem_id=problem_identifier
-                )
-            else:
+            # Validate parameters
+            if not platform or not problem_identifier:
                 return Response(
                     {'error': 'Please provide both platform and problem_identifier'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            if not problem:
-                return Response(
-                    {'error': 'Problem not found'},
-                    status=status.HTTP_404_NOT_FOUND
+            # Async DynamoDB operations
+            async with AsyncDynamoDBClient.get_resource() as resource:
+                table = await resource.Table(AsyncDynamoDBClient._table_name)
+
+                # Check if problem exists
+                problem_response = await table.get_item(
+                    Key={
+                        'PK': f'PROB#{platform}#{problem_identifier}',
+                        'SK': 'META'
+                    }
                 )
 
-            # Update is_completed if provided
-            is_completed = request.data.get('is_completed')
-            if is_completed is not None:
-                # Update in DynamoDB
-                updated_problem = problem_repo.update_problem(
-                    platform=platform,
-                    problem_id=problem_identifier,
-                    updates={'is_completed': bool(is_completed)}
-                )
+                if 'Item' not in problem_response:
+                    return Response(
+                        {'error': 'Problem not found'},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
 
-                message = 'Problem marked as completed' if is_completed else 'Problem marked as draft'
-                logger.info(f"Admin {request.user.email} updated problem {platform}#{problem_identifier}: is_completed={is_completed}")
-
-                # Invalidate caches
-                cache.delete("problem_drafts:all")
-                cache.delete("problem_registered:all")
-
-                # Get updated problem with test cases
-                updated_problem_full = problem_repo.get_problem_with_testcases(
-                    platform=platform,
-                    problem_id=problem_identifier
-                )
-
-                # Format response
-                response_data = {
-                    'platform': updated_problem_full['platform'],
-                    'problem_id': updated_problem_full['problem_id'],
-                    'title': updated_problem_full['title'],
-                    'problem_url': updated_problem_full.get('problem_url', ''),
-                    'tags': updated_problem_full.get('tags', []),
-                    'solution_code': updated_problem_full.get('solution_code', ''),
-                    'language': updated_problem_full.get('language', ''),
-                    'constraints': updated_problem_full.get('constraints', ''),
-                    'is_completed': updated_problem_full.get('is_completed', False),
-                    'created_at': updated_problem_full.get('created_at'),
-                    'test_cases': [
-                        {
-                            'id': tc['testcase_id'],
-                            'input': tc['input'],
-                            'output': tc['output']
+                # Update is_completed if provided
+                is_completed = request.data.get('is_completed')
+                if is_completed is not None:
+                    # Update in DynamoDB - async
+                    await table.update_item(
+                        Key={
+                            'PK': f'PROB#{platform}#{problem_identifier}',
+                            'SK': 'META'
+                        },
+                        UpdateExpression='SET is_completed = :completed',
+                        ExpressionAttributeValues={
+                            ':completed': bool(is_completed)
                         }
-                        for tc in updated_problem_full.get('test_cases', [])
-                    ]
-                }
+                    )
 
-                return Response(
-                    {
-                        'message': message,
-                        'problem': response_data
-                    },
-                    status=status.HTTP_200_OK
-                )
-            else:
-                return Response(
-                    {'error': 'No valid fields to update provided'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+                    message = 'Problem marked as completed' if is_completed else 'Problem marked as draft'
+                    logger.info(f"Admin {user_email} updated problem {platform}#{problem_identifier}: is_completed={is_completed}")
+
+                    # Invalidate caches - async
+                    await sync_to_async(cache.delete)("problem_drafts:all")
+                    await sync_to_async(cache.delete)("problem_registered:all")
+
+                    # Get updated problem with test cases - async
+                    updated_problem_response = await table.get_item(
+                        Key={
+                            'PK': f'PROB#{platform}#{problem_identifier}',
+                            'SK': 'META'
+                        }
+                    )
+                    updated_problem = updated_problem_response['Item']
+
+                    # Get test cases
+                    testcases_response = await table.query(
+                        KeyConditionExpression='PK = :pk AND begins_with(SK, :sk)',
+                        ExpressionAttributeValues={
+                            ':pk': f'PROB#{platform}#{problem_identifier}',
+                            ':sk': 'TESTCASE#'
+                        }
+                    )
+                    test_cases = testcases_response.get('Items', [])
+
+                    # Extract platform and problem_id from PK
+                    pk_parts = updated_problem['PK'].split('#')
+                    parsed_platform = pk_parts[1] if len(pk_parts) >= 3 else platform
+                    parsed_problem_id = '#'.join(pk_parts[2:]) if len(pk_parts) >= 3 else problem_identifier
+
+                    # Extract data from compact storage format
+                    dat = updated_problem.get('dat', {})
+
+                    # Format response
+                    created_timestamp = updated_problem.get('crt', 0)
+                    if isinstance(created_timestamp, Decimal):
+                        created_timestamp = float(created_timestamp)
+                    created_at_iso = datetime.fromtimestamp(created_timestamp).isoformat() if created_timestamp else None
+
+                    # Decode solution code if exists
+                    solution_code = dat.get('sol', '')
+                    if solution_code:
+                        try:
+                            import base64
+                            solution_code = base64.b64decode(solution_code).decode('utf-8')
+                        except Exception as e:
+                            logger.warning(f"Failed to decode solution code: {e}")
+                            solution_code = ''
+
+                    response_data = {
+                        'platform': parsed_platform,
+                        'problem_id': parsed_problem_id,
+                        'title': dat.get('tit', ''),
+                        'problem_url': dat.get('url', ''),
+                        'tags': dat.get('tag', []),
+                        'solution_code': solution_code,
+                        'language': dat.get('lng', ''),
+                        'constraints': dat.get('con', ''),
+                        'is_completed': dat.get('cmp', False),
+                        'needs_review': dat.get('nrv', False),
+                        'verified_by_admin': dat.get('vrf', False),
+                        'created_at': created_at_iso,
+                        'test_cases': [
+                            {
+                                'id': tc.get('testcase_id', tc.get('SK', '').split('#')[-1]),
+                                'input': tc.get('input', ''),
+                                'output': tc.get('output', '')
+                            }
+                            for tc in test_cases
+                        ],
+                        'test_case_count': len(test_cases)
+                    }
+
+                    return Response(
+                        {
+                            'message': message,
+                            'problem': response_data
+                        },
+                        status=status.HTTP_200_OK
+                    )
+                else:
+                    return Response(
+                        {'error': 'No valid fields to update provided'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
 
         except Exception as e:
             logger.error(f"Error updating problem: {e}")
@@ -432,7 +750,7 @@ class ProblemDraftsView(APIView):
     """Drafts (problems with no test cases or not completed) - Admin only - with caching"""
     permission_classes = [IsAuthenticated]
 
-    def get(self, request):
+    async def get(self, request):
         """
         Get all draft problems (is_completed=False)
         Admin only.
@@ -442,8 +760,13 @@ class ProblemDraftsView(APIView):
                 "drafts": [...]
             }
         """
-        # Check admin permission
-        if not request.user.is_admin():
+        # Check admin permission - async
+        try:
+            is_admin = await sync_to_async(lambda: request.user.is_admin())()
+        except (AttributeError, Exception):
+            is_admin = False
+
+        if not is_admin:
             return Response(
                 {'error': 'Admin permission required'},
                 status=status.HTTP_403_FORBIDDEN
@@ -451,8 +774,8 @@ class ProblemDraftsView(APIView):
 
         cache_key = "problem_drafts:all"
 
-        # Try to get from cache
-        cached_data = cache.get(cache_key)
+        # Try to get from cache - async
+        cached_data = await sync_to_async(cache.get)(cache_key)
         if cached_data is not None:
             logger.debug(f"Cache HIT: {cache_key}")
             return Response(cached_data, status=status.HTTP_200_OK)
@@ -460,20 +783,45 @@ class ProblemDraftsView(APIView):
         logger.debug(f"Cache MISS: {cache_key}")
 
         try:
-            # Initialize repository
-            problem_repo = ProblemRepository()
+            problems = []
 
-            # Get draft problems from DynamoDB (now returns tuple)
-            problems, _ = problem_repo.list_draft_problems(limit=1000)
+            # Async DynamoDB query using GSI3
+            async with AsyncDynamoDBClient.get_resource() as resource:
+                table = await resource.Table(AsyncDynamoDBClient._table_name)
+
+                # Query for draft problems using GSI3
+                # GSI3PK = 'PROB#DRAFT' for draft problems
+                # GSI3SK = timestamp (sort key)
+                response = await table.query(
+                    IndexName='GSI3',
+                    KeyConditionExpression='GSI3PK = :pk',
+                    ExpressionAttributeValues={
+                        ':pk': 'PROB#DRAFT'
+                    },
+                    ScanIndexForward=False,  # Newest first (descending by timestamp)
+                    Limit=1000
+                )
+
+                problems = response.get('Items', [])
+
+            # Filter out deleted problems (dat.del field)
+            problems = [p for p in problems if not p.get('dat', {}).get('del', False)]
+
+            # Extract platform and problem_id from PK
+            # PK format: PROB#<platform>#<problem_id>
+            for problem in problems:
+                pk_parts = problem['PK'].split('#')
+                if len(pk_parts) >= 3:
+                    problem['platform'] = pk_parts[1]
+                    problem['problem_id'] = '#'.join(pk_parts[2:])  # Handle IDs with # in them
 
             # Build result with denormalized test_case_count (no N+1 queries)
             result = []
-            from datetime import datetime
-            from decimal import Decimal
             for problem in problems:
+                dat = problem.get('dat', {})
                 # Convert timestamp to ISO format
                 # DynamoDB returns Decimal, convert to float first
-                created_timestamp = problem.get('created_at', 0)
+                created_timestamp = problem.get('crt', 0)
                 if isinstance(created_timestamp, Decimal):
                     created_timestamp = float(created_timestamp)
                 created_at_iso = datetime.fromtimestamp(created_timestamp).isoformat() if created_timestamp else None
@@ -481,21 +829,21 @@ class ProblemDraftsView(APIView):
                 result.append({
                     'platform': problem['platform'],
                     'problem_id': problem['problem_id'],
-                    'title': problem['title'],
-                    'problem_url': problem.get('problem_url', ''),
-                    'tags': problem.get('tags', []),
-                    'language': problem.get('language', ''),
-                    'is_completed': problem.get('is_completed', False),
-                    'needs_review': problem.get('needs_review', False),
-                    'test_case_count': problem.get('test_case_count', 0),  # Use denormalized count
+                    'title': dat.get('tit', ''),
+                    'problem_url': dat.get('url', ''),
+                    'tags': dat.get('tag', []),
+                    'language': dat.get('lng', ''),
+                    'is_completed': dat.get('cmp', False),
+                    'needs_review': dat.get('nrv', False),
+                    'test_case_count': dat.get('tcc', 0),  # Use denormalized count
                     'created_at': created_at_iso
                 })
 
             response_data = {'drafts': result}
 
-            # Cache the result (shorter TTL for drafts as they change more frequently)
+            # Cache the result (shorter TTL for drafts as they change more frequently) - async
             ttl = settings.CACHE_TTL.get('SHORT', 60)
-            cache.set(cache_key, response_data, ttl)
+            await sync_to_async(cache.set)(cache_key, response_data, ttl)
             logger.debug(f"Cached: {cache_key} (TTL: {ttl}s)")
 
             return Response(response_data, status=status.HTTP_200_OK)
@@ -512,7 +860,7 @@ class ProblemRegisteredView(APIView):
     """Registered problems (problems with test cases and completed) - Admin only - with caching"""
     permission_classes = [IsAuthenticated]
 
-    def get(self, request):
+    async def get(self, request):
         """
         Get all registered problems (is_completed=True)
         Admin only.
@@ -522,8 +870,13 @@ class ProblemRegisteredView(APIView):
                 "problems": [...]
             }
         """
-        # Check admin permission
-        if not request.user.is_admin():
+        # Check admin permission - async
+        try:
+            is_admin = await sync_to_async(lambda: request.user.is_admin())()
+        except (AttributeError, Exception):
+            is_admin = False
+
+        if not is_admin:
             return Response(
                 {'error': 'Admin permission required'},
                 status=status.HTTP_403_FORBIDDEN
@@ -531,8 +884,8 @@ class ProblemRegisteredView(APIView):
 
         cache_key = "problem_registered:all"
 
-        # Try to get from cache
-        cached_data = cache.get(cache_key)
+        # Try to get from cache - async
+        cached_data = await sync_to_async(cache.get)(cache_key)
         if cached_data is not None:
             logger.debug(f"Cache HIT: {cache_key}")
             return Response(cached_data, status=status.HTTP_200_OK)
@@ -540,20 +893,45 @@ class ProblemRegisteredView(APIView):
         logger.debug(f"Cache MISS: {cache_key}")
 
         try:
-            # Initialize repository
-            problem_repo = ProblemRepository()
+            problems = []
 
-            # Get completed problems from DynamoDB (now returns tuple)
-            problems, _ = problem_repo.list_completed_problems(limit=1000)
+            # Async DynamoDB query using GSI3
+            async with AsyncDynamoDBClient.get_resource() as resource:
+                table = await resource.Table(AsyncDynamoDBClient._table_name)
+
+                # Query for completed problems using GSI3
+                # GSI3PK = 'PROB#COMPLETED' for completed problems
+                # GSI3SK = timestamp (sort key)
+                response = await table.query(
+                    IndexName='GSI3',
+                    KeyConditionExpression='GSI3PK = :pk',
+                    ExpressionAttributeValues={
+                        ':pk': 'PROB#COMPLETED'
+                    },
+                    ScanIndexForward=False,  # Newest first (descending by timestamp)
+                    Limit=1000
+                )
+
+                problems = response.get('Items', [])
+
+            # Filter out deleted problems (dat.del field)
+            problems = [p for p in problems if not p.get('dat', {}).get('del', False)]
+
+            # Extract platform and problem_id from PK
+            # PK format: PROB#<platform>#<problem_id>
+            for problem in problems:
+                pk_parts = problem['PK'].split('#')
+                if len(pk_parts) >= 3:
+                    problem['platform'] = pk_parts[1]
+                    problem['problem_id'] = '#'.join(pk_parts[2:])  # Handle IDs with # in them
 
             # Build result with denormalized test_case_count (no N+1 queries)
             result = []
-            from datetime import datetime
-            from decimal import Decimal
             for problem in problems:
+                dat = problem.get('dat', {})
                 # Convert timestamp to ISO format
                 # DynamoDB returns Decimal, convert to float first
-                created_timestamp = problem.get('created_at', 0)
+                created_timestamp = problem.get('crt', 0)
                 if isinstance(created_timestamp, Decimal):
                     created_timestamp = float(created_timestamp)
                 created_at_iso = datetime.fromtimestamp(created_timestamp).isoformat() if created_timestamp else None
@@ -561,21 +939,22 @@ class ProblemRegisteredView(APIView):
                 result.append({
                     'platform': problem['platform'],
                     'problem_id': problem['problem_id'],
-                    'title': problem['title'],
-                    'problem_url': problem.get('problem_url', ''),
-                    'tags': problem.get('tags', []),
-                    'language': problem.get('language', ''),
-                    'is_completed': problem.get('is_completed', False),
-                    'verified_by_admin': problem.get('verified_by_admin', False),
-                    'test_case_count': problem.get('test_case_count', 0),  # Use denormalized count
+                    'title': dat.get('tit', ''),
+                    'problem_url': dat.get('url', ''),
+                    'tags': dat.get('tag', []),
+                    'language': dat.get('lng', ''),
+                    'is_completed': dat.get('cmp', False),
+                    'needs_review': dat.get('nrv', False),
+                    'verified_by_admin': dat.get('vrf', False),
+                    'test_case_count': dat.get('tcc', 0),  # Use denormalized count
                     'created_at': created_at_iso
                 })
 
             response_data = {'problems': result}
 
-            # Cache the result
+            # Cache the result - async
             ttl = settings.CACHE_TTL.get('PROBLEM_LIST', 300)
-            cache.set(cache_key, response_data, ttl)
+            await sync_to_async(cache.set)(cache_key, response_data, ttl)
             logger.debug(f"Cached: {cache_key} (TTL: {ttl}s)")
 
             return Response(response_data, status=status.HTTP_200_OK)

@@ -204,6 +204,12 @@ class AccountStatsSerializer(serializers.Serializer):
 class ExtractProblemInfoSerializer(serializers.Serializer):
     """Extract problem info serializer"""
     problem_url = serializers.URLField()
+    samples = serializers.ListField(
+        child=serializers.DictField(),
+        required=False,
+        allow_empty=True,
+        help_text="List of sample test cases with 'input' and 'output' keys"
+    )
 
 
 class ProblemRegisterSerializer(serializers.Serializer):

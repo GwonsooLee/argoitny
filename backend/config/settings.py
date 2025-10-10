@@ -97,7 +97,13 @@ MIDDLEWARE.extend([
 ])
 
 ROOT_URLCONF = 'config.urls'
+
+# ASGI Configuration - ASGI only mode
 ASGI_APPLICATION = 'config.asgi.application'
+
+# Enable async mode for Django (Django 4.1+)
+# This allows async views and middleware to run natively
+ASYNC_MODE = True
 
 TEMPLATES = [
     {
@@ -114,8 +120,6 @@ TEMPLATES = [
         },
     },
 ]
-
-WSGI_APPLICATION = 'config.wsgi.application'
 
 # ============================================
 # Database Configuration
@@ -332,8 +336,8 @@ GEMINI_API_KEY = secrets.get('GEMINI_API_KEY', default='')
 
 # OpenAI API Configuration
 OPENAI_API_KEY = secrets.get('OPENAI_API_KEY', default='')
-# GPT-5 is the latest unified model (released August 2025)
-# Combines reasoning abilities with fast responses
+# GPT-5 is the latest flagship model with advanced reasoning capabilities
+# Uses reasoning_effort parameter instead of temperature for deterministic output
 OPENAI_MODEL = config.get('openai.model', env_var='OPENAI_MODEL', default='gpt-5')
 
 # Default LLM Service ('gemini' or 'openai')

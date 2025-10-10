@@ -1,7 +1,7 @@
 """UsageLog repository for DynamoDB operations - optimized for rate limiting"""
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Any
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Key, Attr
 from .base_repository import BaseRepository
 
 
@@ -166,10 +166,17 @@ class UsageLogRepository(BaseRepository):
         # Build partition key for date-specific query
         pk = f'EMAIL#{email}#ULOG#{date_str}'
 
-        # Query with COUNT
+        # Query with COUNT using ExpressionAttributeNames for nested attribute
         response = self.table.query(
             KeyConditionExpression=Key('PK').eq(pk) & Key('SK').begins_with('ULOG#'),
-            FilterExpression=Key('dat').attr_exists() & Key('dat.act').eq(action),
+            FilterExpression='#dat.#act = :act',
+            ExpressionAttributeNames={
+                '#dat': 'dat',
+                '#act': 'act'
+            },
+            ExpressionAttributeValues={
+                ':act': action
+            },
             Select='COUNT'
         )
 
@@ -210,7 +217,14 @@ class UsageLogRepository(BaseRepository):
         # Query with COUNT - no data transfer, just count
         response = self.table.query(
             KeyConditionExpression=Key('PK').eq(pk) & Key('SK').begins_with('ULOG#'),
-            FilterExpression=Key('dat').attr_exists() & Key('dat.act').eq(action),
+            FilterExpression='#dat.#act = :act',
+            ExpressionAttributeNames={
+                '#dat': 'dat',
+                '#act': 'act'
+            },
+            ExpressionAttributeValues={
+                ':act': action
+            },
             Select='COUNT'  # Critical: only count, don't fetch data
         )
 

@@ -1,17 +1,19 @@
-"""Tests for authentication views"""
+"""Tests for authentication views - Async Version"""
 import pytest
 from django.urls import reverse
 from rest_framework import status
 from unittest.mock import patch, Mock
+from asgiref.sync import sync_to_async
 from api.models import User
 
 
 @pytest.mark.django_db
+@pytest.mark.asyncio
 class TestGoogleLogin:
     """Test Google OAuth login endpoint"""
 
-    def test_login_success_new_user(self, api_client):
-        """Test successful login with new user creation"""
+    async def test_login_success_new_user(self, api_client):
+        """Test successful login with new user creation (async)"""
         with patch('api.services.google_oauth.GoogleOAuthService.verify_token') as mock_verify, \
              patch('api.services.google_oauth.GoogleOAuthService.get_or_create_user') as mock_get_user:
 
@@ -23,8 +25,8 @@ class TestGoogleLogin:
                 'picture': 'https://example.com/pic.jpg'
             }
 
-            # Mock user creation
-            user = User.objects.create_user(
+            # Mock user creation - async
+            user = await sync_to_async(User.objects.create_user)(
                 email='newuser@example.com',
                 name='New User',
                 picture='https://example.com/pic.jpg',
@@ -32,7 +34,7 @@ class TestGoogleLogin:
             )
             mock_get_user.return_value = user
 
-            response = api_client.post('/api/auth/google/', {
+            response = await sync_to_async(api_client.post)('/api/auth/google/', {
                 'token': 'valid_google_token'
             })
 
@@ -42,8 +44,8 @@ class TestGoogleLogin:
             assert 'refresh' in response.data
             assert response.data['user']['email'] == 'newuser@example.com'
 
-    def test_login_success_existing_user(self, api_client, sample_user):
-        """Test successful login with existing user"""
+    async def test_login_success_existing_user(self, api_client, sample_user):
+        """Test successful login with existing user (async)"""
         with patch('api.services.google_oauth.GoogleOAuthService.verify_token') as mock_verify, \
              patch('api.services.google_oauth.GoogleOAuthService.get_or_create_user') as mock_get_user:
 
@@ -55,39 +57,39 @@ class TestGoogleLogin:
             }
             mock_get_user.return_value = sample_user
 
-            response = api_client.post('/api/auth/google/', {
+            response = await sync_to_async(api_client.post)('/api/auth/google/', {
                 'token': 'valid_google_token'
             })
 
             assert response.status_code == status.HTTP_200_OK
             assert response.data['user']['email'] == sample_user.email
 
-    def test_login_missing_token(self, api_client):
-        """Test login without token"""
-        response = api_client.post('/api/auth/google/', {})
+    async def test_login_missing_token(self, api_client):
+        """Test login without token (async)"""
+        response = await sync_to_async(api_client.post)('/api/auth/google/', {})
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert 'error' in response.data
         assert 'required' in response.data['error'].lower()
 
-    def test_login_invalid_token(self, api_client):
-        """Test login with invalid Google token"""
+    async def test_login_invalid_token(self, api_client):
+        """Test login with invalid Google token (async)"""
         with patch('api.services.google_oauth.GoogleOAuthService.verify_token') as mock_verify:
             mock_verify.side_effect = ValueError('Invalid token')
 
-            response = api_client.post('/api/auth/google/', {
+            response = await sync_to_async(api_client.post)('/api/auth/google/', {
                 'token': 'invalid_token'
             })
 
             assert response.status_code == status.HTTP_401_UNAUTHORIZED
             assert 'error' in response.data
 
-    def test_login_google_service_error(self, api_client):
-        """Test login when Google service fails"""
+    async def test_login_google_service_error(self, api_client):
+        """Test login when Google service fails (async)"""
         with patch('api.services.google_oauth.GoogleOAuthService.verify_token') as mock_verify:
             mock_verify.side_effect = Exception('Google API error')
 
-            response = api_client.post('/api/auth/google/', {
+            response = await sync_to_async(api_client.post)('/api/auth/google/', {
                 'token': 'valid_token'
             })
 

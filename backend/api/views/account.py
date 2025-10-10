@@ -1,14 +1,20 @@
-"""Account Views"""
+"""Account Views - Async Version"""
 from rest_framework import status
-from rest_framework.views import APIView
+from adrf.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from ..authentication import CustomJWTAuthentication
 from django.conf import settings
 from ..utils.serializer_helper import serialize_dynamodb_user
-from ..dynamodb.client import DynamoDBClient
-from ..dynamodb.repositories import UserRepository, UsageLogRepository, SearchHistoryRepository
+from ..dynamodb.async_client import AsyncDynamoDBClient
+from ..dynamodb.async_repositories import (
+    AsyncUserRepository,
+    AsyncUsageLogRepository,
+    AsyncSearchHistoryRepository,
+    AsyncSubscriptionPlanRepository
+)
 from django.core.cache import cache
+from asgiref.sync import sync_to_async
 from django.utils import timezone
 from datetime import datetime, timedelta
 from ..serializers import UserSerializer
@@ -23,7 +29,7 @@ class UserProfileView(APIView):
     authentication_classes = [CustomJWTAuthentication]
     permission_classes = [IsAuthenticated]
 
-    def get(self, request):
+    async def get(self, request):
         """
         Get current user's profile with up-to-date plan information
 
@@ -31,21 +37,25 @@ class UserProfileView(APIView):
             User dict with latest subscription_plan_name from DynamoDB
         """
         try:
-            # Get user from DynamoDB to ensure latest data
-            table = DynamoDBClient.get_table()
-            user_repo = UserRepository(table)
+            # Get user email from JWT token (sync operation)
+            user_email = await sync_to_async(lambda: request.user.email)()
 
-            # Get user by email (from JWT token)
-            user_dict = user_repo.get_user_by_email(request.user.email)
+            # Initialize async repository with aioboto3 table
+            async with AsyncDynamoDBClient.get_resource() as resource:
+                table = await resource.Table(AsyncDynamoDBClient._table_name)
+                user_repo = AsyncUserRepository(table)
 
-            if not user_dict:
-                return Response(
-                    {'error': 'User not found'},
-                    status=status.HTTP_404_NOT_FOUND
-                )
+                # Get user by email (from JWT token)
+                user_dict = await user_repo.get_user_by_email(user_email)
 
-            # Serialize with latest plan information
-            serialized_user = serialize_dynamodb_user(user_dict)
+                if not user_dict:
+                    return Response(
+                        {'error': 'User not found'},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+
+            # Serialize with latest plan information (sync operation)
+            serialized_user = await sync_to_async(serialize_dynamodb_user)(user_dict)
 
             return Response(serialized_user, status=status.HTTP_200_OK)
 
@@ -62,7 +72,7 @@ class AccountStatsView(APIView):
     authentication_classes = [CustomJWTAuthentication]
     permission_classes = [IsAuthenticated]
 
-    def get(self, request):
+    async def get(self, request):
         """
         Get user's test execution statistics (cached)
 
@@ -83,63 +93,94 @@ class AccountStatsView(APIView):
                 "failed_executions": 20
             }
         """
-        user = request.user
+        # Get user email (sync operation)
+        user_email = await sync_to_async(lambda: request.user.email)()
 
-        # Generate cache key
-        cache_key = CacheKeyGenerator.user_stats_key(user.id)
+        # Generate cache key using email
+        cache_key = CacheKeyGenerator.user_stats_key(user_email)
 
-        # Try to get from cache
-        cached_data = cache.get(cache_key)
+        # Try to get from cache (sync operation)
+        cached_data = await sync_to_async(cache.get)(cache_key)
         if cached_data is not None:
             logger.debug(f"Cache HIT: {cache_key}")
             return Response(cached_data, status=status.HTTP_200_OK)
 
         logger.debug(f"Cache MISS: {cache_key}")
 
-        # OPTIMIZATION: Use only() to fetch minimal fields for counting
-        # This significantly reduces data transfer from database
-        # Use user_id for compatibility with DynamoDB user objects
-        user_history = SearchHistory.objects.filter(user_id=user.id).only(
-            'id', 'platform', 'language', 'problem_id', 'failed_count'
-        )
+        try:
+            # AsyncSearchHistoryRepository wraps sync repo with sync_to_async
+            # so we don't pass async table - let it create its own sync table
+            history_repo = AsyncSearchHistoryRepository()
 
-        # OPTIMIZATION: Aggregate all stats in a single pass using database aggregations
-        # Total executions (use count() which is optimized)
-        total_executions = user_history.count()
+            # Get all user history from DynamoDB
+            # Note: This uses GSI1 (user_email index) to efficiently query user's history
+            user_history_items, _ = await history_repo.list_user_history(
+                user_id=user_email,  # user_id is email in DynamoDB
+                limit=1000  # Get up to 1000 items (adjust if needed)
+            )
 
-        # OPTIMIZATION: Group by platform - single query with aggregation
-        platform_stats = user_history.values('platform').annotate(count=Count('id')).order_by()
-        by_platform = {stat['platform']: stat['count'] for stat in platform_stats}
+            # Process statistics from items
+            total_executions = len(user_history_items)
 
-        # OPTIMIZATION: Group by language - single query with aggregation
-        language_stats = user_history.values('language').annotate(count=Count('id')).order_by()
-        by_language = {stat['language']: stat['count'] for stat in language_stats}
+            # Count by platform
+            by_platform = {}
+            by_language = {}
+            problem_ids = set()
+            passed_count = 0
+            failed_count = 0
 
-        # OPTIMIZATION: Count unique problems - single query
-        total_problems = user_history.values('problem').distinct().count()
+            for item in user_history_items:
+                dat = item.get('dat', {})
 
-        # OPTIMIZATION: Count passed/failed using conditional aggregation in a single query
-        # This is much faster than two separate filter().count() calls
-        pass_fail_stats = user_history.aggregate(
-            passed=Count('id', filter=Q(failed_count=0)),
-            failed=Count('id', filter=Q(failed_count__gt=0))
-        )
+                # Count by platform
+                platform = dat.get('plt')
+                if platform:
+                    by_platform[platform] = by_platform.get(platform, 0) + 1
 
-        response_data = {
-            'total_executions': total_executions,
-            'by_platform': by_platform,
-            'by_language': by_language,
-            'total_problems': total_problems,
-            'passed_executions': pass_fail_stats['passed'],
-            'failed_executions': pass_fail_stats['failed']
-        }
+                # Count by language
+                language = dat.get('lng')
+                if language:
+                    by_language[language] = by_language.get(language, 0) + 1
 
-        # Cache the result
-        ttl = settings.CACHE_TTL.get('USER_STATS', 180)
-        cache.set(cache_key, response_data, ttl)
-        logger.debug(f"Cached: {cache_key} (TTL: {ttl}s)")
+                # Track unique problems (platform#problem_number)
+                problem_number = dat.get('pno')
+                if platform and problem_number:
+                    problem_ids.add(f"{platform}#{problem_number}")
 
-        return Response(response_data, status=status.HTTP_200_OK)
+                # Count passed/failed
+                failed = dat.get('fsc', 0)
+                if failed == 0:
+                    passed_count += 1
+                else:
+                    failed_count += 1
+
+            response_data = {
+                'total_executions': total_executions,
+                'by_platform': by_platform,
+                'by_language': by_language,
+                'total_problems': len(problem_ids),
+                'passed_executions': passed_count,
+                'failed_executions': failed_count
+            }
+
+            # Cache the result (sync operation)
+            ttl = settings.CACHE_TTL.get('USER_STATS', 180)
+            await sync_to_async(cache.set)(cache_key, response_data, ttl)
+            logger.debug(f"Cached: {cache_key} (TTL: {ttl}s)")
+
+            return Response(response_data, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.error(f'Error calculating user stats: {e}')
+            # Return empty stats on error
+            return Response({
+                'total_executions': 0,
+                'by_platform': {},
+                'by_language': {},
+                'total_problems': 0,
+                'passed_executions': 0,
+                'failed_executions': 0
+            }, status=status.HTTP_200_OK)
 
 
 class UpdatePlanView(APIView):
@@ -147,7 +188,7 @@ class UpdatePlanView(APIView):
     authentication_classes = [CustomJWTAuthentication]
     permission_classes = [IsAuthenticated]
 
-    def patch(self, request):
+    async def patch(self, request):
         """
         Update user's subscription plan
 
@@ -168,7 +209,8 @@ class UpdatePlanView(APIView):
                 "created_at": "2025-01-01T00:00:00Z"
             }
         """
-        user = request.user
+        # Get user email (sync operation)
+        user_email = await sync_to_async(lambda: request.user.email)()
         plan_name = request.data.get('plan')
 
         if not plan_name:
@@ -177,29 +219,60 @@ class UpdatePlanView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Get the plan (must be active and not Admin plan for regular users)
-        plan = SubscriptionPlan.objects.filter(
-            name=plan_name,
-            is_active=True
-        ).exclude(name='Admin').first()
+        try:
+            # Initialize async repositories with aioboto3 table
+            async with AsyncDynamoDBClient.get_resource() as resource:
+                table = await resource.Table(AsyncDynamoDBClient._table_name)
+                plan_repo = AsyncSubscriptionPlanRepository(table)
+                user_repo = AsyncUserRepository(table)
 
-        if not plan:
+                # Get the plan from DynamoDB (must be active and not Admin plan)
+                plans = await plan_repo.list_plans()
+                plan = None
+                for p in plans:
+                    if (p.get('name') == plan_name and
+                        p.get('is_active', False) and
+                        p.get('name') != 'Admin'):
+                        plan = p
+                        break
+
+                if not plan:
+                    return Response(
+                        {'error': 'Invalid plan name or plan not available'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                # Get current user to extract user_id
+                current_user = await user_repo.get_user_by_email(user_email)
+                if not current_user:
+                    return Response(
+                        {'error': 'User not found'},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+
+                # Update user's plan in DynamoDB using user_id
+                await user_repo.update_user(
+                    user_id=current_user['user_id'],
+                    updates={'subscription_plan_id': plan['id']}
+                )
+
+                # Get updated user
+                updated_user = await user_repo.get_user_by_email(user_email)
+
+            # Clear user stats cache (sync operation)
+            cache_key = CacheKeyGenerator.user_stats_key(user_email)
+            await sync_to_async(cache.delete)(cache_key)
+
+            # Serialize and return updated user info
+            serialized_user = await sync_to_async(serialize_dynamodb_user)(updated_user)
+            return Response(serialized_user, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.error(f'Error updating user plan: {e}')
             return Response(
-                {'error': 'Invalid plan name or plan not available'},
-                status=status.HTTP_400_BAD_REQUEST
+                {'error': f'Failed to update plan: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-
-        # Update user's plan
-        user.subscription_plan = plan
-        user.save()
-
-        # Clear user stats cache
-        cache_key = CacheKeyGenerator.user_stats_key(user.id)
-        cache.delete(cache_key)
-
-        # Return updated user info
-        serializer = UserSerializer(user)
-        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class PlanUsageView(APIView):
@@ -207,7 +280,7 @@ class PlanUsageView(APIView):
     authentication_classes = [CustomJWTAuthentication]
     permission_classes = [IsAuthenticated]
 
-    def get(self, request):
+    async def get(self, request):
         """
         Get user's current plan usage vs limits
 
@@ -226,9 +299,11 @@ class PlanUsageView(APIView):
                 }
             }
         """
-        user = request.user
+        # Get user email and subscription_plan_id (sync operations)
+        user_email = await sync_to_async(lambda: request.user.email)()
+        subscription_plan_id = await sync_to_async(lambda: request.user.subscription_plan_id)()
 
-        # Get plan name and limits from DynamoDB
+        # Default plan info
         plan_name = 'Free'
         limits = {
             'max_hints_per_day': 5,
@@ -236,30 +311,30 @@ class PlanUsageView(APIView):
             'max_problems': -1,
         }
 
-        if user.subscription_plan_id:
+        # Get plan info from DynamoDB if user has a plan
+        if subscription_plan_id:
             try:
-                from ..dynamodb.client import DynamoDBClient
-                from ..dynamodb.repositories import SubscriptionPlanRepository
+                # Initialize async repository with aioboto3 table
+                async with AsyncDynamoDBClient.get_resource() as resource:
+                    table = await resource.Table(AsyncDynamoDBClient._table_name)
+                    plan_repo = AsyncSubscriptionPlanRepository(table)
+                    plan = await plan_repo.get_plan(subscription_plan_id)
 
-                table = DynamoDBClient.get_table()
-                plan_repo = SubscriptionPlanRepository(table)
-                plan = plan_repo.get_plan(user.subscription_plan_id)
-
-                if plan:
-                    plan_name = plan.get('name', 'Free')
-                    limits = {
-                        'max_hints_per_day': plan.get('max_hints_per_day', 5),
-                        'max_executions_per_day': plan.get('max_executions_per_day', 50),
-                        'max_problems': plan.get('max_problems', -1),
-                    }
+                    if plan:
+                        plan_name = plan.get('name', 'Free')
+                        limits = {
+                            'max_hints_per_day': plan.get('max_hints_per_day', 5),
+                            'max_executions_per_day': plan.get('max_executions_per_day', 50),
+                            'max_problems': plan.get('max_problems', -1),
+                        }
             except Exception as e:
                 logger.error(f'Failed to get plan info: {e}')
 
-        # Generate cache key using email (user.id is email in DynamoDB)
-        cache_key = CacheKeyGenerator.user_stats_key(user.email) + ':usage'
+        # Generate cache key using email
+        cache_key = CacheKeyGenerator.user_stats_key(user_email) + ':usage'
 
-        # Try to get from cache
-        cached_data = cache.get(cache_key)
+        # Try to get from cache (sync operation)
+        cached_data = await sync_to_async(cache.get)(cache_key)
         if cached_data is not None:
             logger.debug(f"Cache HIT: {cache_key}")
             return Response(cached_data, status=status.HTTP_200_OK)
@@ -268,27 +343,28 @@ class PlanUsageView(APIView):
 
         # Calculate today's usage from DynamoDB
         try:
-            table = DynamoDBClient.get_table()
-            usage_repo = UsageLogRepository(table)
-            history_repo = SearchHistoryRepository(table)
+            # AsyncRepositories wrap sync repos with sync_to_async
+            # so we don't pass async table - let them create their own sync tables
+            usage_repo = AsyncUsageLogRepository()
+            history_repo = AsyncSearchHistoryRepository()
 
             # Get today's date string
             today_str = datetime.utcnow().strftime('%Y%m%d')
 
             # Count hints and executions today
-            hints_today = usage_repo.get_daily_usage_count_by_email(
-                user.email,
+            hints_today = await usage_repo.get_daily_usage_count_by_email(
+                user_email,
                 'hint',
                 today_str
             )
-            executions_today = usage_repo.get_daily_usage_count_by_email(
-                user.email,
+            executions_today = await usage_repo.get_daily_usage_count_by_email(
+                user_email,
                 'execution',
                 today_str
             )
 
             # Count total unique problems
-            total_problems = history_repo.count_unique_problems(user.email)
+            total_problems = await history_repo.count_unique_problems(user_email)
 
         except Exception as e:
             logger.error(f'Failed to get usage statistics: {e}')
@@ -310,9 +386,9 @@ class PlanUsageView(APIView):
             }
         }
 
-        # Cache the result for 60 seconds (shorter TTL for usage data)
+        # Cache the result for 60 seconds (shorter TTL for usage data) - sync operation
         ttl = 60
-        cache.set(cache_key, response_data, ttl)
+        await sync_to_async(cache.set)(cache_key, response_data, ttl)
         logger.debug(f"Cached: {cache_key} (TTL: {ttl}s)")
 
         return Response(response_data, status=status.HTTP_200_OK)

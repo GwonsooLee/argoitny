@@ -10,29 +10,13 @@ class OpenAIService:
 
     def __init__(self):
         if settings.OPENAI_API_KEY:
-            self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
-            # Use GPT-4o for best results, or allow configuration
-            self.model = getattr(settings, 'OPENAI_MODEL', 'gpt-4o')
+            # Set timeout to 30 minutes (1800 seconds) for long-running requests
+            self.client = OpenAI(api_key=settings.OPENAI_API_KEY, timeout=1800.0)
+            # Use GPT-5 for best results, or allow configuration
+            self.model = getattr(settings, 'OPENAI_MODEL', 'gpt-5')
         else:
             self.client = None
             self.model = None
-
-    def get_optimal_temperature(self, difficulty_rating):
-        """
-        Get optimal temperature based on problem difficulty
-        Lower temperature = more deterministic (better for hard problems)
-        Higher temperature = more creative (better for easy problems)
-        """
-        if difficulty_rating is None:
-            return 0.7
-        elif difficulty_rating >= 2500:
-            return 0.3  # Very deterministic for 2500+ problems
-        elif difficulty_rating >= 2000:
-            return 0.5
-        elif difficulty_rating >= 1500:
-            return 0.7
-        else:
-            return 0.8
 
     def _validate_solution_with_samples(self, solution_code, samples):
         """
@@ -216,16 +200,19 @@ class OpenAIService:
             webpage_content = '\n'.join(chunk for chunk in chunks if chunk)
             webpage_content = re.sub(r' +', ' ', webpage_content)
 
+            # Remove LaTeX math delimiters ($$) from Codeforces content
+            webpage_content = re.sub(r'\$\$\$([^\$]+)\$\$\$', r'\1', webpage_content)
+
             if len(webpage_content) > 80000:
                 webpage_content = webpage_content[:80000]
 
             logger.info(f"Fetched webpage: {len(webpage_content)} chars")
 
-            # Build prompt for OpenAI
-            prompt = f"""You are a competitive programming problem parser specializing in extracting problem metadata.
+            # System context: Role, rules, and output format
+            system_context = """You are a competitive programming problem parser specializing in extracting problem metadata.
 
-## YOUR TASK
-Extract the problem metadata in structured JSON format. DO NOT solve the problem or generate code.
+## YOUR ROLE
+Extract problem metadata in structured JSON format. DO NOT solve the problem or generate code.
 
 ## EXTRACTION REQUIREMENTS
 
@@ -270,14 +257,17 @@ DO NOT include output format, time limits, or problem descriptions.
 
 ## OUTPUT FORMAT
 Return ONLY valid JSON (no markdown, no code blocks):
-{{
+{
     "title": "Problem Title",
     "constraints": "First line: integer N (1 ≤ N ≤ 10^5)...",
     "samples": [
-        {{"input": "3\\n1 2 3", "output": "6"}},
-        {{"input": "1\\n100", "output": "100"}}
+        {"input": "3\\n1 2 3", "output": "6"},
+        {"input": "1\\n100", "output": "100"}
     ]
-}}
+}"""
+
+            # User context: Actual data to process
+            user_prompt = f"""Extract the problem metadata from the following webpage content.
 
 ## WEBPAGE CONTENT
 {webpage_content}
@@ -286,17 +276,22 @@ Return ONLY valid JSON."""
 
             update_progress("Extracting problem metadata...")
 
-            completion = self.client.chat.completions.create(
+            completion = self.client.responses.create(
                 model=self.model,
-                messages=[
-                    {"role": "system", "content": "You are an expert at extracting structured data from competitive programming problems. Always return valid JSON."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.1,  # Low temperature for extraction
-                response_format={"type": "json_object"}  # Ensure JSON response
+                instructions=system_context,  # System context in instructions
+                input=user_prompt,  # User prompt in input
+                modalities={"type": "json_object"},  # Ensure JSON response
+                top_p=1,  # Full probability distribution (GPT-5 default)
+                max_output_tokens=4096,  # Maximum output length for metadata
             )
 
-            response_text = completion.choices[0].message.content.strip()
+            # Extract text from o1 model response structure
+            # Response has: output[0].content[0].text
+            if not completion.output or len(completion.output) == 0:
+                raise ValueError('OpenAI response has no output')
+            if not completion.output[0].content or len(completion.output[0].content) == 0:
+                raise ValueError('OpenAI response content is empty')
+            response_text = completion.output[0].content[0].text.strip()
             logger.info(f"OpenAI response: {len(response_text)} chars")
 
             # Parse JSON
@@ -345,216 +340,92 @@ Return ONLY valid JSON."""
             if progress_callback:
                 progress_callback(message)
 
-        # Build retry context
+        # Build minimal retry context (GPT-5 reasoning will handle root cause analysis)
         retry_context = ""
         if previous_attempt:
             retry_context = f"""
-## PREVIOUS ATTEMPT ANALYSIS
-Your previous solution FAILED. Analyze your mistake:
-
-### Previous Code:
+Previous attempt failed:
 ```cpp
 {previous_attempt.get('code', 'N/A')}
 ```
 
-### Failure Reason:
-{previous_attempt.get('error', 'Unknown error')}
+Error: {previous_attempt.get('error', 'Unknown error')}
 
-### Critical Questions:
-1. **Algorithm Selection**: Was your algorithm correct for this problem type?
-2. **Time Complexity**: Did you exceed time limits? What's the required complexity?
-3. **Edge Cases**: Which edge case did you miss?
-4. **Implementation Bugs**: Off-by-one errors? Integer overflow? Array bounds?
-
-### Your Task Now:
-Generate a CORRECTED solution that fixes the specific failure above.
+Fix the issue and provide a corrected solution.
 """
 
-        # Build samples
-        samples_str = "\n".join([
-            f"""Sample {i+1}:
-Input:
+        # Build samples (raw format - like Gemini)
+        samples_str = "\n\n".join([
+            f"""Input
 {s['input']}
-
-Expected Output:
-{s['output']}
-"""
+Output
+{s['output']}"""
             for i, s in enumerate(problem_metadata.get('samples', []))
         ])
 
-        # Calculate expected complexity for constraints (NEW)
-        constraints_hint = ""
-        constraints_text = problem_metadata.get('constraints', '')
-        # Try to extract N constraints
-        n_match = re.search(r'[1≤]\s*N\s*[≤]\s*(\d+)', constraints_text)
-        if n_match:
-            max_n = int(n_match.group(1))
-            if max_n <= 500:
-                constraints_hint = "\n**Complexity Target:** O(N³) may be acceptable for N ≤ 500"
-            elif max_n <= 5000:
-                constraints_hint = "\n**Complexity Target:** O(N²) acceptable for N ≤ 5000"
-            elif max_n <= 100000:
-                constraints_hint = "\n**Complexity Target:** O(N log N) or O(N) required for N ≤ 10⁵"
-            else:
-                constraints_hint = "\n**Complexity Target:** O(N) or O(log N) required for large N"
+        # Balanced system context: Clear rules without over-constraining
+        system_context = """You are a competitive programming solver for Codeforces (rating 3000+).
+Follow the SOLVING PROTOCOL INTERNALLY, but OUTPUT ONLY THE FINAL C++ CODE BLOCK.
 
-        prompt = f"""You are an ELITE competitive programmer (Grandmaster level) specializing in Codeforces, ICPC, and IOI problems.
+HARD OUTPUT RULES (highest priority):
+- Return EXACTLY ONE fenced code block in C++ (```cpp ... ```), with no text before/after.
+- If there is any risk of exceeding token limits, SKIP ALL EXPLANATIONS and output only the final code.
+- If constraints are missing, assume TL=1–2s, ML=256–512MB, n,q≤2e5, and choose an algorithm that safely fits those.
 
-Follow this EXACT protocol to solve the problem:
+SOLVING PROTOCOL (INTERNAL—DO NOT PRINT):
+0) Restate problem in 2–3 lines (internally only).
+1) Identify pattern/category (DS, Graph, DP, Math, etc.).
+2) Choose an algorithm with provable complexity; ensure it fits constraints (O(n log n) typical).
+   - Do the back-of-the-envelope op-count check internally.
+3) Edge cases & pitfalls checklist (internally):
+   - 64-bit overflows; off-by-one; empty/min/max; duplicates; recursion depth; I/O speed; strict output format.
+4) Implementation plan (internally): data types, I/O, structure, failure modes.
+5) Final Code: C++17/20 single file.
+   - Fast IO: ios::sync_with_stdio(false); cin.tie(nullptr);
+   - Avoid recursion if depth may exceed 1e5; prefer iterative.
+   - No debug prints; deterministic behavior.
+   - Minimal top-of-file comment (≤8 lines) summarizing approach & complexity only.
 
-## PROBLEM
-**Title:** {problem_metadata['title']}
+If problem statement is ambiguous, make the least-risk assumption and add ONE short comment line about it at the top of the code.
 
-**Input Format and Constraints:**
-{problem_metadata['constraints']}{constraints_hint}
+If you accidentally include any prose outside the code block, REGENERATE and return only the code block.
 
-**Sample Test Cases:**
-{samples_str}
+OUTPUT FORMAT (repeat): Only one C++ fenced code block, nothing else."""
 
+        # User context: Raw problem presentation (without samples)
+        user_prompt = f"""{problem_metadata.get('description', problem_metadata['title'])}
+
+{problem_metadata['constraints']}
 {retry_context}
 
-═══════════════════════════════════════════════════════════════
-## MANDATORY SOLUTION PROTOCOL
-═══════════════════════════════════════════════════════════════
-
-### Step 0: Problem Restatement (Comprehension Check)
-Before solving, restate the problem in 2-3 lines to confirm understanding:
-- What is the input format?
-- What is the expected output?
-- What is the core question being asked?
-
-### Step 1: Problem Understanding & Analysis
-Analyze what the problem is REALLY asking:
-- What is the underlying problem pattern?
-- Are there any implicit constraints or patterns?
-- What problem category does this belong to? (DP, Graph, Greedy, Data Structure, Math, etc.)
-
-### Step 2: Algorithm Selection with Complexity Proof
-Select the appropriate algorithm:
-- What algorithm/data structure is needed?
-- **Prove your complexity fits constraints:**
-  - Calculate exact time complexity (e.g., O(N log N))
-  - Verify it runs in < 1-2 seconds for max constraints
-  - Show calculation: "N=10⁵, O(N log N) ≈ 10⁵ × 17 ≈ 1.7M ops ✓"
-- Is there a well-known algorithm/pattern this matches?
-
-### Step 3: Edge Case Analysis & Common Pitfalls
-
-**Edge Cases to Test:**
-- **Minimum values**: N=0, N=1, single element, empty array/string
-- **Maximum values**: N=10⁵, values=10⁹, stress testing at limits
-- **Special cases**: All elements equal, already sorted, reverse sorted, alternating patterns
-- **Boundary conditions**: First/last elements, modulo arithmetic (10⁹+7)
-
-**Common Pitfalls Checklist (Check ALL):**
-- [ ] Integer overflow → Use `long long` for sums/products when values > 10⁶
-- [ ] Off-by-one errors → Verify loop bounds and array indices
-- [ ] Modulo arithmetic → Apply mod correctly if required (especially in multiplication)
-- [ ] Disconnected components → For graph problems, handle multiple components
-- [ ] Empty input cases → What if N=0 or string is empty?
-- [ ] Duplicate values → Problem may assume unique, but test with duplicates
-- [ ] Uninitialized variables → Initialize all arrays/variables
-- [ ] Array bounds → Ensure array size matches maximum N
-
-### Step 4: Implementation Strategy
-Plan the implementation:
-- Choose appropriate data types (int vs long long vs double)
-- Plan the input reading logic (single vs multiple test cases)
-- Structure the algorithm clearly (avoid spaghetti code)
-- Add fast I/O if needed (recommended for large inputs)
-- Decide on exact output format (trailing spaces, newlines)
-
-### Step 5: Verification Checklist
-Before finalizing, verify:
-- ✓ Sample inputs produce correct outputs?
-- ✓ All edge cases from Step 3 handled?
-- ✓ Time complexity within limits?
-- ✓ No integer overflow risk?
-- ✓ Output format EXACTLY matches problem specification?
-- ✓ No debug prints or extra output?
-
-**Optional Mental Dry-Run:**
-Trace through 1-2 tricky test cases mentally (can add as comments in code)
-
-═══════════════════════════════════════════════════════════════
-## C++ IMPLEMENTATION REQUIREMENTS
-═══════════════════════════════════════════════════════════════
-
-### Mandatory Components:
-1. **Headers**: Use `#include <bits/stdc++.h>` or specific headers
-2. **Fast I/O** (recommended for large inputs):
-   ```cpp
-   ios_base::sync_with_stdio(false);
-   cin.tie(NULL);
-   ```
-3. **Data Types**: Use `long long` for large numbers (sums/products > 10⁶)
-4. **Main Function**: Implement `int main()` with `return 0;`
-5. **Clean Code**:
-   - No debug prints (cout/cerr/printf for debugging)
-   - Clear, self-documenting variable names
-   - Minimal comments only (code should be readable)
-
-### Standard Template:
-```cpp
-#include <bits/stdc++.h>
-using namespace std;
-
-int main() {{
-    ios_base::sync_with_stdio(false);
-    cin.tie(NULL);
-
-    // Read input
-
-    // Implement algorithm
-
-    // Output result
-
-    return 0;
-}}
-```
-
-═══════════════════════════════════════════════════════════════
-## OUTPUT FORMAT (STRICT)
-═══════════════════════════════════════════════════════════════
-
-Return your solution in this EXACT format:
-
-```cpp
-// YOUR COMPLETE SOLUTION HERE
-```
-
-**CRITICAL RULES:**
-- Return ONLY ONE code block
-- NO explanations before the code block
-- NO text after the code block
-- NO multiple solutions or alternatives
-- NO verbose comments (minimal inline comments only)
-- Make sure the code block is properly formatted and complete
-
-If the problem statement is ambiguous, make the least-risk assumption and document it briefly in comments."""
+Solve this problem in C++17."""
 
         update_progress("Generating solution...")
-
-        temperature = self.get_optimal_temperature(difficulty_rating)
-        logger.info(f"Using temperature={temperature}")
 
         # Log the full prompt being sent to OpenAI
         logger.info("="*80)
         logger.info("OPENAI SOLUTION GENERATION PROMPT:")
         logger.info("="*80)
-        logger.info(prompt)
+        logger.info(f"INSTRUCTIONS:\n{system_context}\n\nINPUT:\n{user_prompt}")
         logger.info("="*80)
 
-        completion = self.client.chat.completions.create(
+        # GPT-5 optimized parameters for code generation
+        completion = self.client.responses.create(
             model=self.model,
-            messages=[
-                {"role": "system", "content": "You are an expert competitive programmer. Generate correct, optimized C++ solutions."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=temperature
+            instructions=system_context,  # System context in instructions
+            input=user_prompt,  # User prompt in input
+            reasoning={"effort": "high"},  # Maximum reasoning for complex algorithmic problems
+            top_p=1,  # Full probability distribution (GPT-5 default)
+            max_output_tokens=8192,  # Increased for complex solutions
         )
 
-        response_text = completion.choices[0].message.content.strip()
+        # Extract text from o1 model response structure
+        # Response has: output[0].content[0].text
+        if not completion.output or len(completion.output) == 0:
+            raise ValueError('OpenAI response has no output')
+        if not completion.output[0].content or len(completion.output[0].content) == 0:
+            raise ValueError('OpenAI response content is empty')
+        response_text = completion.output[0].content[0].text.strip()
 
         # Log the OpenAI response
         logger.info("="*80)

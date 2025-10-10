@@ -1,6 +1,9 @@
 """Safe execution service for test case generation code"""
 import ast
 import sys
+import os
+import tempfile
+import json
 from io import StringIO
 from typing import List, Dict
 import contextlib
@@ -201,3 +204,75 @@ class TestCaseGenerator:
             })
 
         return test_cases_with_outputs
+
+    @staticmethod
+    def execute_generator_code_incrementally(code: str, num_cases: int = 10) -> List[str]:
+        """
+        Execute test case generator code one at a time, saving each to a temp file
+
+        Args:
+            code: Python code containing generate_test_cases(n) function
+            num_cases: Number of test cases to generate
+
+        Returns:
+            List of file paths to generated test case files
+
+        Raises:
+            ValueError: If execution fails or code is unsafe
+        """
+        # Validate code first
+        TestCaseGenerator.validate_code(code)
+
+        # Create restricted execution environment
+        safe_globals = {
+            '__builtins__': TestCaseGenerator.SAFE_BUILTINS,
+        }
+
+        # Import safe modules into the namespace
+        import random
+        import math
+        import string
+        import itertools
+        import collections
+
+        safe_globals.update({
+            'random': random,
+            'math': math,
+            'string': string,
+            'itertools': itertools,
+            'collections': collections,
+        })
+
+        try:
+            # Execute the code in restricted environment
+            exec(code, safe_globals)
+
+            # Check if generate_test_cases function exists
+            if 'generate_test_cases' not in safe_globals:
+                raise ValueError('generate_test_cases function not found in code')
+
+            # Generate test cases one by one
+            generate_func = safe_globals['generate_test_cases']
+            test_cases = []
+
+            for i in range(num_cases):
+                # Generate 1 test case at a time
+                single_case = generate_func(1)
+
+                if not isinstance(single_case, list) or len(single_case) == 0:
+                    raise ValueError(f'generate_test_cases(1) must return a list with 1 element')
+
+                # Take the first element
+                test_case = single_case[0]
+
+                if not isinstance(test_case, str):
+                    raise ValueError(f'Test case {i} is not a string: {type(test_case)}')
+
+                test_cases.append(test_case)
+
+            return test_cases
+
+        except Exception as e:
+            if isinstance(e, ValueError):
+                raise
+            raise ValueError(f'Error executing test case generator: {str(e)}')

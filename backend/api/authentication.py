@@ -62,13 +62,9 @@ class CustomJWTAuthentication(JWTAuthentication):
             import logging
             logger = logging.getLogger(__name__)
 
-            logger.error(f'[AUTH DEBUG] JWT Auth: Looking for email={email}')
-
             table = DynamoDBClient.get_table()
             user_repo = UserRepository(table)
             user_dict = user_repo.get_user_by_email(email)
-
-            logger.error(f'[AUTH DEBUG] User dict result: {user_dict is not None}')
 
             if not user_dict:
                 logger.error(f'JWT Auth: User not found for email={email}')
@@ -76,8 +72,6 @@ class CustomJWTAuthentication(JWTAuthentication):
                     'detail': 'User not found',
                     'code': 'user_not_found'
                 })
-
-            logger.error(f'[AUTH DEBUG] JWT Auth: Found user {user_dict.get("email")}')
 
             # Create a user-like object that views can use
             # This mimics Django User but uses DynamoDB data

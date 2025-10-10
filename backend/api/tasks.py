@@ -650,7 +650,7 @@ def execute_code_task(self, code, language, platform=None, problem_identifier=No
     retry_backoff_max=300,
     retry_jitter=True,
 )
-def extract_problem_info_task(self, problem_url, job_id=None, additional_context=None):
+def extract_problem_info_task(self, problem_url, job_id=None, additional_context=None, samples=None):
     """
     Async task to extract problem information from URL using Gemini AI
 
@@ -665,6 +665,7 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
         job_id: Optional ScriptGenerationJob ID to update
         additional_context: Optional additional context (e.g., counterexamples, edge cases)
                            to help AI generate better solution
+        samples: Optional list of user-provided sample test cases with 'input' and 'output' keys
 
     Returns:
         dict: {
@@ -682,12 +683,13 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
     table = None
     job_repo = None
     problem_repo = None
+    validation_passed = False  # Initialize validation_passed
 
     try:
-        # OPTIMIZATION: Check cache first (skip if additional context provided)
+        # OPTIMIZATION: Check cache first (skip if additional context or user samples provided)
         cache_key = f"problem_info:{problem_url}"
         cached_info = None
-        if not additional_context:
+        if not additional_context and not samples:
             cached_info = cache.get(cache_key)
 
         # Update job status if job_id provided
@@ -719,10 +721,18 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
             logger.info(f"[Worker] Job {job_id} successfully claimed and status updated to PROCESSING")
 
             # Update Problem metadata to PROCESSING (DynamoDB)
+            # Also retrieve samples from metadata if this is a retry
             try:
                 # Try to get problem from DynamoDB
                 problem = problem_repo.get_problem(job['platform'], job['problem_id'])
                 if problem:
+                    # Retrieve samples from metadata if not provided (retry case)
+                    if not samples:
+                        existing_metadata = problem.get('metadata') or {}
+                        samples = existing_metadata.get('user_samples')
+                        if samples:
+                            logger.info(f"[Worker] Retrieved {len(samples)} user samples from metadata (retry scenario)")
+
                     # Update metadata
                     updates = {
                         'metadata': {
@@ -784,16 +794,21 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
             update_progress("Loading from cache...")
             problem_info = cached_info
         else:
-            # Use LLM service (Gemini or OpenAI) with 2-step extraction (metadata first, then solution)
-            llm_service = LLMServiceFactory.create_service()
-
-            # STEP 1: Extract problem metadata (title, constraints, samples)
-            update_progress("📄 Step 1/2: Extracting problem metadata...")
-            problem_metadata = llm_service.extract_problem_metadata_from_url(
+            # STEP 1: Extract problem metadata (title, constraints, samples) using GEMINI
+            # Always use Gemini for metadata extraction (more reliable and cost-effective)
+            update_progress("📄 Step 1/2: Extracting problem metadata with Gemini...")
+            gemini_service = LLMServiceFactory.create_service('gemini')
+            problem_metadata = gemini_service.extract_problem_metadata_from_url(
                 problem_url,
-                progress_callback=lambda msg: update_progress(f"📄 {msg}")
+                progress_callback=lambda msg: update_progress(f"📄 {msg}"),
+                user_samples=samples  # Pass user-provided samples
             )
             logger.info(f"Extracted metadata: {problem_metadata['title']}, {len(problem_metadata.get('samples', []))} samples")
+
+            # Add additional_context to problem_metadata for solution generation
+            if additional_context:
+                problem_metadata['additional_context'] = additional_context
+                logger.info(f"Added additional_context to problem_metadata ({len(additional_context)} chars)")
 
             # Update Problem with metadata immediately after extraction
             if job_id:
@@ -817,6 +832,10 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
                             'progress': f"Metadata extracted: {problem_metadata['title']}"
                         }
 
+                        # Store user-provided samples in metadata for retry purposes
+                        if samples:
+                            metadata['user_samples'] = samples
+
                         updates = {
                             'title': problem_metadata['title'],
                             'constraints': problem_metadata.get('constraints', ''),
@@ -832,6 +851,10 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
                             'extracted_title': problem_metadata['title'],
                             'progress': f"Metadata extracted: {problem_metadata['title']}"
                         }
+
+                        # Store user-provided samples in metadata for retry purposes
+                        if samples:
+                            metadata['user_samples'] = samples
 
                         problem_repo.create_problem(
                             platform=platform,
@@ -916,7 +939,6 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
                     if 'validation_warning' in problem_info:
                         metadata['validation_warning'] = problem_info['validation_warning']
                         metadata['validation_passed'] = problem_info.get('validation_passed', False)
-                        metadata['needs_review'] = problem_info.get('needs_review', False)
 
                     updates = {
                         'title': problem_info['title'],
@@ -925,10 +947,29 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
                         'solution_code': problem_info['solution_code'],
                         'language': 'cpp',
                         'is_completed': False,  # Keep as draft
+                        'needs_review': problem_info.get('needs_review', False),  # Save to main data (dat.nrv)
                         'metadata': metadata
                     }
                     problem_repo.update_problem(platform, problem_id, updates)
                     logger.info(f"Updated problem {platform}/{problem_id} with extracted title: {problem_info['title']}")
+
+                    # Save user-provided samples as test cases if validation passed
+                    samples_from_metadata = problem_info.get('samples', [])
+                    if samples_from_metadata and validation_passed:
+                        logger.info(f"Saving {len(samples_from_metadata)} validated samples as test cases")
+                        for idx, sample in enumerate(samples_from_metadata, start=1):
+                            try:
+                                problem_repo.add_testcase(
+                                    platform=platform,
+                                    problem_id=problem_id,
+                                    testcase_id=str(idx),
+                                    input_str=sample.get('input', ''),
+                                    output_str=sample.get('output', '')
+                                )
+                            except Exception as e:
+                                logger.warning(f"Failed to save sample {idx} as testcase: {e}")
+                        logger.info(f"Saved {len(samples_from_metadata)} samples as test cases")
+
                     update_progress("Problem updated successfully", status='completed')
                     created = False
                 else:
@@ -942,7 +983,6 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
                     if 'validation_warning' in problem_info:
                         metadata['validation_warning'] = problem_info['validation_warning']
                         metadata['validation_passed'] = problem_info.get('validation_passed', False)
-                        metadata['needs_review'] = problem_info.get('needs_review', False)
 
                     problem_repo.create_problem(
                         platform=platform,
@@ -955,10 +995,29 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
                             'language': 'cpp',
                             'tags': [],
                             'is_completed': False,  # Draft state
+                            'needs_review': problem_info.get('needs_review', False),  # Save to main data (dat.nrv)
                             'metadata': metadata
                         }
                     )
                     logger.info(f"Created problem {platform}/{problem_id} in DynamoDB")
+
+                    # Save user-provided samples as test cases if validation passed
+                    samples_from_metadata = problem_info.get('samples', [])
+                    if samples_from_metadata and validation_passed:
+                        logger.info(f"Saving {len(samples_from_metadata)} validated samples as test cases")
+                        for idx, sample in enumerate(samples_from_metadata, start=1):
+                            try:
+                                problem_repo.add_testcase(
+                                    platform=platform,
+                                    problem_id=problem_id,
+                                    testcase_id=str(idx),
+                                    input_str=sample.get('input', ''),
+                                    output_str=sample.get('output', '')
+                                )
+                            except Exception as e:
+                                logger.warning(f"Failed to save sample {idx} as testcase: {e}")
+                        logger.info(f"Saved {len(samples_from_metadata)} samples as test cases")
+
                     update_progress("Problem created successfully", status='completed')
                     created = True
 
@@ -1650,3 +1709,118 @@ def recover_orphaned_jobs_task(self, timeout_minutes=30):
     except Exception as e:
         logger.error(f"[Orphaned Job Recovery] Error: {str(e)}", exc_info=True)
         raise
+
+
+# ============================================================================
+# TEST CASE EXECUTION TASK
+# ============================================================================
+@shared_task(
+    bind=True,
+    max_retries=MAX_RETRIES,
+    time_limit=600,  # 10 minutes hard limit
+    soft_time_limit=540,  # 9 minutes soft limit
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_jitter=True,
+)
+def execute_test_cases_task(self, generator_code, num_cases=10):
+    """
+    Async task to execute generator code and produce test case inputs
+    Uses incremental generation (1 at a time) and saves to temp files before uploading to S3
+
+    Args:
+        generator_code: Python code to generate test inputs
+        num_cases: Number of test cases to generate
+
+    Returns:
+        dict: Result with test_cases and count
+    """
+    import tempfile
+    import os
+    import json
+
+    temp_files = []
+
+    try:
+        from api.services.test_case_generator import TestCaseGenerator
+
+        logger.info(f"[Execute Test Cases Task] Starting incremental execution for {num_cases} test cases")
+
+        # Execute the generator code incrementally (1 at a time)
+        test_cases = TestCaseGenerator.execute_generator_code_incrementally(
+            code=generator_code,
+            num_cases=num_cases
+        )
+
+        logger.info(f"[Execute Test Cases Task] Successfully generated {len(test_cases)} test cases")
+
+        # Save each test case to a temporary file
+        temp_dir = tempfile.mkdtemp()
+        for i, test_case in enumerate(test_cases):
+            file_path = os.path.join(temp_dir, f'testcase_{i+1}.txt')
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(test_case)
+            temp_files.append(file_path)
+            logger.info(f"[Execute Test Cases Task] Saved test case {i+1} to {file_path}")
+
+        # Combine all files into a single JSON structure
+        combined_data = []
+        for i, file_path in enumerate(temp_files):
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+                combined_data.append({
+                    'id': i + 1,
+                    'input': content
+                })
+
+        logger.info(f"[Execute Test Cases Task] Combined {len(combined_data)} test cases")
+
+        # Clean up temp files
+        for file_path in temp_files:
+            try:
+                os.remove(file_path)
+            except Exception as e:
+                logger.warning(f"[Execute Test Cases Task] Failed to remove temp file {file_path}: {e}")
+
+        try:
+            os.rmdir(temp_dir)
+        except Exception as e:
+            logger.warning(f"[Execute Test Cases Task] Failed to remove temp dir {temp_dir}: {e}")
+
+        return {
+            'status': 'SUCCESS',
+            'test_cases': test_cases,
+            'count': len(test_cases)
+        }
+
+    except ValueError as e:
+        logger.error(f"[Execute Test Cases Task] Validation error: {str(e)}")
+        # Clean up on error
+        for file_path in temp_files:
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+            except:
+                pass
+        return {
+            'status': 'FAILED',
+            'error': str(e),
+            'test_cases': [],
+            'count': 0
+        }
+    except Exception as e:
+        logger.error(f"[Execute Test Cases Task] Execution error: {str(e)}", exc_info=True)
+        # Clean up on error
+        for file_path in temp_files:
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+            except:
+                pass
+        return {
+            'status': 'FAILED',
+            'error': f'Failed to execute generator code: {str(e)}',
+            'test_cases': [],
+            'count': 0
+        }

@@ -1,4 +1,4 @@
-"""Pytest configuration and common fixtures for AlgoItny tests"""
+"""Pytest configuration and common fixtures for AlgoItny tests - Async Version"""
 import os
 import django
 
@@ -9,9 +9,11 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings_test')
 django.setup()
 
 import pytest
+import pytest_asyncio
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 from unittest.mock import Mock, patch
+from asgiref.sync import sync_to_async
 from api.models import User, Problem, TestCase, SearchHistory, ScriptGenerationJob
 from api.dynamodb.client import DynamoDBClient
 from api.dynamodb.repositories import (
@@ -78,15 +80,15 @@ def clear_django_cache():
     cache.clear()
 
 
-@pytest.fixture
-def api_client():
-    """Return DRF API client"""
+@pytest_asyncio.fixture
+async def api_client():
+    """Return DRF API client (async)"""
     return APIClient()
 
 
-@pytest.fixture
-def authenticated_client():
-    """Return a factory function that creates an authenticated API client for any user"""
+@pytest_asyncio.fixture
+async def authenticated_client():
+    """Return a factory function that creates an authenticated API client for any user (async)"""
     def _make_authenticated_client(user):
         from api.utils.jwt_helper import DynamoDBUser
         client = APIClient()
@@ -107,11 +109,11 @@ def authenticated_client():
     return _make_authenticated_client
 
 
-@pytest.fixture
-def sample_user(db):
-    """Create and return a sample user (in both Django ORM and DynamoDB)"""
-    # Create in Django ORM
-    user = User.objects.create_user(
+@pytest_asyncio.fixture
+async def sample_user(db):
+    """Create and return a sample user (in both Django ORM and DynamoDB) - async"""
+    # Create in Django ORM - async
+    user = await sync_to_async(User.objects.create_user)(
         email='test@example.com',
         name='Test User',
         picture='https://example.com/picture.jpg',
@@ -123,10 +125,10 @@ def sample_user(db):
     from api.dynamodb.repositories import UserRepository
     user_repo = UserRepository()
 
-    # Check if user already exists in DynamoDB
-    existing_user = user_repo.get_user_by_email(user.email)
+    # Check if user already exists in DynamoDB - async
+    existing_user = await sync_to_async(user_repo.get_user_by_email)(user.email)
     if not existing_user:
-        created = user_repo.create_user({
+        created = await sync_to_async(user_repo.create_user)({
             'user_id': user.id,
             'email': user.email,
             'name': user.name,
@@ -140,11 +142,11 @@ def sample_user(db):
     return user
 
 
-@pytest.fixture
-def another_user(db):
-    """Create and return another user for testing (in both Django ORM and DynamoDB)"""
-    # Create in Django ORM
-    user = User.objects.create_user(
+@pytest_asyncio.fixture
+async def another_user(db):
+    """Create and return another user for testing (in both Django ORM and DynamoDB) - async"""
+    # Create in Django ORM - async
+    user = await sync_to_async(User.objects.create_user)(
         email='another@example.com',
         name='Another User',
         picture='https://example.com/another.jpg',
@@ -155,10 +157,10 @@ def another_user(db):
     from api.dynamodb.repositories import UserRepository
     user_repo = UserRepository()
 
-    # Check if user already exists in DynamoDB
-    existing_user = user_repo.get_user_by_email(user.email)
+    # Check if user already exists in DynamoDB - async
+    existing_user = await sync_to_async(user_repo.get_user_by_email)(user.email)
     if not existing_user:
-        user_repo.create_user({
+        await sync_to_async(user_repo.create_user)({
             'user_id': user.id,
             'email': user.email,
             'name': user.name,
@@ -169,9 +171,9 @@ def another_user(db):
     return user
 
 
-@pytest.fixture
-def sample_problem(db):
-    """Create and return a sample problem in both DynamoDB and Django ORM"""
+@pytest_asyncio.fixture
+async def sample_problem(db):
+    """Create and return a sample problem in both DynamoDB and Django ORM - async"""
     import uuid
     unique_id = str(uuid.uuid4())[:8]
 
@@ -189,11 +191,11 @@ def sample_problem(db):
         'is_completed': True
     }
 
-    # Create in DynamoDB
-    problem_repo.create_problem(platform, problem_id, problem_data)
+    # Create in DynamoDB - async
+    await sync_to_async(problem_repo.create_problem)(platform, problem_id, problem_data)
 
-    # Also create in Django ORM for backward compatibility with SearchHistory
-    django_problem, _ = Problem.objects.get_or_create(
+    # Also create in Django ORM for backward compatibility with SearchHistory - async
+    django_problem, _ = await sync_to_async(Problem.objects.get_or_create)(
         platform=platform,
         problem_id=problem_id,
         defaults={

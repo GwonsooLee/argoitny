@@ -1,25 +1,27 @@
-"""Tests for problem views"""
+"""Tests for problem views - Async Version"""
 import pytest
 from rest_framework import status
 from api.models import Problem, TestCase
 from django.test import override_settings
+from asgiref.sync import sync_to_async
 
 
 @pytest.mark.django_db
+@pytest.mark.asyncio
 class TestProblemList:
     """Test problem list endpoint"""
 
-    def test_list_problems_success(self, api_client, sample_problems):
-        """Test successful problem list retrieval"""
-        # Clear existing problems to ensure clean state
-        Problem.objects.all().delete()
+    async def test_list_problems_success(self, api_client, sample_problems):
+        """Test successful problem list retrieval (async)"""
+        # Clear existing problems to ensure clean state - async
+        await sync_to_async(Problem.objects.all().delete)()
 
-        # Recreate sample problems
+        # Recreate sample problems - async
         from api.models import TestCase
         import uuid
         problems = []
         for i in range(3):
-            problem, _ = Problem.objects.get_or_create(
+            problem, _ = await sync_to_async(Problem.objects.get_or_create)(
                 platform='baekjoon' if i < 2 else 'codeforces',
                 problem_id=f'test-{uuid.uuid4().hex[:8]}',
                 defaults={
@@ -30,18 +32,18 @@ class TestProblemList:
                     'is_completed': True
                 }
             )
-            TestCase.objects.create(problem=problem, input='1', output='1')
+            await sync_to_async(TestCase.objects.create)(problem=problem, input='1', output='1')
             problems.append(problem)
 
-        response = api_client.get('/api/problems/')
+        response = await sync_to_async(api_client.get)('/api/problems/')
 
         assert response.status_code == status.HTTP_200_OK
         assert isinstance(response.data, list)
         assert len(response.data) == 3  # We just created 3 problems with test cases
 
-    def test_list_problems_exclude_drafts(self, api_client, sample_problems, draft_problem):
-        """Test that problems without test cases are excluded from list"""
-        response = api_client.get('/api/problems/')
+    async def test_list_problems_exclude_drafts(self, api_client, sample_problems, draft_problem):
+        """Test that problems without test cases are excluded from list (async)"""
+        response = await sync_to_async(api_client.get)('/api/problems/')
 
         assert response.status_code == status.HTTP_200_OK
         # Should only return problems with test cases
@@ -50,47 +52,47 @@ class TestProblemList:
         problem_keys = [(p['platform'], p['problem_id']) for p in response.data]
         assert (draft_problem['platform'], draft_problem['problem_id']) not in problem_keys
 
-    def test_list_problems_filter_by_platform(self, api_client, sample_problems):
-        """Test filtering problems by platform"""
-        response = api_client.get('/api/problems/', {'platform': 'baekjoon'})
+    async def test_list_problems_filter_by_platform(self, api_client, sample_problems):
+        """Test filtering problems by platform (async)"""
+        response = await sync_to_async(api_client.get)('/api/problems/', {'platform': 'baekjoon'})
 
         assert response.status_code == status.HTTP_200_OK
         assert len(response.data) == 2  # 2 baekjoon problems in sample_problems
         assert all(p['platform'] == 'baekjoon' for p in response.data)
 
-    def test_list_problems_search_by_title(self, api_client, sample_problems):
-        """Test searching problems by title"""
-        response = api_client.get('/api/problems/', {'search': 'A+B'})
+    async def test_list_problems_search_by_title(self, api_client, sample_problems):
+        """Test searching problems by title (async)"""
+        response = await sync_to_async(api_client.get)('/api/problems/', {'search': 'A+B'})
 
         assert response.status_code == status.HTTP_200_OK
         assert len(response.data) >= 1
         assert any('A+B' in p['title'] for p in response.data)
 
-    def test_list_problems_search_by_problem_id(self, api_client, sample_problems):
-        """Test searching problems by problem_id"""
-        response = api_client.get('/api/problems/', {'search': '1000'})
+    async def test_list_problems_search_by_problem_id(self, api_client, sample_problems):
+        """Test searching problems by problem_id (async)"""
+        response = await sync_to_async(api_client.get)('/api/problems/', {'search': '1000'})
 
         assert response.status_code == status.HTTP_200_OK
         assert len(response.data) >= 1
         assert any('1000' in p['problem_id'] for p in response.data)
 
-    def test_list_problems_search_case_insensitive(self, api_client, sample_problems):
-        """Test case-insensitive search"""
-        response = api_client.get('/api/problems/', {'search': 'theatre'})
+    async def test_list_problems_search_case_insensitive(self, api_client, sample_problems):
+        """Test case-insensitive search (async)"""
+        response = await sync_to_async(api_client.get)('/api/problems/', {'search': 'theatre'})
 
         assert response.status_code == status.HTTP_200_OK
         assert len(response.data) >= 1
 
-    def test_list_problems_empty_result(self, api_client):
-        """Test list when no problems exist"""
-        response = api_client.get('/api/problems/')
+    async def test_list_problems_empty_result(self, api_client):
+        """Test list when no problems exist (async)"""
+        response = await sync_to_async(api_client.get)('/api/problems/')
 
         assert response.status_code == status.HTTP_200_OK
         assert response.data == []
 
-    def test_list_problems_combined_filters(self, api_client, sample_problems):
-        """Test combining platform filter and search"""
-        response = api_client.get('/api/problems/', {
+    async def test_list_problems_combined_filters(self, api_client, sample_problems):
+        """Test combining platform filter and search (async)"""
+        response = await sync_to_async(api_client.get)('/api/problems/', {
             'platform': 'baekjoon',
             'search': 'A+B'
         })

@@ -372,7 +372,7 @@ class ProblemRepository(BaseRepository):
     ) -> Dict[str, Any]:
         """
         Add a test case to a problem and update test case count
-        Automatically routes to S3 if test case is large (>50KB)
+        Automatically routes to S3 if test case is large (>=100KB)
 
         Args:
             platform: Platform name
@@ -466,26 +466,65 @@ class ProblemRepository(BaseRepository):
         problem_id: str
     ) -> List[Dict[str, Any]]:
         """
-        Get all test cases for a problem from S3
+        Get all test cases for a problem (hybrid: DynamoDB + S3)
 
         Args:
             platform: Platform name
             problem_id: Problem identifier
 
         Returns:
-            List of test case dictionaries
+            List of test case dictionaries with 'testcase_id', 'input', 'output'
         """
-        try:
-            # All test cases are stored in S3
-            test_cases = self.s3_service.retrieve_testcases(
-                platform=platform,
-                problem_id=problem_id
-            )
-            return test_cases
+        pk = f'PROB#{platform}#{problem_id}'
 
-        except Exception as e:
-            logger.error(f"Failed to retrieve test cases from S3: {e}")
-            return []
+        # Query DynamoDB for all test case items
+        items = self.query(
+            key_condition_expression=Key('PK').eq(pk) & Key('SK').begins_with('TC#')
+        )
+
+        test_cases = []
+
+        for item in items:
+            # Extract testcase_id from SK (e.g., "TC#1" -> "1")
+            testcase_id = item['SK'].replace('TC#', '')
+            storage_type = item['dat'].get('storage', 'dynamodb')
+
+            try:
+                if storage_type == 's3':
+                    # Retrieve from S3 using s3_key
+                    s3_key = item['dat'].get('s3_key')
+                    if s3_key:
+                        testcase_data = self.s3_service.retrieve_testcase(
+                            platform=platform,
+                            problem_id=problem_id,
+                            testcase_id=testcase_id
+                        )
+                        if testcase_data:
+                            test_cases.append({
+                                'testcase_id': testcase_id,
+                                'input': testcase_data['input'],
+                                'output': testcase_data['output']
+                            })
+                    else:
+                        logger.warning(f"Test case {testcase_id} marked as S3 but no s3_key found")
+                else:
+                    # Retrieve from DynamoDB
+                    test_cases.append({
+                        'testcase_id': testcase_id,
+                        'input': item['dat'].get('inp', ''),
+                        'output': item['dat'].get('out', '')
+                    })
+            except Exception as e:
+                logger.error(f"Failed to retrieve test case {testcase_id}: {e}")
+                continue
+
+        # Sort by testcase_id (numeric sort if possible)
+        try:
+            test_cases.sort(key=lambda x: int(x['testcase_id']) if x['testcase_id'].isdigit() else x['testcase_id'])
+        except:
+            test_cases.sort(key=lambda x: x['testcase_id'])
+
+        return test_cases
 
     def list_completed_problems(
         self,

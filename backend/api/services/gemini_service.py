@@ -193,20 +193,28 @@ vector<int> KMP(string text, string pattern) {
 
     def get_optimal_temperature(self, difficulty_rating):
         """
-        Get optimal temperature based on problem difficulty
-        Lower temperature = more deterministic (better for hard problems)
-        Higher temperature = more creative (better for easy problems)
+        Get optimal temperature for ACCURATE, DETERMINISTIC solution generation.
+
+        Philosophy: All algorithmic problems require precision, not creativity.
+        We want ONE accurate solution, not multiple creative approaches.
+
+        Since difficulty rating is often unknown during problem registration,
+        we use a fixed temperature of 0.0 for all problems to ensure:
+        - FULLY deterministic solutions (no randomness)
+        - Consistent, reproducible code generation
+        - Accurate algorithm selection
+        - Same problem = same solution (100% reproducibility)
+
+        Temperature: 0.0 (fully deterministic, zero variation)
+
+        Optimized based on ChatGPT recommendations:
+        - temperature=0 for deterministic output
+        - Eliminates all randomness in token selection
+        - Ideal for code generation tasks requiring precision
         """
-        if difficulty_rating is None:
-            return 0.7  # Default
-        elif difficulty_rating >= 2500:
-            return 0.3  # Very deterministic for 2500+ problems
-        elif difficulty_rating >= 2000:
-            return 0.5
-        elif difficulty_rating >= 1500:
-            return 0.7
-        else:
-            return 0.8
+        # Always use 0.0 regardless of difficulty (ChatGPT recommendation)
+        # Rationale: Code generation requires deterministic output, not creative variation
+        return 0.0
 
     def get_difficulty_guidance(self, difficulty_rating):
         """Generate difficulty-specific guidance for prompts"""
@@ -369,7 +377,8 @@ Return ONLY the category name, nothing else."""
             response = self.model.generate_content(
                 analysis_prompt,
                 generation_config=genai.types.GenerationConfig(
-                    temperature=0.1,  # Low temperature for deterministic category
+                    temperature=0.0,  # Fully deterministic for category classification
+                    top_p=1.0,  # Disable nucleus sampling (examine full distribution)
                 )
             )
             category = response.text.strip().lower()
@@ -904,6 +913,9 @@ Now write the COMPLETE function based on the solution code format and constraint
             import re
             webpage_content = re.sub(r' +', ' ', webpage_content)
 
+            # Remove LaTeX math delimiters ($$) from Codeforces content
+            webpage_content = re.sub(r'\$\$\$([^\$]+)\$\$\$', r'\1', webpage_content)
+
             # Log parsed content for debugging
             logger.info(f"Parsed webpage content length: {len(webpage_content)} characters")
             logger.info(f"Parsed content preview (first 2000 chars):\n{webpage_content[:2000]}")
@@ -1376,7 +1388,7 @@ Now generate the hints:"""
         except Exception as e:
             raise ValueError(f'Failed to generate hints: {str(e)}')
 
-    def extract_problem_metadata_from_url(self, problem_url, difficulty_rating=None, progress_callback=None):
+    def extract_problem_metadata_from_url(self, problem_url, difficulty_rating=None, progress_callback=None, user_samples=None):
         """
         Step 1: Extract only problem metadata (title, constraints, samples) from URL
         This is separated from solution generation to allow Gemini to focus on extraction first.
@@ -1385,6 +1397,8 @@ Now generate the hints:"""
             problem_url: URL to the problem page
             difficulty_rating: Optional difficulty rating (e.g., 2500 for Codeforces)
             progress_callback: Optional callback function to report progress
+            user_samples: Optional list of user-provided sample test cases with 'input' and 'output' keys.
+                         If provided, these will be used instead of extracting samples from the webpage.
 
         Returns:
             dict: {
@@ -1536,6 +1550,9 @@ Now generate the hints:"""
             import re
             webpage_content = re.sub(r' +', ' ', webpage_content)
 
+            # Remove LaTeX math delimiters ($$) from Codeforces content
+            webpage_content = re.sub(r'\$\$\$([^\$]+)\$\$\$', r'\1', webpage_content)
+
             # Log parsed content for debugging
             logger.info(f"Parsed webpage content length: {len(webpage_content)} characters")
             logger.info(f"Parsed content preview (first 2000 chars):\n{webpage_content[:2000]}")
@@ -1552,6 +1569,10 @@ Now generate the hints:"""
             # Check if webpage contains basic problem indicators
             has_title_indicators = any(keyword in webpage_content.lower() for keyword in ['problem', 'title', 'input', 'output', 'constraint', 'sample', 'example'])
             logger.info(f"Webpage has problem indicators: {has_title_indicators}")
+
+            # If user provided samples, use them instead of extracting from webpage
+            if user_samples:
+                logger.info(f"Using {len(user_samples)} user-provided samples instead of extracting from webpage")
 
             # Build difficulty-specific warning
             difficulty_warning = ""
@@ -1578,7 +1599,14 @@ Extract the problem metadata in structured JSON format. DO NOT solve the problem
 ### 1. Title
 - Extract the EXACT problem title as displayed on the page
 
-### 2. Constraints (INPUT FORMAT ONLY)
+### 2. Description (PROBLEM STATEMENT)
+- Extract the FULL problem description/story/statement
+- This should include the complete problem explanation, what the problem is asking
+- Include all relevant details that explain WHAT to solve
+- DO NOT include input/output format, constraints, or samples here
+- This is the narrative that explains the problem scenario
+
+### 3. Constraints (INPUT FORMAT ONLY)
 You must extract with PRECISE detail:
 - First line format: "First line contains..."
 - Subsequent line formats: "Next N lines contain..."
@@ -1656,6 +1684,7 @@ Each sample must be ready for C++ stdin/stdout validation:
 Return ONLY valid JSON (no markdown, no code blocks):
 {{
     "title": "Problem Title",
+    "description": "Full problem description explaining what to solve (the narrative/story)",
     "constraints": "First line: integer N (1 ≤ N ≤ 10^5)\\nNext N lines: each contains two integers A_i, B_i (1 ≤ A_i, B_i ≤ 10^9)",
     "samples": [
         {{"input": "3\\n1 2\\n3 4\\n5 6", "output": "6\\n12\\n30"}},
@@ -1731,6 +1760,11 @@ Return ONLY valid JSON, nothing else."""
                 logger.warning('Missing constraints, using empty string')
                 result['constraints'] = 'No constraints provided'
 
+            # If user provided samples, replace extracted samples with user samples
+            if user_samples:
+                logger.info(f"Replacing extracted samples with {len(user_samples)} user-provided samples")
+                result['samples'] = user_samples
+
             # Parse problem URL
             platform, problem_id = self._parse_problem_url(problem_url)
             result['platform'] = platform
@@ -1789,44 +1823,42 @@ Return ONLY valid JSON, nothing else."""
             except Exception as e:
                 logger.warning(f"Could not get few-shot examples: {e}")
 
-        # Build retry context if this is not the first attempt
+        # Build minimal retry context (Gemini will handle root cause analysis)
         retry_context = ""
         if previous_attempt:
             retry_context = f"""
-## PREVIOUS ATTEMPT ANALYSIS
-Your previous solution FAILED. Analyze your mistake:
-
-### Previous Code:
+Previous attempt failed:
 ```cpp
 {previous_attempt.get('code', 'N/A')}
 ```
 
-### Failure Reason:
-{previous_attempt.get('error', 'Unknown error')}
+Error: {previous_attempt.get('error', 'Unknown error')}
 
-### Critical Questions:
-1. **Algorithm Selection**: Was your algorithm correct for this problem type?
-2. **Time Complexity**: Did you exceed time limits? What's the required complexity?
-3. **Edge Cases**: Which edge case did you miss?
-   - Empty input (N=0)?
-   - Single element (N=1)?
-   - Maximum constraints?
-   - Negative numbers or special values?
-4. **Implementation Bugs**: Off-by-one errors? Integer overflow? Array bounds?
-
-### Your Task Now:
-Generate a CORRECTED solution that fixes the specific failure above.
+Fix the issue and provide a corrected solution.
 """
 
-        # Build samples display
-        samples_str = "\n".join([
-            f"""Sample {i+1}:
-Input:
+        # Build additional context section if provided (only if not empty)
+        additional_context = problem_metadata.get('additional_context', '').strip()
+        additional_context_section = ""
+        if additional_context:
+            additional_context_section = f"""
+
+## ADDITIONAL CONTEXT FROM ADMIN
+The previous solution had issues. Please consider this feedback when generating the new solution:
+{additional_context}
+
+IMPORTANT: Analyze this feedback carefully and ensure your new solution addresses these specific issues.
+"""
+            logger.info(f"Using additional_context in solution generation ({len(additional_context)} chars)")
+        else:
+            logger.info("No additional_context provided, skipping section")
+
+        # Build samples (raw format - like OpenAI)
+        samples_str = "\n\n".join([
+            f"""Input
 {s['input']}
-
-Expected Output:
-{s['output']}
-"""
+Output
+{s['output']}"""
             for i, s in enumerate(problem_metadata.get('samples', []))
         ])
 
@@ -1846,147 +1878,42 @@ Expected Output:
             else:
                 constraints_hint = "\n**Complexity Target:** O(N) or O(log N) required for large N"
 
-        prompt = f"""You are an ELITE competitive programmer (Grandmaster level) with expertise in solving Codeforces 2500+ problems, ICPC World Finals problems, and IOI problems.
+        # Simplified prompt (matching OpenAI style)
+        prompt = f"""You are a competitive programming solver for Codeforces (rating 3000+).
+Follow the SOLVING PROTOCOL INTERNALLY, but OUTPUT ONLY THE FINAL C++ CODE BLOCK.
 
-Follow this EXACT protocol to solve the problem:
+HARD OUTPUT RULES (highest priority):
+- Return EXACTLY ONE fenced code block in C++ (```cpp ... ```), with no text before/after.
+- If there is any risk of exceeding token limits, SKIP ALL EXPLANATIONS and output only the final code.
+- If constraints are missing, assume TL=1–2s, ML=256–512MB, n,q≤2e5, and choose an algorithm that safely fits those.
 
-{difficulty_guidance}
+SOLVING PROTOCOL (INTERNAL—DO NOT PRINT):
+0) Restate problem in 2–3 lines (internally only).
+1) Identify pattern/category (DS, Graph, DP, Math, etc.).
+2) Choose an algorithm with provable complexity; ensure it fits constraints (O(n log n) typical).
+   - Do the back-of-the-envelope op-count check internally.
+3) Edge cases & pitfalls checklist (internally):
+   - 64-bit overflows; off-by-one; empty/min/max; duplicates; recursion depth; I/O speed; strict output format.
+4) Implementation plan (internally): data types, I/O, structure, failure modes.
+5) Final Code: C++17/20 single file.
+   - Fast IO: ios::sync_with_stdio(false); cin.tie(nullptr);
+   - Avoid recursion if depth may exceed 1e5; prefer iterative.
+   - No debug prints; deterministic behavior.
+   - Minimal top-of-file comment (≤8 lines) summarizing approach & complexity only.
 
-## PROBLEM
-**Title:** {problem_metadata['title']}
+If problem statement is ambiguous, make the least-risk assumption and add ONE short comment line about it at the top of the code.
 
-**Input Format and Constraints:**
-{problem_metadata['constraints']}{constraints_hint}
+If you accidentally include any prose outside the code block, REGENERATE and return only the code block.
 
-**Sample Test Cases:**
-{samples_str}
+OUTPUT FORMAT (repeat): Only one C++ fenced code block, nothing else.
 
-{algorithm_hints}
+{problem_metadata.get('description', problem_metadata['title'])}
 
-{few_shot_examples}
-
+{problem_metadata['constraints']}
 {retry_context}
+{additional_context_section}
 
-═══════════════════════════════════════════════════════════════
-## MANDATORY SOLUTION PROTOCOL
-═══════════════════════════════════════════════════════════════
-
-### Step 0: Problem Restatement (Comprehension Check)
-Before solving, restate the problem in 2-3 lines to confirm understanding:
-- What is the input format?
-- What is the expected output?
-- What is the core question being asked?
-
-### Step 1: Problem Understanding & Analysis
-Analyze what the problem is REALLY asking:
-- What is the underlying problem pattern?
-- Are there any implicit constraints or patterns?
-- What problem category does this belong to? (DP, Graph, Greedy, Data Structure, Math, etc.)
-
-### Step 2: Algorithm Selection with Complexity Proof
-{f"Given the difficulty rating of {difficulty_rating}, consider:" if difficulty_rating and difficulty_rating >= 2500 else "Select the appropriate algorithm:"}
-- What algorithm/data structure is needed?
-- **Prove your complexity fits constraints:**
-  - Calculate exact time complexity (e.g., O(N log N))
-  - Verify it runs in < 1-2 seconds for max constraints
-  - Show calculation: "N=10⁵, O(N log N) ≈ 10⁵ × 17 ≈ 1.7M ops ✓"
-- Is there a well-known algorithm/pattern this matches?
-
-### Step 3: Edge Case Analysis & Common Pitfalls
-
-**Edge Cases to Test:**
-- **Minimum values**: N=0, N=1, single element, empty array/string
-- **Maximum values**: N=10⁵, values=10⁹, stress testing at limits
-- **Special cases**: All elements equal, already sorted, reverse sorted, alternating patterns
-- **Boundary conditions**: First/last elements, modulo arithmetic (10⁹+7)
-
-**Common Pitfalls Checklist (Check ALL):**
-- [ ] Integer overflow → Use `long long` for sums/products when values > 10⁶
-- [ ] Off-by-one errors → Verify loop bounds and array indices
-- [ ] Modulo arithmetic → Apply mod correctly if required (especially in multiplication)
-- [ ] Disconnected components → For graph problems, handle multiple components
-- [ ] Empty input cases → What if N=0 or string is empty?
-- [ ] Duplicate values → Problem may assume unique, but test with duplicates
-- [ ] Uninitialized variables → Initialize all arrays/variables
-- [ ] Array bounds → Ensure array size matches maximum N
-
-### Step 4: Implementation Strategy
-Plan the implementation:
-- Choose appropriate data types (int vs long long vs double)
-- Plan the input reading logic (single vs multiple test cases)
-- Structure the algorithm clearly (avoid spaghetti code)
-- Add fast I/O if needed (recommended for large inputs)
-- Decide on exact output format (trailing spaces, newlines)
-
-### Step 5: Verification Checklist
-Before finalizing, verify:
-- ✓ Sample inputs produce correct outputs?
-- ✓ All edge cases from Step 3 handled?
-- ✓ Time complexity within limits?
-- ✓ No integer overflow risk?
-- ✓ Output format EXACTLY matches problem specification?
-- ✓ No debug prints or extra output?
-
-**Optional Mental Dry-Run:**
-Trace through 1-2 tricky test cases mentally (can add as comments in code)
-
-═══════════════════════════════════════════════════════════════
-## C++ IMPLEMENTATION REQUIREMENTS
-═══════════════════════════════════════════════════════════════
-
-### Mandatory Components:
-1. **Headers**: Use `#include <bits/stdc++.h>` or specific headers
-2. **Fast I/O** (recommended for large inputs):
-   ```cpp
-   ios_base::sync_with_stdio(false);
-   cin.tie(NULL);
-   ```
-3. **Data Types**: Use `long long` for large numbers (sums/products > 10⁶)
-4. **Main Function**: Implement `int main()` with `return 0;`
-5. **Clean Code**:
-   - No debug prints (cout/cerr/printf for debugging)
-   - Clear, self-documenting variable names
-   - Minimal comments only (code should be readable)
-
-### Standard Template:
-```cpp
-#include <bits/stdc++.h>
-using namespace std;
-
-int main() {{
-    ios_base::sync_with_stdio(false);
-    cin.tie(NULL);
-
-    // Read input
-
-    // Implement algorithm
-
-    // Output result
-
-    return 0;
-}}
-```
-
-═══════════════════════════════════════════════════════════════
-## OUTPUT FORMAT (STRICT)
-═══════════════════════════════════════════════════════════════
-
-Return your solution in this EXACT format:
-
-```cpp
-// YOUR COMPLETE SOLUTION HERE
-```
-
-**CRITICAL RULES:**
-- Return ONLY ONE code block
-- NO explanations before the code block
-- NO text after the code block
-- NO multiple solutions or alternatives
-- NO verbose comments (minimal inline comments only)
-- Make sure the code block is properly formatted and complete
-
-If the problem statement is ambiguous, make the least-risk assumption and document it briefly in comments.
-"""
+Solve this problem in C++17."""
 
         update_progress("Generating solution...")
 
@@ -2004,7 +1931,10 @@ If the problem statement is ambiguous, make the least-risk assumption and docume
         response = self.model.generate_content(
             prompt,
             generation_config=genai.types.GenerationConfig(
-                temperature=temperature,
+                temperature=temperature,  # 0.0 for fully deterministic output
+                top_p=1.0,  # Disable nucleus sampling (examine full probability distribution)
+                # Note: Gemini doesn't have verbosity control like OpenAI o1
+                # Verbosity is controlled via prompt instructions
             )
         )
         response_text = response.text.strip()

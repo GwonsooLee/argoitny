@@ -173,10 +173,16 @@ class SearchHistoryRepository(BaseRepository):
         Returns:
             Count of unique problems
         """
-        # Query all search history items
-        items = self.query(
-            key_condition_expression=Key('PK').begins_with(f'EMAIL#{email}#SHIST#')
+        # Scan for user's search history items
+        # Note: PK begins_with is not supported in Query, so we use Scan with FilterExpression
+        response = self.table.scan(
+            FilterExpression='begins_with(PK, :pk_prefix)',
+            ExpressionAttributeValues={
+                ':pk_prefix': f'EMAIL#{email}#SHIST#'
+            }
         )
+
+        items = response.get('Items', [])
 
         # Extract unique platform#problem_number combinations from PK
         unique_problems = set()

@@ -12,6 +12,7 @@ import {
   ListItem,
   ListItemText,
   Chip,
+  Divider,
 } from '@mui/material';
 import { Add as AddIcon, CheckCircle as CheckCircleIcon } from '@mui/icons-material';
 import { apiPost, apiGet, apiPatch } from '../utils/api-client';
@@ -19,6 +20,7 @@ import { API_ENDPOINTS } from '../config/api';
 
 function ProblemRegister({ onBack }) {
   const [problemUrl, setProblemUrl] = useState('');
+  const [samples, setSamples] = useState([{ input: '', output: '' }]);
   const [submitting, setSubmitting] = useState(false);
   const [submittedJobs, setSubmittedJobs] = useState([]);
   const [error, setError] = useState('');
@@ -86,8 +88,12 @@ function ProblemRegister({ onBack }) {
     setError('');
 
     try {
+      // Filter out empty samples
+      const validSamples = samples.filter(s => s.input.trim() && s.output.trim());
+
       const response = await apiPost(API_ENDPOINTS.extractProblemInfo, {
-        problem_url: problemUrl.trim()
+        problem_url: problemUrl.trim(),
+        samples: validSamples.length > 0 ? validSamples : []
       });
 
       if (!response.ok) {
@@ -112,14 +118,31 @@ function ProblemRegister({ onBack }) {
         ...submittedJobs
       ]);
 
-      // Clear input
+      // Clear inputs
       setProblemUrl('');
+      setSamples([{ input: '', output: '' }]);
     } catch (error) {
       console.error('Error submitting problem URL:', error);
       setError(error.message || 'Failed to submit problem URL');
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleAddSample = () => {
+    setSamples([...samples, { input: '', output: '' }]);
+  };
+
+  const handleRemoveSample = (index) => {
+    if (samples.length > 1) {
+      setSamples(samples.filter((_, i) => i !== index));
+    }
+  };
+
+  const handleSampleChange = (index, field, value) => {
+    const newSamples = [...samples];
+    newSamples[index][field] = value;
+    setSamples(newSamples);
   };
 
   const handleKeyPress = (e) => {
@@ -310,9 +333,67 @@ function ProblemRegister({ onBack }) {
             </Button>
           </Box>
 
-          <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+          <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 2 }}>
             Supported platforms: Codeforces, Baekjoon
           </Typography>
+
+          <Divider sx={{ my: 2 }} />
+
+          <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
+            Sample Test Cases (Optional)
+          </Typography>
+          <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 2 }}>
+            Provide sample input/output pairs to validate the generated solution. Leave empty to extract from the problem page.
+          </Typography>
+
+          {samples.map((sample, index) => (
+            <Box key={index} sx={{ mb: 2, p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                <Typography variant="subtitle2">Sample {index + 1}</Typography>
+                {samples.length > 1 && (
+                  <Button
+                    size="small"
+                    color="error"
+                    onClick={() => handleRemoveSample(index)}
+                    disabled={submitting}
+                  >
+                    Remove
+                  </Button>
+                )}
+              </Box>
+              <TextField
+                fullWidth
+                label="Input"
+                placeholder="Sample input (e.g., 3\n1 2 3)"
+                value={sample.input}
+                onChange={(e) => handleSampleChange(index, 'input', e.target.value)}
+                disabled={submitting}
+                multiline
+                rows={3}
+                sx={{ mb: 1 }}
+              />
+              <TextField
+                fullWidth
+                label="Expected Output"
+                placeholder="Expected output (e.g., 6)"
+                value={sample.output}
+                onChange={(e) => handleSampleChange(index, 'output', e.target.value)}
+                disabled={submitting}
+                multiline
+                rows={2}
+              />
+            </Box>
+          ))}
+
+          <Button
+            variant="outlined"
+            startIcon={<AddIcon />}
+            onClick={handleAddSample}
+            disabled={submitting}
+            sx={{ mb: 2 }}
+          >
+            Add Sample
+          </Button>
         </Paper>
       )}
 

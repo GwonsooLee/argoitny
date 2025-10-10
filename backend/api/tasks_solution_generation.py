@@ -1,8 +1,8 @@
 """
-Solution generation with Gemini → OpenAI fallback logic
+Solution generation with OpenAI → Gemini fallback logic
 
 This module provides a function to generate solutions with automatic fallback
-from Gemini to OpenAI when Gemini fails after max retries.
+from OpenAI to Gemini when OpenAI fails after max retries.
 """
 import logging
 from .services.llm_factory import LLMServiceFactory
@@ -12,11 +12,11 @@ logger = logging.getLogger(__name__)
 
 def generate_solution_with_fallback(problem_metadata, update_progress_callback):
     """
-    Generate solution with Gemini → OpenAI fallback
+    Generate solution with OpenAI → Gemini fallback
 
     Strategy:
-    1. Try Gemini 3 times
-    2. If all Gemini attempts fail, try OpenAI 3 times
+    1. Try OpenAI 3 times
+    2. If all OpenAI attempts fail, try Gemini 3 times
     3. Return best result
 
     Args:
@@ -32,27 +32,27 @@ def generate_solution_with_fallback(problem_metadata, update_progress_callback):
     validation_error = None
     used_service = None
 
-    # List of LLM services to try in order (Gemini first, then OpenAI)
+    # List of LLM services to try in order (OpenAI first, then Gemini)
     llm_services_to_try = []
 
-    # Try Gemini first
-    try:
-        gemini_service = LLMServiceFactory.create_service('gemini')
-        llm_services_to_try.append(('gemini', gemini_service))
-        logger.info("Will try Gemini first for solution generation")
-    except Exception as e:
-        logger.warning(f"Gemini service not available: {e}")
-
-    # Add OpenAI as fallback
+    # Try OpenAI first
     try:
         openai_service = LLMServiceFactory.create_service('openai')
         llm_services_to_try.append(('openai', openai_service))
-        logger.info("OpenAI available as fallback")
+        logger.info("Will try OpenAI first for solution generation")
     except Exception as e:
         logger.warning(f"OpenAI service not available: {e}")
 
+    # Add Gemini as fallback
+    try:
+        gemini_service = LLMServiceFactory.create_service('gemini')
+        llm_services_to_try.append(('gemini', gemini_service))
+        logger.info("Gemini available as fallback")
+    except Exception as e:
+        logger.warning(f"Gemini service not available: {e}")
+
     if not llm_services_to_try:
-        raise ValueError("No LLM services available (both Gemini and OpenAI failed)")
+        raise ValueError("No LLM services available (both OpenAI and Gemini failed)")
 
     # Try each service in order
     for service_name, current_llm_service in llm_services_to_try:
@@ -78,7 +78,7 @@ def generate_solution_with_fallback(problem_metadata, update_progress_callback):
                 solution_code = solution_result['solution_code']
                 logger.info(f"Generated solution with {service_name} on attempt {attempt}: {len(solution_code)} characters")
 
-                # Validate solution with samples
+                # Validate solution with user-provided samples
                 samples = problem_metadata.get('samples', [])
                 if samples:
                     update_progress_callback(f"✓ Testing solution with {len(samples)} sample{'s' if len(samples) > 1 else ''}...")

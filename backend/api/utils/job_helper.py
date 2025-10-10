@@ -16,7 +16,8 @@ class JobHelper:
         Create a ScriptGenerationJob in DynamoDB
 
         Args:
-            platform, problem_id, title, language, constraints, problem_url, tags, solution_code, status
+            platform, problem_id, title, language, constraints, problem_url, tags, status
+            Note: solution_code is NOT stored in SGJOB - it should be fetched from Problem entity
 
         Returns:
             Job dictionary from DynamoDB
@@ -32,7 +33,6 @@ class JobHelper:
             constraints=kwargs.get('constraints', ''),
             problem_url=kwargs.get('problem_url', ''),
             tags=kwargs.get('tags', []),
-            solution_code=kwargs.get('solution_code', ''),
             status=kwargs.get('status', 'PENDING')
         )
 

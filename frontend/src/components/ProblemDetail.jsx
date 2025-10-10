@@ -36,7 +36,8 @@ import {
   Delete as DeleteIcon,
   ContentCopy as ContentCopyIcon,
   Refresh as RefreshIcon,
-  OpenInNew as OpenInNewIcon
+  OpenInNew as OpenInNewIcon,
+  Add as AddIcon
 } from '@mui/icons-material';
 import { apiGet, apiPost, apiDelete } from '../utils/api-client';
 import { API_ENDPOINTS } from '../config/api';
@@ -80,6 +81,10 @@ function ProblemDetail({ platform, problemId, onBack }) {
   const [additionalContext, setAdditionalContext] = useState('');
   const [regenerating, setRegenerating] = useState(false);
   const [lastRefreshTime, setLastRefreshTime] = useState(null);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [editedSamples, setEditedSamples] = useState([]);
+  const [editedSolutionCode, setEditedSolutionCode] = useState('');
+  const [saving, setSaving] = useState(false);
 
   const fetchProblemAndJobs = async () => {
     // Don't show refreshing indicator on initial load
@@ -128,6 +133,61 @@ function ProblemDetail({ platform, problemId, onBack }) {
           }
         } else {
           setProgressHistory([]);
+        }
+
+        // Resume script execution polling if task_id exists
+        const scriptExecutionTaskId = problemData?.metadata?.script_execution_task_id;
+        if (scriptExecutionTaskId && !executingScript) {
+          setExecutingScript(true);
+          showSnackbar('Resuming test case generation...', 'info');
+          pollTaskStatus(
+            scriptExecutionTaskId,
+            async (result) => {
+              // Success - save test inputs
+              try {
+                const saveResponse = await apiPost('/register/save-test-inputs/', {
+                  platform: problemData.platform,
+                  problem_id: problemData.problem_id,
+                  test_inputs: result.test_cases
+                });
+
+                if (!saveResponse.ok) {
+                  const errorData = await saveResponse.json();
+                  throw new Error(errorData.error || 'Failed to save test cases');
+                }
+
+                // If solution code exists, generate outputs immediately
+                if (problemData.solution_code) {
+                  const outputResponse = await apiPost('/register/generate-outputs/', {
+                    platform: problemData.platform,
+                    problem_id: problemData.problem_id
+                  });
+
+                  if (!outputResponse.ok) {
+                    const errorData = await outputResponse.json();
+                    throw new Error(errorData.error || 'Failed to generate outputs');
+                  }
+
+                  showSnackbar(`Successfully generated ${result.count} test cases with outputs`, 'success');
+                } else {
+                  showSnackbar(`Successfully generated ${result.count} test case inputs (outputs can be generated later)`, 'success');
+                }
+
+                setShowScript(false);
+                fetchProblemAndJobs();
+              } catch (error) {
+                console.error('Error saving test cases:', error);
+                showSnackbar('Failed to save test cases: ' + error.message, 'error');
+              } finally {
+                setExecutingScript(false);
+              }
+            },
+            (error) => {
+              console.error('Task error:', error);
+              showSnackbar('Failed to execute script: ' + error, 'error');
+              setExecutingScript(false);
+            }
+          );
         }
       }
     } catch (error) {
@@ -209,59 +269,112 @@ function ProblemDetail({ platform, problemId, onBack }) {
     }
   };
 
+  const pollTaskStatus = async (taskId, onSuccess, onError) => {
+    const maxAttempts = 60; // 5 minutes with 5 second intervals
+    let attempts = 0;
+
+    const poll = async () => {
+      try {
+        const response = await apiGet(`/register/task-status/${taskId}/`);
+        const data = await response.json();
+
+        if (data.status === 'COMPLETED') {
+          onSuccess(data.result);
+          return;
+        } else if (data.status === 'FAILED') {
+          onError(data.error || 'Task failed');
+          return;
+        } else if (attempts >= maxAttempts) {
+          onError('Task timeout - please try again');
+          return;
+        }
+
+        // Continue polling
+        attempts++;
+        setTimeout(poll, 5000); // Poll every 5 seconds
+      } catch (error) {
+        onError(error.message);
+      }
+    };
+
+    poll();
+  };
+
   const handleExecuteScript = async () => {
     if (!selectedJob || !selectedJob.generator_code) return;
 
     setExecutingScript(true);
+    showSnackbar('Starting test case generation...', 'info');
+
     try {
-      // First, execute the script to get test inputs
+      // Start async execution
       const executeResponse = await apiPost(API_ENDPOINTS.executeTestCases, {
         generator_code: selectedJob.generator_code,
-        num_cases: 20
+        num_cases: 10,
+        platform: problem.platform,
+        problem_id: problem.problem_id
       });
 
       if (!executeResponse.ok) {
         const errorData = await executeResponse.json();
-        throw new Error(errorData.error || 'Failed to execute script');
+        throw new Error(errorData.error || 'Failed to start execution');
       }
 
       const executeData = await executeResponse.json();
+      const taskId = executeData.task_id;
 
-      // Then save the test inputs to the problem
-      const saveResponse = await apiPost('/register/save-test-inputs/', {
-        platform: problem.platform,
-        problem_id: problem.problem_id,
-        test_inputs: executeData.test_cases
-      });
+      // Poll for completion
+      pollTaskStatus(
+        taskId,
+        async (result) => {
+          // Success - save test inputs
+          try {
+            const saveResponse = await apiPost('/register/save-test-inputs/', {
+              platform: problem.platform,
+              problem_id: problem.problem_id,
+              test_inputs: result.test_cases
+            });
 
-      if (!saveResponse.ok) {
-        const errorData = await saveResponse.json();
-        throw new Error(errorData.error || 'Failed to save test cases');
-      }
+            if (!saveResponse.ok) {
+              const errorData = await saveResponse.json();
+              throw new Error(errorData.error || 'Failed to save test cases');
+            }
 
-      // If solution code exists, generate outputs immediately
-      if (problem.solution_code) {
-        const outputResponse = await apiPost('/register/generate-outputs/', {
-          platform: problem.platform,
-          problem_id: problem.problem_id
-        });
+            // If solution code exists, generate outputs immediately
+            if (problem.solution_code) {
+              const outputResponse = await apiPost('/register/generate-outputs/', {
+                platform: problem.platform,
+                problem_id: problem.problem_id
+              });
 
-        if (!outputResponse.ok) {
-          const errorData = await outputResponse.json();
-          throw new Error(errorData.error || 'Failed to generate outputs');
+              if (!outputResponse.ok) {
+                const errorData = await outputResponse.json();
+                throw new Error(errorData.error || 'Failed to generate outputs');
+              }
+
+              showSnackbar(`Successfully generated ${result.count} test cases with outputs`, 'success');
+            } else {
+              showSnackbar(`Successfully generated ${result.count} test case inputs (outputs can be generated later)`, 'success');
+            }
+
+            setShowScript(false);
+            fetchProblemAndJobs();
+          } catch (error) {
+            console.error('Error saving test cases:', error);
+            showSnackbar('Failed to save test cases: ' + error.message, 'error');
+          } finally {
+            setExecutingScript(false);
+          }
+        },
+        (error) => {
+          console.error('Task error:', error);
+          showSnackbar('Failed to execute script: ' + error, 'error');
+          setExecutingScript(false);
         }
-
-        showSnackbar(`Successfully generated ${executeData.count} test cases with outputs`, 'success');
-      } else {
-        showSnackbar(`Successfully generated ${executeData.count} test case inputs (outputs can be generated later)`, 'success');
-      }
-
-      setShowScript(false);
-      fetchProblemAndJobs();
+      );
     } catch (error) {
       console.error('Error executing script:', error);
       showSnackbar('Failed to execute script: ' + error.message, 'error');
-    } finally {
       setExecutingScript(false);
     }
   };
@@ -442,11 +555,6 @@ function ProblemDetail({ platform, problemId, onBack }) {
   };
 
   const handleRegenerateSolution = async () => {
-    if (!additionalContext.trim()) {
-      showSnackbar('Please provide additional context for solution regeneration', 'warning');
-      return;
-    }
-
     setRegenerating(true);
     try {
       // Use platform/problem_id URL format
@@ -471,6 +579,54 @@ function ProblemDetail({ platform, problemId, onBack }) {
       showSnackbar('Failed to regenerate solution: ' + error.message, 'error');
     } finally {
       setRegenerating(false);
+    }
+  };
+
+  const handleOpenEditDialog = () => {
+    // Initialize with current values
+    setEditedSamples(problem.metadata?.user_samples || []);
+    setEditedSolutionCode(problem.solution_code || '');
+    setEditDialogOpen(true);
+  };
+
+  const handleAddEditSample = () => {
+    setEditedSamples([...editedSamples, { input: '', output: '' }]);
+  };
+
+  const handleRemoveEditSample = (index) => {
+    setEditedSamples(editedSamples.filter((_, i) => i !== index));
+  };
+
+  const handleEditSampleChange = (index, field, value) => {
+    const newSamples = [...editedSamples];
+    newSamples[index][field] = value;
+    setEditedSamples(newSamples);
+  };
+
+  const handleSaveEdit = async () => {
+    setSaving(true);
+    try {
+      // Filter out empty samples
+      const validSamples = editedSamples.filter(s => s.input.trim() || s.output.trim());
+
+      const response = await apiPost(`${API_ENDPOINTS.problems}${problem.platform}/${problem.problem_id}/`, {
+        user_samples: validSamples,
+        solution_code: editedSolutionCode
+      }, { requireAuth: true });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to update problem');
+      }
+
+      showSnackbar('Problem updated successfully!', 'success');
+      setEditDialogOpen(false);
+      fetchProblemAndJobs();
+    } catch (error) {
+      console.error('Error updating problem:', error);
+      showSnackbar('Failed to update problem: ' + error.message, 'error');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -640,7 +796,7 @@ function ProblemDetail({ platform, problemId, onBack }) {
       { key: 'queued', label: 'Queued', description: 'Waiting to start' },
       { key: 'extracting', label: 'Step 1: Extracting Metadata', description: '📄 Extracting problem details from webpage', icon: '📄' },
       { key: 'solving', label: 'Step 2: Generating Solution', description: '🧠 AI is solving the problem', icon: '🧠' },
-      { key: 'validating', label: 'Validating Solution', description: '✓ Testing with sample cases' },
+      { key: 'validating', label: 'Step 3: Validating Solution', description: '✓ Testing solution with sample cases', icon: '✓' },
       { key: 'completed', label: 'Completed', description: 'Extraction successful' }
     ];
 
@@ -678,18 +834,13 @@ function ProblemDetail({ platform, problemId, onBack }) {
     else if (progress.includes('🧠') || progress.includes('Step 2/2') || progress.includes('Generating solution')) {
       currentStageIndex = 2;
       const cleanProgress = progress.replace('🧠', '').trim();
-      progressMessage = cleanProgress + attemptInfo || `Generating solution...${attemptInfo}`;
+      progressMessage = cleanProgress + attemptInfo || progress || `Generating solution...${attemptInfo}`;
     }
-    // Validation & testing
-    else if (progress.includes('Testing solution') || progress.includes('Sample test failed') || progress.includes('analyzing mistake')) {
+    // Step 3: Validating solution (with ✓ emoji or "verified" text)
+    else if (progress.includes('✓') || progress.includes('verified with') || progress.includes('Testing solution')) {
       currentStageIndex = 3;
-      progressMessage = progress.includes('failed') || progress.includes('analyzing')
-        ? `⚠ Validation failed, retrying...${attemptInfo}`
-        : `Testing with samples...${attemptInfo}`;
-    }
-    else if (progress.includes('verified with') || progress.includes('✓')) {
-      currentStageIndex = 3;
-      progressMessage = progress;
+      const cleanProgress = progress.replace('✓', '').trim();
+      progressMessage = cleanProgress || 'Testing solution with sample cases...';
     }
     // Legacy progress messages
     else if (progress.includes('Fetching webpage')) {
@@ -743,7 +894,7 @@ function ProblemDetail({ platform, problemId, onBack }) {
           <Button
             variant="outlined"
             startIcon={<EditIcon sx={{ fontSize: { xs: '1.125rem', sm: '1.25rem' } }} />}
-            onClick={() => window.location.href = `/register?draft_id=${problem.id}`}
+            onClick={handleOpenEditDialog}
             disabled={isCompleted}
             sx={{
               fontSize: { xs: '0.813rem', sm: '0.875rem' },
@@ -992,13 +1143,26 @@ function ProblemDetail({ platform, problemId, onBack }) {
       )}
 
       <Paper sx={{ p: { xs: 2, sm: 3 }, mb: 3 }}>
-        <Typography variant="h4" gutterBottom sx={{
-          color: 'text.primary',
-          fontWeight: 600,
-          fontSize: { xs: '1.5rem', sm: '1.75rem', md: '2.125rem' }
-        }}>
-          {problem.title}
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+          <Typography variant="h4" sx={{
+            color: 'text.primary',
+            fontWeight: 600,
+            fontSize: { xs: '1.5rem', sm: '1.75rem', md: '2.125rem' }
+          }}>
+            {problem.title}
+          </Typography>
+          {problem.needs_review && (
+            <Chip
+              label="Needs Review"
+              color="warning"
+              size="small"
+              sx={{
+                fontSize: { xs: '0.688rem', sm: '0.75rem' },
+                fontWeight: 600
+              }}
+            />
+          )}
+        </Box>
         <Typography variant="body1" sx={{
           color: 'text.secondary',
           mb: 2,
@@ -1058,6 +1222,128 @@ function ProblemDetail({ platform, problemId, onBack }) {
             <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'pre-wrap' }}>
               {problem.constraints}
             </Typography>
+          </>
+        )}
+
+        {problem.metadata?.user_samples && problem.metadata.user_samples.length > 0 && (
+          <>
+            <Divider sx={{ my: 2 }} />
+            <Typography variant="subtitle2" gutterBottom sx={{ fontWeight: 600, color: 'text.primary' }}>
+              User-Provided Samples ({problem.metadata.user_samples.length}):
+            </Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+              These are the sample test cases you provided during problem registration.
+            </Typography>
+            {problem.metadata.user_samples.map((sample, idx) => {
+              const truncatedInput = truncateText(sample.input);
+              const truncatedOutput = truncateText(sample.output);
+
+              return (
+                <Accordion
+                  key={idx}
+                  sx={{ mb: 1, '&:before': { display: 'none' } }}
+                >
+                  <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                    <Typography>Sample #{idx + 1}</Typography>
+                  </AccordionSummary>
+                  <AccordionDetails>
+                    <Box sx={{
+                      display: 'flex',
+                      flexDirection: { xs: 'column', md: 'row' },
+                      gap: 2,
+                      alignItems: 'stretch'
+                    }}>
+                      <Box sx={{ flex: { xs: '1 1 100%', md: '1 1 50%' }, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                          <Typography variant="subtitle2" color="text.primary" sx={{
+                            fontSize: { xs: '0.813rem', sm: '0.875rem' }
+                          }}>Input:</Typography>
+                          <IconButton
+                            size="small"
+                            onClick={() => downloadText(sample.input, `user_sample_${idx + 1}_input.txt`)}
+                            title="Download Input"
+                          >
+                            <DownloadIcon fontSize="small" />
+                          </IconButton>
+                        </Box>
+                        <Paper sx={{
+                          p: { xs: 1, sm: 1.5 },
+                          backgroundColor: '#f5f5f5',
+                          border: '1px solid',
+                          borderColor: 'divider',
+                          height: '200px',
+                          overflow: 'auto',
+                          flex: 1
+                        }}>
+                          <pre style={{
+                            margin: 0,
+                            fontSize: window.innerWidth < 600 ? '0.75rem' : '0.875rem',
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
+                            color: '#333',
+                            overflowWrap: 'break-word'
+                          }}>
+                            {truncatedInput.text}
+                          </pre>
+                          {truncatedInput.isTruncated && (
+                            <Typography variant="caption" color="text.secondary" sx={{
+                              mt: 1,
+                              display: 'block',
+                              fontSize: { xs: '0.688rem', sm: '0.75rem' }
+                            }}>
+                              (Truncated - download to see full content)
+                            </Typography>
+                          )}
+                        </Paper>
+                      </Box>
+                      <Box sx={{ flex: { xs: '1 1 100%', md: '1 1 50%' }, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                          <Typography variant="subtitle2" color="text.primary" sx={{
+                            fontSize: { xs: '0.813rem', sm: '0.875rem' }
+                          }}>Expected Output:</Typography>
+                          <IconButton
+                            size="small"
+                            onClick={() => downloadText(sample.output, `user_sample_${idx + 1}_output.txt`)}
+                            title="Download Output"
+                          >
+                            <DownloadIcon fontSize="small" />
+                          </IconButton>
+                        </Box>
+                        <Paper sx={{
+                          p: { xs: 1, sm: 1.5 },
+                          backgroundColor: '#f5f5f5',
+                          border: '1px solid',
+                          borderColor: 'divider',
+                          height: '200px',
+                          overflow: 'auto',
+                          flex: 1
+                        }}>
+                          <pre style={{
+                            margin: 0,
+                            fontSize: window.innerWidth < 600 ? '0.75rem' : '0.875rem',
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
+                            color: '#333',
+                            overflowWrap: 'break-word'
+                          }}>
+                            {truncatedOutput.text}
+                          </pre>
+                          {truncatedOutput.isTruncated && (
+                            <Typography variant="caption" color="text.secondary" sx={{
+                              mt: 1,
+                              display: 'block',
+                              fontSize: { xs: '0.688rem', sm: '0.75rem' }
+                            }}>
+                              (Truncated - download to see full content)
+                            </Typography>
+                          )}
+                        </Paper>
+                      </Box>
+                    </Box>
+                  </AccordionDetails>
+                </Accordion>
+              );
+            })}
           </>
         )}
 
@@ -1445,7 +1731,7 @@ function ProblemDetail({ platform, problemId, onBack }) {
             onClick={handleRegenerateSolution}
             variant="contained"
             color="warning"
-            disabled={regenerating || !additionalContext.trim()}
+            disabled={regenerating}
           >
             {regenerating ? 'Regenerating...' : 'Regenerate Solution'}
           </Button>
@@ -1505,6 +1791,132 @@ function ProblemDetail({ platform, problemId, onBack }) {
             </Button>
           </Box>
         </DialogContent>
+      </Dialog>
+
+      {/* Edit Dialog */}
+      <Dialog
+        open={editDialogOpen}
+        onClose={() => !saving && setEditDialogOpen(false)}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>
+          Edit Problem
+          <IconButton
+            onClick={() => setEditDialogOpen(false)}
+            disabled={saving}
+            sx={{ position: 'absolute', right: 8, top: 8 }}
+          >
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent>
+          <Typography variant="body1" sx={{ mb: 2 }}>
+            Edit User-Provided Samples and Solution Code
+          </Typography>
+
+          {/* Solution Code Section */}
+          <Box sx={{ mb: 3 }}>
+            <Typography variant="subtitle2" gutterBottom sx={{ fontWeight: 600 }}>
+              Solution Code:
+            </Typography>
+            <TextField
+              fullWidth
+              multiline
+              rows={12}
+              value={editedSolutionCode}
+              onChange={(e) => setEditedSolutionCode(e.target.value)}
+              disabled={saving}
+              placeholder="Enter solution code..."
+              sx={{
+                fontFamily: 'monospace',
+                '& .MuiInputBase-input': {
+                  fontFamily: 'monospace',
+                  fontSize: '0.875rem'
+                }
+              }}
+            />
+          </Box>
+
+          <Divider sx={{ my: 2 }} />
+
+          {/* User-Provided Samples Section */}
+          <Box>
+            <Typography variant="subtitle2" gutterBottom sx={{ fontWeight: 600 }}>
+              User-Provided Samples:
+            </Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 2 }}>
+              These are sample test cases to validate the generated solution.
+            </Typography>
+
+            {editedSamples.length === 0 ? (
+              <Box sx={{ textAlign: 'center', py: 3, bgcolor: 'grey.50', borderRadius: 1, mb: 2 }}>
+                <Typography variant="body2" color="text.secondary">
+                  No samples added yet
+                </Typography>
+              </Box>
+            ) : (
+              editedSamples.map((sample, index) => (
+                <Box key={index} sx={{ mb: 2, p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                    <Typography variant="subtitle2">Sample #{index + 1}</Typography>
+                    <Button
+                      size="small"
+                      color="error"
+                      onClick={() => handleRemoveEditSample(index)}
+                      disabled={saving}
+                    >
+                      Remove
+                    </Button>
+                  </Box>
+                  <TextField
+                    fullWidth
+                    label="Input"
+                    placeholder="Sample input (e.g., 3\n1 2 3)"
+                    value={sample.input}
+                    onChange={(e) => handleEditSampleChange(index, 'input', e.target.value)}
+                    disabled={saving}
+                    multiline
+                    rows={3}
+                    sx={{ mb: 1 }}
+                  />
+                  <TextField
+                    fullWidth
+                    label="Expected Output"
+                    placeholder="Expected output (e.g., 6)"
+                    value={sample.output}
+                    onChange={(e) => handleEditSampleChange(index, 'output', e.target.value)}
+                    disabled={saving}
+                    multiline
+                    rows={2}
+                  />
+                </Box>
+              ))
+            )}
+
+            <Button
+              variant="outlined"
+              startIcon={<AddIcon />}
+              onClick={handleAddEditSample}
+              disabled={saving}
+              sx={{ mb: 2 }}
+            >
+              Add Sample
+            </Button>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setEditDialogOpen(false)} disabled={saving}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleSaveEdit}
+            variant="contained"
+            disabled={saving}
+          >
+            {saving ? 'Saving...' : 'Save Changes'}
+          </Button>
+        </DialogActions>
       </Dialog>
 
       {/* Snackbar for notifications */}

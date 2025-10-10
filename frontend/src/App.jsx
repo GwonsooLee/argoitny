@@ -53,6 +53,7 @@ function App() {
   const [testResults, setTestResults] = useState(null);
   const [hintsLoading, setHintsLoading] = useState(false);
   const [user, setUser] = useState(null);
+  const [userLoading, setUserLoading] = useState(true);
   const [anchorEl, setAnchorEl] = useState(null);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
   const [returnToView, setReturnToView] = useState(null);
@@ -81,28 +82,57 @@ function App() {
   useEffect(() => {
     if (isAuthenticated()) {
       const currentUser = getUser();
+      // Set user immediately from localStorage to avoid flash of logged-out state
       setUser(currentUser);
+      setUserLoading(true);
 
       // Fetch latest user profile from server to get updated plan name
       apiGet('/account/me/', { requireAuth: true })
-        .then(res => res.json())
+        .then(res => {
+          if (!res.ok) {
+            // If 401/403, token is invalid - don't use cached data
+            if (res.status === 401 || res.status === 403) {
+              throw new Error('Authentication failed');
+            }
+            throw new Error(`HTTP ${res.status}`);
+          }
+          return res.json();
+        })
         .then(data => {
           // Update user with latest data from server
           setUser(data);
           saveUser(data);
+          setUserLoading(false);
+
+          // Check if user has subscription plan (but not for admin users)
+          if (!data.subscription_plan_name && !data.is_admin) {
+            setShowPlanModal(true);
+          }
         })
         .catch(err => {
           console.error('Failed to fetch user profile:', err);
-          // Keep using cached user data if API fails
+
+          // If authentication failed, wait for token refresh to complete
+          // api-client will automatically retry, so we keep user state
+          if (err.message === 'Session expired. Please login again.') {
+            // Token refresh failed - user will be logged out by forceLogout event
+            setUserLoading(false);
+            return;
+          }
+
+          // For other errors, keep using cached user data
+          setUserLoading(false);
+
+          // Check if user has subscription plan (but not for admin users)
+          if (currentUser && !currentUser.subscription_plan_name && !currentUser.is_admin) {
+            setShowPlanModal(true);
+          }
         });
 
       // Fetch plan usage
       fetchPlanUsage();
-
-      // Check if user has subscription plan (but not for admin users)
-      if (!currentUser.subscription_plan_name && !currentUser.is_admin) {
-        setShowPlanModal(true);
-      }
+    } else {
+      setUserLoading(false);
     }
 
     // Check URL for routes
