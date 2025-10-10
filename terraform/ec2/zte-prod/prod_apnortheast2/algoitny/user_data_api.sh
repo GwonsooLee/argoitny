@@ -59,8 +59,7 @@ cat > /app/config/config.yaml <<'CONFIGEOF'
 django:
   debug: false
   allowed_hosts:
-    - "api.testcase.run"
-    - "*.testcase.run"
+    - "*"
   timezone: "UTC"
   language_code: "en-us"
 

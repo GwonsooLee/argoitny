@@ -103,7 +103,7 @@ resource "aws_lb_target_group" "external" {
   health_check {
     interval            = 15
     port                = var.healthcheck_port
-    path                = "/health/"
+    path                = "/api/health/"
     timeout             = 3
     healthy_threshold   = 3
     unhealthy_threshold = 2

@@ -64,6 +64,7 @@ services:
       LOCALSTACK_URL: http://localstack:4566
       GUNICORN_WORKERS: "4"
       GUNICORN_LOG_LEVEL: "info"
+      ALLOWED_HOSTS: "localhost,127.0.0.1,0.0.0.0,10.10.110.90,10.10.10.93"
     ports:
       - "8000:8000"
     depends_on:

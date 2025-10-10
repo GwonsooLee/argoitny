@@ -68,10 +68,12 @@ except Exception as e:
     exit(1)
 "
 
-# Test LocalStack SQS connection
-echo ""
-echo "🔍 Testing LocalStack SQS connection..."
-python -c "
+# Test LocalStack SQS connection (only in development)
+ENVIRONMENT=${ENVIRONMENT:-development}
+if [ "$ENVIRONMENT" != "production" ]; then
+    echo ""
+    echo "🔍 Testing LocalStack SQS connection..."
+    python -c "
 import os
 import boto3
 
@@ -91,6 +93,10 @@ except Exception as e:
     print(f'  ⚠️ Could not connect to LocalStack SQS: {e}')
     print('  ⚠️ Continuing anyway - queues will be created on first use')
 "
+else
+    echo ""
+    echo "🚀 Production environment - using AWS SQS (no LocalStack)"
+fi
 
 # Start Celery Worker
 echo ""

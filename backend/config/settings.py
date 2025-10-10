@@ -432,9 +432,9 @@ CSRF_COOKIE_SAMESITE = config.get('session.cookie_samesite', env_var='CSRF_COOKI
 # ============================================
 # Environment Configuration
 # ============================================
-# ENVIRONMENT is already read at top of file for LocalStack cleanup
-# Re-read from config for consistency with other settings
-ENVIRONMENT = config.get('monitoring.environment', env_var='ENVIRONMENT', default='development')
+# ENVIRONMENT is already read at top of file (line 26) for LocalStack cleanup
+# DO NOT re-read to avoid overwriting production settings
+# ENVIRONMENT = config.get('monitoring.environment', env_var='ENVIRONMENT', default='development')  # ❌ REMOVED - causes production to use development settings
 
 # ============================================
 # Celery Configuration
