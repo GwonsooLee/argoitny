@@ -119,7 +119,7 @@ echo ""
 echo "========================================="
 echo "🚀 Starting Celery Worker"
 echo "========================================="
-echo "Command: celery -A config worker --loglevel=INFO --concurrency=4 --pool=threads --prefetch-multiplier=1 --queues=jobs,celery,ai,generation,execution,maintenance"
+echo "Command: celery -A config worker --loglevel=INFO --concurrency=4 --pool=threads --prefetch-multiplier=1"
 echo ""
 
 # Final environment check before starting celery
@@ -148,4 +148,6 @@ export DJANGO_SETTINGS_MODULE=config.settings
 echo "🎯 Executing celery command with INFO logging..."
 set -x  # Enable command tracing
 # Use DEBUG level to see connection errors
-exec celery -A config worker --loglevel=INFO --concurrency=4 --pool=threads --prefetch-multiplier=1 --queues=jobs,celery,ai,generation,execution,maintenance
+# Note: No --queues parameter - worker will use CELERY_TASK_DEFAULT_QUEUE from settings
+# Production: algoitny-jobs-prod, Development: jobs (prefixed to algoitny-jobs)
+exec celery -A config worker --loglevel=INFO --concurrency=4 --pool=threads --prefetch-multiplier=1
