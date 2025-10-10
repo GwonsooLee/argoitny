@@ -145,7 +145,7 @@ echo ""
 # With 4 workers, total prefetch = 4 (not 16)
 export DJANGO_SETTINGS_MODULE=config.settings
 
-echo "🎯 Executing celery command with DEBUG logging..."
+echo "🎯 Executing celery command with INFO logging..."
 set -x  # Enable command tracing
 # Use DEBUG level to see connection errors
-exec celery -A config worker --loglevel=DEBUG --concurrency=4 --pool=threads --prefetch-multiplier=1 --queues=jobs,celery,ai,generation,execution,maintenance
+exec celery -A config worker --loglevel=INFO --concurrency=4 --pool=threads --prefetch-multiplier=1 --queues=jobs,celery,ai,generation,execution,maintenance
