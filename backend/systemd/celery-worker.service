@@ -1,10 +1,10 @@
 [Unit]
 Description=Celery Worker for AlgoItny
 Documentation=https://docs.celeryproject.org/
-After=network.target redis.service mysql.service
+After=network.target
 
 [Service]
-Type=forking
+Type=exec
 User=algoitny
 Group=www-data
 WorkingDirectory=/home/algoitny/apps/algoitny/backend
@@ -12,18 +12,19 @@ Environment="PATH=/home/algoitny/apps/algoitny/backend/venv/bin"
 EnvironmentFile=/home/algoitny/apps/algoitny/backend/.env
 
 # Celery worker execution
+# CRITICAL: Use --pool=threads for async compatibility
+# CRITICAL: Use --prefetch-multiplier=1 to prevent duplicate task execution
 ExecStart=/home/algoitny/apps/algoitny/backend/venv/bin/celery -A config worker \
     --loglevel=info \
     --concurrency=4 \
+    --pool=threads \
+    --prefetch-multiplier=1 \
     --max-tasks-per-child=1000 \
     --time-limit=1800 \
     --soft-time-limit=1500 \
+    --queues=jobs,celery,ai,generation,execution,maintenance \
     --logfile=/var/log/celery/worker.log \
-    --pidfile=/var/run/celery/worker.pid \
-    --detach
-
-# Graceful reload
-ExecReload=/bin/kill -s HUP $MAINPID
+    --pidfile=/var/run/celery/worker.pid
 
 # Graceful shutdown
 ExecStop=/bin/kill -s TERM $MAINPID
@@ -32,6 +33,8 @@ ExecStop=/bin/kill -s TERM $MAINPID
 Restart=always
 RestartSec=10
 TimeoutStopSec=600
+KillMode=mixed
+KillSignal=SIGTERM
 
 # Security settings
 PrivateTmp=true

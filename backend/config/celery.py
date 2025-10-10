@@ -4,54 +4,45 @@ import logging
 from celery import Celery
 from celery.signals import worker_ready
 import boto3
-from kombu import Queue
 
 logger = logging.getLogger(__name__)
 
 # Set the default Django settings module
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 
-# Configure boto3 to use LocalStack BEFORE celery loads
-localstack_url = os.getenv('LOCALSTACK_URL', 'http://localhost:4566')
+# CRITICAL: Clean up LocalStack endpoints in production BEFORE creating Celery app
+# This must match the cleanup in settings.py
+ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')
+IS_PRODUCTION = ENVIRONMENT == 'production'
 
-# Create a custom SQS client factory that forces LocalStack endpoint
-def get_sqs_client():
-    return boto3.client(
-        'sqs',
-        endpoint_url=localstack_url,
-        region_name='us-east-1',
-        aws_access_key_id='test',
-        aws_secret_access_key='test',
-        use_ssl=False
-    )
+if IS_PRODUCTION:
+    # Production: Remove LocalStack environment variables
+    for env_var in ['AWS_ENDPOINT_URL', 'AWS_ENDPOINT_URL_SQS', 'AWS_ENDPOINT_URL_SECRETSMANAGER', 'LOCALSTACK_URL']:
+        if env_var in os.environ:
+            del os.environ[env_var]
+else:
+    # Development: Configure LocalStack
+    localstack_url = os.getenv('LOCALSTACK_URL', 'http://localhost:4566')
 
-# Set up environment to force LocalStack endpoint
-os.environ['AWS_ENDPOINT_URL'] = localstack_url
-os.environ['AWS_ENDPOINT_URL_SQS'] = localstack_url
+    # Create a custom SQS client factory that forces LocalStack endpoint
+    def get_sqs_client():
+        return boto3.client(
+            'sqs',
+            endpoint_url=localstack_url,
+            region_name='us-east-1',
+            aws_access_key_id='test',
+            aws_secret_access_key='test',
+            use_ssl=False
+        )
+
+    # Set up environment to force LocalStack endpoint
+    os.environ['AWS_ENDPOINT_URL'] = localstack_url
+    os.environ['AWS_ENDPOINT_URL_SQS'] = localstack_url
 
 app = Celery('algoitny')
 
 # Load config from Django settings with CELERY namespace
 app.config_from_object('django.conf:settings', namespace='CELERY')
-
-# Override broker transport options to ensure LocalStack is used
-app.conf.broker_transport_options = {
-    'region': 'us-east-1',
-    'visibility_timeout': 3600,
-    'polling_interval': 1,
-    'queue_name_prefix': 'algoitny-',
-    'is_secure': False,
-    'endpoint_url': localstack_url,
-    'sqs-base-url': localstack_url,
-    # Force kombu to use our LocalStack endpoint
-    'sqs_client_kwargs': {
-        'endpoint_url': localstack_url,
-        'region_name': 'us-east-1',
-        'aws_access_key_id': 'test',
-        'aws_secret_access_key': 'test',
-        'use_ssl': False
-    }
-}
 
 # Auto-discover tasks from all registered apps
 app.autodiscover_tasks()
