@@ -21,6 +21,14 @@ from datetime import timedelta
 import sys
 import os
 
+# CRITICAL: Clean up LocalStack endpoints in production BEFORE importing any AWS clients
+# This must be done before importing SecretsManager or any boto3-using modules
+ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')
+if ENVIRONMENT == 'production':
+    for env_var in ['AWS_ENDPOINT_URL', 'AWS_ENDPOINT_URL_SQS', 'AWS_ENDPOINT_URL_SECRETSMANAGER', 'LOCALSTACK_URL']:
+        if env_var in os.environ:
+            del os.environ[env_var]
+
 # Add parent directory to path for config loader
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
@@ -46,7 +54,7 @@ DEBUG = config.get_bool('django.debug', env_var='DEBUG', default=True)
 ALLOWED_HOSTS = config.get_list(
     'django.allowed_hosts',
     env_var='ALLOWED_HOSTS',
-    default=['localhost', '127.0.0.1']
+    default=['localhost', '127.0.0.1', '0.0.0.0']
 )
 
 # Application definition
@@ -424,7 +432,8 @@ CSRF_COOKIE_SAMESITE = config.get('session.cookie_samesite', env_var='CSRF_COOKI
 # ============================================
 # Environment Configuration
 # ============================================
-# Define ENVIRONMENT early so it can be used in other settings
+# ENVIRONMENT is already read at top of file for LocalStack cleanup
+# Re-read from config for consistency with other settings
 ENVIRONMENT = config.get('monitoring.environment', env_var='ENVIRONMENT', default='development')
 
 # ============================================
@@ -455,12 +464,6 @@ if IS_PRODUCTION:
         env_var='CELERY_BROKER_URL',
         default='sqs://'  # No credentials - uses IAM role
     )
-
-    # Ensure LocalStack endpoints are not set in production
-    # This prevents boto3 from using LocalStack URLs
-    for env_var in ['AWS_ENDPOINT_URL', 'AWS_ENDPOINT_URL_SQS', 'AWS_ENDPOINT_URL_SECRETSMANAGER', 'LOCALSTACK_URL']:
-        if env_var in os.environ:
-            del os.environ[env_var]
 else:
     # Local/Dev: Use LocalStack with test credentials
     LOCALSTACK_URL = os.getenv('LOCALSTACK_URL', 'http://localhost:4566')
