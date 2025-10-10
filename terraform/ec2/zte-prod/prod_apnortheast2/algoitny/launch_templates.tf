@@ -1,11 +1,11 @@
-# Data source for the latest Amazon Linux 2023 AMI
-data "aws_ami" "amazon_linux_2023" {
+# Data source for the latest Amazon Linux 2023 AMI (ARM64)
+data "aws_ami" "amazon_linux_2023_arm64" {
   most_recent = true
   owners      = ["amazon"]
 
   filter {
     name   = "name"
-    values = ["al2023-ami-*-x86_64"]
+    values = ["al2023-ami-*-arm64"]
   }
 
   filter {
@@ -17,13 +17,18 @@ data "aws_ami" "amazon_linux_2023" {
     name   = "root-device-type"
     values = ["ebs"]
   }
+
+  filter {
+    name   = "architecture"
+    values = ["arm64"]
+  }
 }
 
 # Launch Template for API Server
 resource "aws_launch_template" "api_server" {
   name_prefix   = "algoitny-api-${var.env_suffix}-"
   description   = "Launch template for AlgoItny API Server"
-  image_id      = data.aws_ami.amazon_linux_2023.id
+  image_id      = data.aws_ami.amazon_linux_2023_arm64.id
   instance_type = var.api_instance_type
 
   iam_instance_profile {
@@ -37,7 +42,6 @@ resource "aws_launch_template" "api_server" {
     ecr_repository_url  = data.terraform_remote_state.ecr.outputs.algoitny_repository_url
     ecr_image_url       = "${data.terraform_remote_state.ecr.outputs.algoitny_repository_url}:${var.image_tag}"
     allowed_hosts       = var.allowed_hosts
-    redis_host          = data.terraform_remote_state.databases.outputs.redis_primary_endpoint
     gunicorn_workers    = var.gunicorn_workers
   }))
 
@@ -59,7 +63,7 @@ resource "aws_launch_template" "api_server" {
   metadata_options {
     http_endpoint               = "enabled"
     http_tokens                 = "required"
-    http_put_response_hop_limit = 1
+    http_put_response_hop_limit = 2
     instance_metadata_tags      = "enabled"
   }
 
@@ -71,6 +75,7 @@ resource "aws_launch_template" "api_server" {
       Environment = var.env_suffix
       Service     = "algoitny-api"
       ManagedBy   = "terraform"
+      Architecture = "arm64"
     }
   }
 
@@ -90,6 +95,7 @@ resource "aws_launch_template" "api_server" {
     Environment = var.env_suffix
     Service     = "algoitny-api"
     ManagedBy   = "terraform"
+    Architecture = "arm64"
   }
 }
 
@@ -97,7 +103,7 @@ resource "aws_launch_template" "api_server" {
 resource "aws_launch_template" "worker" {
   name_prefix   = "algoitny-worker-${var.env_suffix}-"
   description   = "Launch template for AlgoItny Celery Worker"
-  image_id      = data.aws_ami.amazon_linux_2023.id
+  image_id      = data.aws_ami.amazon_linux_2023_arm64.id
   instance_type = var.worker_instance_type
 
   iam_instance_profile {
@@ -110,7 +116,6 @@ resource "aws_launch_template" "worker" {
     env_suffix         = var.env_suffix
     ecr_repository_url = data.terraform_remote_state.ecr.outputs.algoitny_repository_url
     ecr_image_url      = "${data.terraform_remote_state.ecr.outputs.algoitny_repository_url}:${var.image_tag}"
-    redis_host         = data.terraform_remote_state.databases.outputs.redis_primary_endpoint
   }))
 
   block_device_mappings {
@@ -131,7 +136,7 @@ resource "aws_launch_template" "worker" {
   metadata_options {
     http_endpoint               = "enabled"
     http_tokens                 = "required"
-    http_put_response_hop_limit = 1
+    http_put_response_hop_limit = 2
     instance_metadata_tags      = "enabled"
   }
 
@@ -143,6 +148,7 @@ resource "aws_launch_template" "worker" {
       Environment = var.env_suffix
       Service     = "algoitny-worker"
       ManagedBy   = "terraform"
+      Architecture = "arm64"
     }
   }
 
@@ -162,5 +168,6 @@ resource "aws_launch_template" "worker" {
     Environment = var.env_suffix
     Service     = "algoitny-worker"
     ManagedBy   = "terraform"
+    Architecture = "arm64"
   }
 }

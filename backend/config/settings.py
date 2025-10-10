@@ -422,23 +422,39 @@ CSRF_COOKIE_HTTPONLY = config.get_bool('session.cookie_httponly', default=True)
 CSRF_COOKIE_SAMESITE = config.get('session.cookie_samesite', env_var='CSRF_COOKIE_SAMESITE', default='Lax')
 
 # ============================================
+# Environment Configuration
+# ============================================
+# Define ENVIRONMENT early so it can be used in other settings
+ENVIRONMENT = config.get('monitoring.environment', env_var='ENVIRONMENT', default='development')
+
+# ============================================
 # Celery Configuration
 # ============================================
 
-# Use LocalStack SQS as broker
-LOCALSTACK_URL = os.getenv('LOCALSTACK_URL', 'http://localhost:4566')
-AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID', 'test')
-AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY', 'test')
-AWS_DEFAULT_REGION = os.getenv('AWS_DEFAULT_REGION', 'us-east-1')
+# Environment-specific AWS configuration
+# In production: Use IAM roles (no credentials needed)
+# In local/dev: Use LocalStack with test credentials
+IS_PRODUCTION = ENVIRONMENT == 'production'
 
-# SQS broker URL for LocalStack
-# For SQS with kombu, we don't specify the hostname in the URL
-# The hostname is specified in the transport options
-CELERY_BROKER_URL = config.get(
-    'celery.broker_url',
-    env_var='CELERY_BROKER_URL',
-    default=f'sqs://{AWS_ACCESS_KEY_ID}:{AWS_SECRET_ACCESS_KEY}@'
-)
+if IS_PRODUCTION:
+    # Production: Use IAM roles, no credentials
+    AWS_DEFAULT_REGION = os.getenv('AWS_DEFAULT_REGION', 'ap-northeast-2')
+    CELERY_BROKER_URL = config.get(
+        'celery.broker_url',
+        env_var='CELERY_BROKER_URL',
+        default='sqs://'  # No credentials - uses IAM role
+    )
+else:
+    # Local/Dev: Use LocalStack with test credentials
+    LOCALSTACK_URL = os.getenv('LOCALSTACK_URL', 'http://localhost:4566')
+    AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID', 'test')
+    AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY', 'test')
+    AWS_DEFAULT_REGION = os.getenv('AWS_DEFAULT_REGION', 'us-east-1')
+    CELERY_BROKER_URL = config.get(
+        'celery.broker_url',
+        env_var='CELERY_BROKER_URL',
+        default=f'sqs://{AWS_ACCESS_KEY_ID}:{AWS_SECRET_ACCESS_KEY}@'
+    )
 
 CELERY_RESULT_BACKEND = 'django-db'
 CELERY_CACHE_BACKEND = 'default'
@@ -472,29 +488,43 @@ CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = config.get_bool('celery.broker_conne
 CELERY_BROKER_CONNECTION_MAX_RETRIES = config.get_int('celery.broker_connection_max_retries', default=10)
 CELERY_BROKER_POOL_LIMIT = config.get_int('celery.broker_pool_limit', default=10)
 
-# SQS specific configuration for LocalStack
-# Set environment variables for boto3 to use LocalStack
-os.environ['AWS_ENDPOINT_URL'] = LOCALSTACK_URL
-os.environ['AWS_ENDPOINT_URL_SQS'] = LOCALSTACK_URL
-
-CELERY_BROKER_TRANSPORT_OPTIONS = {
-    'region': AWS_DEFAULT_REGION,
-    # With acks_late=False, messages are ACKed immediately on consume
-    # visibility_timeout is now a safety buffer in case of unexpected issues
-    # Set to task_time_limit * 2 for safety
-    'visibility_timeout': 3600,  # 60 minutes (task_time_limit 30min * 2)
-    'polling_interval': 1,  # 1 second
-    'queue_name_prefix': 'algoitny-',
-    'is_secure': False,
-    'endpoint_url': LOCALSTACK_URL,  # Force LocalStack endpoint
-    'sqs_client_kwargs': {
-        'endpoint_url': LOCALSTACK_URL,
-        'region_name': AWS_DEFAULT_REGION,
-        'aws_access_key_id': AWS_ACCESS_KEY_ID,
-        'aws_secret_access_key': AWS_SECRET_ACCESS_KEY,
-        'use_ssl': False
+# SQS specific configuration
+if IS_PRODUCTION:
+    # Production: Use real AWS SQS with IAM roles
+    CELERY_BROKER_TRANSPORT_OPTIONS = {
+        'region': AWS_DEFAULT_REGION,
+        # With acks_late=False, messages are ACKed immediately on consume
+        # visibility_timeout is now a safety buffer in case of unexpected issues
+        # Set to task_time_limit * 2 for safety
+        'visibility_timeout': 3600,  # 60 minutes (task_time_limit 30min * 2)
+        'polling_interval': 1,  # 1 second
+        'queue_name_prefix': 'algoitny-',
+        'is_secure': True,  # Use HTTPS in production
     }
-}
+else:
+    # Local/Dev: Use LocalStack
+    # Set environment variables for boto3 to use LocalStack
+    os.environ['AWS_ENDPOINT_URL'] = LOCALSTACK_URL
+    os.environ['AWS_ENDPOINT_URL_SQS'] = LOCALSTACK_URL
+
+    CELERY_BROKER_TRANSPORT_OPTIONS = {
+        'region': AWS_DEFAULT_REGION,
+        # With acks_late=False, messages are ACKed immediately on consume
+        # visibility_timeout is now a safety buffer in case of unexpected issues
+        # Set to task_time_limit * 2 for safety
+        'visibility_timeout': 3600,  # 60 minutes (task_time_limit 30min * 2)
+        'polling_interval': 1,  # 1 second
+        'queue_name_prefix': 'algoitny-',
+        'is_secure': False,
+        'endpoint_url': LOCALSTACK_URL,  # Force LocalStack endpoint
+        'sqs_client_kwargs': {
+            'endpoint_url': LOCALSTACK_URL,
+            'region_name': AWS_DEFAULT_REGION,
+            'aws_access_key_id': AWS_ACCESS_KEY_ID,
+            'aws_secret_access_key': AWS_SECRET_ACCESS_KEY,
+            'use_ssl': False
+        }
+    }
 
 # Result backend optimization
 CELERY_RESULT_EXTENDED = True
@@ -598,7 +628,6 @@ SERVER_EMAIL = config.get('email.server_email', env_var='SERVER_EMAIL', default=
 
 # Sentry DSN from Secrets Manager
 SENTRY_DSN = secrets.get('SENTRY_DSN', default='')
-ENVIRONMENT = config.get('monitoring.environment', env_var='ENVIRONMENT', default='development')
 
 # ============================================
 # Admin Configuration

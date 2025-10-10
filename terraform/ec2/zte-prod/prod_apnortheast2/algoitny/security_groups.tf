@@ -23,17 +23,6 @@ resource "aws_security_group_rule" "api_server_http_from_alb" {
   security_group_id        = aws_security_group.api_server.id
 }
 
-# Ingress rule - Allow SSH from VPC
-resource "aws_security_group_rule" "api_server_ssh_from_vpc" {
-  type              = "ingress"
-  from_port         = 22
-  to_port           = 22
-  protocol          = "tcp"
-  security_group_id = aws_security_group.api_server.id
-  cidr_blocks       = [data.terraform_remote_state.vpc.outputs.cidr_block]
-  description       = "Allow SSH from VPC"
-}
-
 # Egress rule - Allow all outbound
 resource "aws_security_group_rule" "api_server_egress_all" {
   type              = "egress"
@@ -57,17 +46,6 @@ resource "aws_security_group" "worker" {
     Service     = "algoitny-worker"
     ManagedBy   = "terraform"
   }
-}
-
-# Ingress rule - Allow SSH from VPC
-resource "aws_security_group_rule" "worker_ssh_from_vpc" {
-  type              = "ingress"
-  from_port         = 22
-  to_port           = 22
-  protocol          = "tcp"
-  security_group_id = aws_security_group.worker.id
-  cidr_blocks       = [data.terraform_remote_state.vpc.outputs.cidr_block]
-  description       = "Allow SSH from VPC"
 }
 
 # Egress rule - Allow all outbound

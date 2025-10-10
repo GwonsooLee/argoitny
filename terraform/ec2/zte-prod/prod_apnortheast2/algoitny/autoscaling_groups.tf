@@ -32,6 +32,7 @@ resource "aws_autoscaling_group" "api_server" {
       min_healthy_percentage = 50
       instance_warmup        = 300
     }
+    triggers = ["tag"]
   }
 
   tag {
@@ -58,9 +59,14 @@ resource "aws_autoscaling_group" "api_server" {
     propagate_at_launch = true
   }
 
+  tag {
+    key                 = "LaunchTemplateVersion"
+    value               = aws_launch_template.api_server.latest_version
+    propagate_at_launch = false
+  }
+
   lifecycle {
     create_before_destroy = true
-    ignore_changes        = [desired_capacity]
   }
 }
 
@@ -126,6 +132,7 @@ resource "aws_autoscaling_group" "worker" {
       min_healthy_percentage = 50
       instance_warmup        = 300
     }
+    triggers = ["tag"]
   }
 
   tag {
@@ -152,9 +159,14 @@ resource "aws_autoscaling_group" "worker" {
     propagate_at_launch = true
   }
 
+  tag {
+    key                 = "LaunchTemplateVersion"
+    value               = aws_launch_template.worker.latest_version
+    propagate_at_launch = false
+  }
+
   lifecycle {
     create_before_destroy = true
-    ignore_changes        = [desired_capacity]
   }
 }
 

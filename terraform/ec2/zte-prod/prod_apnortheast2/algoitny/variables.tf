@@ -13,9 +13,9 @@ variable "env_suffix" {
 
 # API Server Variables
 variable "api_instance_type" {
-  description = "Instance type for API servers"
+  description = "Instance type for API servers (ARM-based t4g)"
   type        = string
-  default     = "t3.medium"
+  default     = "t4g.medium"
 }
 
 variable "api_volume_size" {
@@ -44,9 +44,9 @@ variable "api_desired_capacity" {
 
 # Worker Variables
 variable "worker_instance_type" {
-  description = "Instance type for Worker servers"
+  description = "Instance type for Worker servers (ARM-based t4g)"
   type        = string
-  default     = "t3.large"
+  default     = "t4g.large"
 }
 
 variable "worker_volume_size" {

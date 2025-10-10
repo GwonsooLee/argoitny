@@ -85,7 +85,7 @@ resource "aws_iam_policy" "api_server" {
           "secretsmanager:GetSecretValue",
           "secretsmanager:DescribeSecret"
         ]
-        Resource = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:algoitny-secrets-*"
+        Resource = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:algoitny/prod/apnortheast2-*"
       },
       {
         Sid    = "CloudWatchLogs"
@@ -99,13 +99,17 @@ resource "aws_iam_policy" "api_server" {
         Resource = "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/ec2/algoitny-api-*"
       },
       {
-        Sid    = "ElastiCacheAccess"
+        Sid    = "SQSAccess"
         Effect = "Allow"
         Action = [
-          "elasticache:DescribeCacheClusters",
-          "elasticache:DescribeReplicationGroups"
+          "sqs:SendMessage",
+          "sqs:GetQueueUrl",
+          "sqs:GetQueueAttributes"
         ]
-        Resource = "*"
+        Resource = [
+          "arn:aws:sqs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:algoitny-jobs-*",
+          "arn:aws:sqs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:algoitny-dlq-*"
+        ]
       }
     ]
   })
@@ -229,7 +233,7 @@ resource "aws_iam_policy" "worker" {
           "secretsmanager:GetSecretValue",
           "secretsmanager:DescribeSecret"
         ]
-        Resource = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:algoitny-secrets-*"
+        Resource = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:algoitny/prod/apnortheast2-*"
       },
       {
         Sid    = "CloudWatchLogs"
@@ -243,13 +247,20 @@ resource "aws_iam_policy" "worker" {
         Resource = "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/ec2/algoitny-worker-*"
       },
       {
-        Sid    = "ElastiCacheAccess"
+        Sid    = "SQSAccess"
         Effect = "Allow"
         Action = [
-          "elasticache:DescribeCacheClusters",
-          "elasticache:DescribeReplicationGroups"
+          "sqs:ReceiveMessage",
+          "sqs:DeleteMessage",
+          "sqs:GetQueueAttributes",
+          "sqs:GetQueueUrl",
+          "sqs:SendMessage",
+          "sqs:ChangeMessageVisibility"
         ]
-        Resource = "*"
+        Resource = [
+          "arn:aws:sqs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:algoitny-jobs-*",
+          "arn:aws:sqs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:algoitny-dlq-*"
+        ]
       }
     ]
   })

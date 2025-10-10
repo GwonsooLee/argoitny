@@ -1,5 +1,5 @@
 provider "aws" {
-  region = "ap-northeast-2"
+  region  = "ap-northeast-2"
 
   assume_role {
     role_arn     = var.assume_role_arn
