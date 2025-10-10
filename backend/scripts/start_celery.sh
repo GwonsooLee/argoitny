@@ -7,10 +7,11 @@ echo "========================================="
 
 # Print environment info
 echo "📍 Environment Variables:"
+echo "  ENVIRONMENT=${ENVIRONMENT:-not set}"
 echo "  DJANGO_SETTINGS_MODULE=${DJANGO_SETTINGS_MODULE:-not set}"
-echo "  DB_HOST=${DB_HOST:-not set}"
+echo "  AWS_REGION=${AWS_REGION:-not set}"
+echo "  AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-not set}"
 echo "  LOCALSTACK_URL=${LOCALSTACK_URL:-not set}"
-echo "  DB_NAME=${DB_NAME:-not set}"
 
 # Set Django settings module if not set
 if [ -z "$DJANGO_SETTINGS_MODULE" ]; then
@@ -25,17 +26,23 @@ python -c "
 import os
 print(f'  Python path: {os.sys.path}')
 print(f'  Current directory: {os.getcwd()}')
+print(f'  ENVIRONMENT: {os.environ.get(\"ENVIRONMENT\", \"NOT SET\")}')
 print(f'  DJANGO_SETTINGS_MODULE: {os.environ.get(\"DJANGO_SETTINGS_MODULE\")}')
+print(f'  AWS_REGION: {os.environ.get(\"AWS_REGION\", \"NOT SET\")}')
 
 try:
     from django.conf import settings
     import django
     django.setup()
     print('  ✅ Django settings loaded successfully')
+    print(f'  ✅ ENVIRONMENT (in settings): {settings.ENVIRONMENT}')
+    print(f'  ✅ IS_PRODUCTION: {settings.IS_PRODUCTION}')
     print(f'  ✅ CELERY_BROKER_URL: {settings.CELERY_BROKER_URL}')
     print(f'  ✅ CELERY_RESULT_BACKEND: {settings.CELERY_RESULT_BACKEND}')
 except Exception as e:
     print(f'  ❌ Failed to load Django settings: {e}')
+    import traceback
+    traceback.print_exc()
     exit(1)
 "
 
