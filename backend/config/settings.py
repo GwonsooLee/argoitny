@@ -459,10 +459,12 @@ SQS_QUEUE_NAME = config.get(
 if IS_PRODUCTION:
     # Production: Use IAM roles, no credentials
     AWS_DEFAULT_REGION = os.getenv('AWS_DEFAULT_REGION', 'ap-northeast-2')
+    # For SQS with IAM roles, we need to specify the region in the URL
+    # Format: sqs://region/account_id (account_id will be auto-detected by kombu)
     CELERY_BROKER_URL = config.get(
         'celery.broker_url',
         env_var='CELERY_BROKER_URL',
-        default='sqs://'  # No credentials - uses IAM role
+        default=f'sqs://@{AWS_DEFAULT_REGION}/'  # @ prefix means no credentials, region specified
     )
 else:
     # Local/Dev: Use LocalStack with test credentials
