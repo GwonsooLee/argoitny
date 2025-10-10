@@ -107,6 +107,12 @@ resource "aws_iam_policy" "api_server" {
           "sqs:GetQueueAttributes"
         ]
         Resource = "arn:aws:sqs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:algoitny-jobs-*"
+      },
+      {
+        Sid      = "SQSListQueues"
+        Effect   = "Allow"
+        Action   = ["sqs:ListQueues"]
+        Resource = "*"
       }
     ]
   })
