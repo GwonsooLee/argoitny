@@ -9,6 +9,7 @@ User=algoitny
 Group=www-data
 WorkingDirectory=/home/algoitny/apps/algoitny/backend
 Environment="PATH=/home/algoitny/apps/algoitny/backend/venv/bin"
+Environment="ENVIRONMENT=production"
 EnvironmentFile=/home/algoitny/apps/algoitny/backend/.env
 
 # Celery worker execution
