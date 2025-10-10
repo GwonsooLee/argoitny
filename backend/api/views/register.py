@@ -696,8 +696,7 @@ class RetryExtractionView(APIView):
                 kwargs={
                     'problem_url': problem_url,
                     'job_id': new_job_id
-                },
-                queue='ai'
+                }
             )
 
             return Response({
@@ -1327,8 +1326,7 @@ class ExtractProblemInfoView(APIView):
                     'job_id': job['id'],
                     'samples': samples if samples else None,
                     'llm_config': llm_config
-                },
-                queue='ai'
+                }
             )
             logger.info(f"[ExtractProblemInfoView] Enqueued task with ID: {task.id}")
 
@@ -1590,8 +1588,7 @@ class RegenerateSolutionView(APIView):
                     'job_id': job['id'],
                     'additional_context': additional_context,
                     'llm_config': llm_config
-                },
-                queue='ai'
+                }
             )
 
             # Update job with task ID
