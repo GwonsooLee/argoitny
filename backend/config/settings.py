@@ -455,6 +455,12 @@ if IS_PRODUCTION:
         env_var='CELERY_BROKER_URL',
         default='sqs://'  # No credentials - uses IAM role
     )
+
+    # Ensure LocalStack endpoints are not set in production
+    # This prevents boto3 from using LocalStack URLs
+    for env_var in ['AWS_ENDPOINT_URL', 'AWS_ENDPOINT_URL_SQS', 'AWS_ENDPOINT_URL_SECRETSMANAGER', 'LOCALSTACK_URL']:
+        if env_var in os.environ:
+            del os.environ[env_var]
 else:
     # Local/Dev: Use LocalStack with test credentials
     LOCALSTACK_URL = os.getenv('LOCALSTACK_URL', 'http://localhost:4566')

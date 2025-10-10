@@ -87,11 +87,22 @@ class SecretsManager:
             raise ImportError("boto3 is required for AWS Secrets Manager. Install with: pip install boto3")
 
         # Create a Secrets Manager client
+        # Check if we should use LocalStack (for local development)
+        localstack_url = os.getenv('LOCALSTACK_URL')
+        environment = os.getenv('ENVIRONMENT', 'development')
+
         session = boto3.session.Session()
-        client = session.client(
-            service_name='secretsmanager',
-            region_name=region_name
-        )
+        client_kwargs = {
+            'service_name': 'secretsmanager',
+            'region_name': region_name
+        }
+
+        # Only use endpoint_url for local/dev environments with LocalStack
+        if environment != 'production' and localstack_url:
+            client_kwargs['endpoint_url'] = localstack_url
+            logger.info(f"Using LocalStack endpoint for Secrets Manager: {localstack_url}")
+
+        client = session.client(**client_kwargs)
 
         try:
             get_secret_value_response = client.get_secret_value(SecretId=secret_name)

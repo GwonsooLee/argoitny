@@ -1812,16 +1812,72 @@ Return ONLY valid JSON, nothing else."""
             import json as json_module
             result = None
 
-            # Method 1: Find JSON in code blocks
-            json_match = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', response_text)
-            if json_match:
+            # Method 0: Remove markdown code blocks first (most common case)
+            cleaned_text = response_text
+            # Remove ```json\n ... \n``` or ```json ... ``` patterns
+            cleaned_text = re.sub(r'^```json\s*\n', '', cleaned_text, flags=re.MULTILINE)
+            cleaned_text = re.sub(r'^```json\s*', '', cleaned_text, flags=re.MULTILINE)
+            cleaned_text = re.sub(r'\n```\s*$', '', cleaned_text, flags=re.MULTILINE)
+            cleaned_text = re.sub(r'```\s*$', '', cleaned_text, flags=re.MULTILINE)
+            cleaned_text = cleaned_text.strip()
+
+            # Try parsing cleaned text directly
+            if not result:
                 try:
-                    result = json_module.loads(json_match.group(1))
-                    logger.info("Extracted JSON from code block")
+                    result = json_module.loads(cleaned_text)
+                    logger.info("Extracted JSON after removing markdown blocks")
                 except:
                     pass
 
-            # Method 2: Find largest JSON object
+            # Method 1: Find JSON in code blocks using regex
+            if not result:
+                json_match = re.search(r'```(?:json)?\s*\n?([\s\S]*?)\n?```', response_text)
+                if json_match:
+                    try:
+                        result = json_module.loads(json_match.group(1).strip())
+                        logger.info("Extracted JSON from code block with regex")
+                    except:
+                        pass
+
+            # Method 2: Find complete JSON object with balanced braces
+            if not result:
+                # Find first { and match balanced braces
+                first_brace = response_text.find('{')
+                if first_brace != -1:
+                    brace_count = 0
+                    in_string = False
+                    escape_next = False
+
+                    for i in range(first_brace, len(response_text)):
+                        char = response_text[i]
+
+                        if escape_next:
+                            escape_next = False
+                            continue
+
+                        if char == '\\':
+                            escape_next = True
+                            continue
+
+                        if char == '"':
+                            in_string = not in_string
+                            continue
+
+                        if not in_string:
+                            if char == '{':
+                                brace_count += 1
+                            elif char == '}':
+                                brace_count -= 1
+                                if brace_count == 0:
+                                    json_str = response_text[first_brace:i+1]
+                                    try:
+                                        result = json_module.loads(json_str)
+                                        logger.info("Extracted JSON with balanced brace matching")
+                                    except:
+                                        pass
+                                    break
+
+            # Method 3: Find largest JSON object (fallback)
             if not result:
                 json_matches = re.finditer(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response_text)
                 largest_match = None
@@ -1835,16 +1891,6 @@ Return ONLY valid JSON, nothing else."""
                     try:
                         result = json_module.loads(largest_match.group())
                         logger.info("Extracted JSON from largest object")
-                    except:
-                        pass
-
-            # Method 3: Find any JSON-like structure
-            if not result:
-                json_match = re.search(r'\{[\s\S]*\}', response_text)
-                if json_match:
-                    try:
-                        result = json_module.loads(json_match.group())
-                        logger.info("Extracted JSON with basic regex")
                     except:
                         pass
 

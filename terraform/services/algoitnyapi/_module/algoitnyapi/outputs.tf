@@ -44,35 +44,3 @@ output "external_target_group_name" {
   description = "Name of external target group"
   value       = aws_lb_target_group.external.name
 }
-
-# Internal Load Balancer Outputs
-output "internal_lb_arn" {
-  description = "ARN of internal load balancer"
-  value       = aws_lb.internal.arn
-}
-
-output "internal_lb_dns_name" {
-  description = "DNS name of internal load balancer"
-  value       = aws_lb.internal.dns_name
-}
-
-output "internal_lb_zone_id" {
-  description = "Zone ID of internal load balancer"
-  value       = aws_lb.internal.zone_id
-}
-
-output "internal_lb_security_group_id" {
-  description = "Security group ID of internal load balancer"
-  value       = aws_security_group.internal_lb.id
-}
-
-# Internal Target Group Outputs
-output "internal_target_group_arn" {
-  description = "ARN of internal target group"
-  value       = aws_lb_target_group.internal.arn
-}
-
-output "internal_target_group_name" {
-  description = "Name of internal target group"
-  value       = aws_lb_target_group.internal.name
-}

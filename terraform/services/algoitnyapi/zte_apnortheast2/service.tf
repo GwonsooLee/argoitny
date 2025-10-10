@@ -6,8 +6,8 @@ module "algoitnyapi" {
   service_name = "algoitnyapi"
 
   # Port for service and healthcheck
-  service_port     = 80
-  healthcheck_port = 80
+  service_port     = 8000
+  healthcheck_port = 8000
 
   # VPC Information via remote_state
   shard_id                 = data.terraform_remote_state.vpc.outputs.shard_id
@@ -33,7 +33,7 @@ module "algoitnyapi" {
 
   # Security Group variables
   sg_variables = var.sg_variables
-  
+
   # CIDR for external LB
   # Control allowed IP for external LB 
   ext_lb_ingress_cidrs = [
