@@ -30,18 +30,10 @@ function ProblemSearch({ onSelectProblem }) {
     setLoading(true);
     setHasSearched(true);
     try {
-      // Search both platforms
-      const [baekjoonResponse, codeforcesResponse] = await Promise.all([
-        apiGet(`${API_ENDPOINTS.problems}?platform=baekjoon&search=${encodeURIComponent(query)}`),
-        apiGet(`${API_ENDPOINTS.problems}?platform=codeforces&search=${encodeURIComponent(query)}`)
-      ]);
+      // Search Codeforces only
+      const codeforcesResponse = await apiGet(`${API_ENDPOINTS.problems}?platform=codeforces&search=${encodeURIComponent(query)}`);
 
       const results = [];
-
-      if (baekjoonResponse.ok) {
-        const data = await baekjoonResponse.json();
-        results.push(...(data.problems || data || []));
-      }
 
       if (codeforcesResponse.ok) {
         const data = await codeforcesResponse.json();
@@ -161,7 +153,7 @@ function ProblemSearch({ onSelectProblem }) {
                   </Box>
                   <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1, mb: 0.5 }}>
                     <Typography variant="body2" sx={{ color: '#202124', fontSize: { xs: '0.813rem', sm: '0.875rem' } }}>
-                      {problem.platform === 'baekjoon' ? 'Baekjoon' : 'Codeforces'}
+                      Codeforces
                     </Typography>
                     <Typography variant="body2" sx={{ color: '#70757a' }}>
                       •

@@ -19,7 +19,6 @@ class ProblemURLParser:
             Tuple of (platform, problem_id) or (None, None) if parsing fails
 
         Supported formats:
-            - Baekjoon: https://www.acmicpc.net/problem/{number}
             - Codeforces: https://codeforces.com/problemset/problem/{contest}/{letter}
         """
         if not url:
@@ -30,14 +29,8 @@ class ProblemURLParser:
             domain = parsed.netloc.lower()
             path = parsed.path
 
-            # Baekjoon (acmicpc.net)
-            if 'acmicpc.net' in domain:
-                match = re.search(r'/problem/(\d+)', path)
-                if match:
-                    return 'baekjoon', match.group(1)
-
             # Codeforces
-            elif 'codeforces.com' in domain:
+            if 'codeforces.com' in domain:
                 # Format: /problemset/problem/{contest}/{letter}
                 match = re.search(r'/problemset/problem/(\d+)/([A-Z]\d?)', path, re.IGNORECASE)
                 if match:

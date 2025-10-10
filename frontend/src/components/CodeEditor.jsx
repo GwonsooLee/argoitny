@@ -50,7 +50,7 @@ function detectLanguage(code) {
   return Object.keys(scores).find(key => scores[key] === maxScore);
 }
 
-function CodeEditor({ problemId, onTestResults, hintsLoading = false }) {
+function CodeEditor({ platform, problemId, onTestResults, hintsLoading = false }) {
   const [code, setCode] = useState('');
   const [language, setLanguage] = useState('python');
   const [loading, setLoading] = useState(false);
@@ -75,6 +75,9 @@ function CodeEditor({ problemId, onTestResults, hintsLoading = false }) {
       return;
     }
 
+    // Reset test results before starting new execution
+    onTestResults(null);
+
     setLoading(true);
     try {
       const user = getUser();
@@ -86,7 +89,8 @@ function CodeEditor({ problemId, onTestResults, hintsLoading = false }) {
         {
           code,
           language,
-          problem_id: problemId,
+          platform: platform,
+          problem_identifier: problemId,
           user_identifier: userIdentifier,
           is_code_public: isCodePublic,
         },

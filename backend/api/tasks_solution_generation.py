@@ -1,8 +1,8 @@
 """
-Solution generation with OpenAI → Gemini fallback logic
+Solution generation with retry logic
 
-This module provides a function to generate solutions with automatic fallback
-from OpenAI to Gemini when OpenAI fails after max retries.
+This module provides a function to generate solutions with retry logic
+for the model specified in llm_config.
 """
 import logging
 from .services.llm_factory import LLMServiceFactory
@@ -10,138 +10,145 @@ from .services.llm_factory import LLMServiceFactory
 logger = logging.getLogger(__name__)
 
 
-def generate_solution_with_fallback(problem_metadata, update_progress_callback):
+def generate_solution_with_retry(problem_metadata, update_progress_callback, llm_config=None):
     """
-    Generate solution with OpenAI → Gemini fallback
+    Generate solution with retry logic (no fallback to different models)
 
     Strategy:
-    1. Try OpenAI 3 times
-    2. If all OpenAI attempts fail, try Gemini 3 times
-    3. Return best result
+    1. Use the model specified in llm_config (default: gpt-5)
+    2. Try the selected model 2 times total (1 initial attempt + 1 retry)
+    3. NO fallback to another model
+    4. If both attempts fail, return the last attempt result with error
 
     Args:
         problem_metadata: Problem metadata dict with title, constraints, samples
         update_progress_callback: Function to update progress (takes message string)
+        llm_config: Optional LLM configuration dict with model, reasoning_effort, max_output_tokens
+                   Default: {'model': 'gpt-5', 'reasoning_effort': 'medium', 'max_output_tokens': 8192}
 
     Returns:
         tuple: (solution_result, validation_passed, validation_error, used_service)
     """
-    max_attempts_per_service = 3
+    # Apply default LLM config if not provided
+    if llm_config is None:
+        llm_config = {
+            'model': 'gpt-5',
+            'reasoning_effort': 'medium',
+            'max_output_tokens': 8192
+        }
+
+    # Extract model from llm_config (default to gpt-5)
+    model = llm_config.get('model', 'gpt-5').lower()
+
+    # Determine service type from model name
+    if model.startswith('gpt'):
+        service_name = 'openai'
+    elif model.startswith('gemini'):
+        service_name = 'gemini'
+    else:
+        # Default to gpt-5 if model format is unrecognized
+        logger.warning(f"Unrecognized model '{model}', defaulting to gpt-5")
+        service_name = 'openai'
+        model = 'gpt-5'
+
+    # Max 2 attempts for ANY model
+    max_attempts = 2
     solution_result = None
     validation_passed = False
     validation_error = None
-    used_service = None
 
-    # List of LLM services to try in order (OpenAI first, then Gemini)
-    llm_services_to_try = []
+    logger.info(f"Solution generation using {service_name.upper()} (model: {model}) with {max_attempts} attempts max")
+    update_progress_callback(f"🔄 Generating solution with {service_name.upper()} (model: {model})...")
 
-    # Try OpenAI first
+    # Create the selected LLM service
     try:
-        openai_service = LLMServiceFactory.create_service('openai')
-        llm_services_to_try.append(('openai', openai_service))
-        logger.info("Will try OpenAI first for solution generation")
+        current_llm_service = LLMServiceFactory.create_service(service_name)
     except Exception as e:
-        logger.warning(f"OpenAI service not available: {e}")
+        logger.error(f"Failed to create {service_name} service: {e}")
+        raise ValueError(f"{service_name.upper()} service not available: {e}")
 
-    # Add Gemini as fallback
-    try:
-        gemini_service = LLMServiceFactory.create_service('gemini')
-        llm_services_to_try.append(('gemini', gemini_service))
-        logger.info("Gemini available as fallback")
-    except Exception as e:
-        logger.warning(f"Gemini service not available: {e}")
+    # Reset previous_attempt
+    previous_attempt = None
 
-    if not llm_services_to_try:
-        raise ValueError("No LLM services available (both OpenAI and Gemini failed)")
+    # Try up to max_attempts times with the SAME service
+    for attempt in range(1, max_attempts + 1):
+        try:
+            update_progress_callback(
+                f"🧠 Step 2/2: Generating solution with {service_name.upper()} "
+                f"(attempt {attempt}/{max_attempts})..."
+            )
 
-    # Try each service in order
-    for service_name, current_llm_service in llm_services_to_try:
-        logger.info(f"Trying {service_name} for solution generation...")
-        update_progress_callback(f"🔄 Trying {service_name.upper()} for solution generation...")
-
-        # Reset previous_attempt for new service
-        previous_attempt = None
-
-        for attempt in range(1, max_attempts_per_service + 1):
-            try:
-                update_progress_callback(
-                    f"🧠 Step 2/2: Generating solution with {service_name.upper()} "
-                    f"(attempt {attempt}/{max_attempts_per_service})..."
+            # Pass llm_config to OpenAI service only (Gemini doesn't use it)
+            if service_name == 'openai':
+                solution_result = current_llm_service.generate_solution_for_problem(
+                    problem_metadata,
+                    previous_attempt=previous_attempt,
+                    progress_callback=lambda msg: update_progress_callback(f"🧠 {msg}"),
+                    llm_config=llm_config
                 )
-
+            else:
+                # Gemini doesn't accept llm_config
                 solution_result = current_llm_service.generate_solution_for_problem(
                     problem_metadata,
                     previous_attempt=previous_attempt,
                     progress_callback=lambda msg: update_progress_callback(f"🧠 {msg}")
                 )
 
-                solution_code = solution_result['solution_code']
-                logger.info(f"Generated solution with {service_name} on attempt {attempt}: {len(solution_code)} characters")
+            solution_code = solution_result['solution_code']
+            logger.info(f"Generated solution with {service_name} on attempt {attempt}: {len(solution_code)} characters")
 
-                # Validate solution with user-provided samples
-                samples = problem_metadata.get('samples', [])
-                if samples:
-                    update_progress_callback(f"✓ Testing solution with {len(samples)} sample{'s' if len(samples) > 1 else ''}...")
+            # Validate solution with user-provided samples
+            samples = problem_metadata.get('samples', [])
+            if samples:
+                update_progress_callback(f"✓ Testing solution with {len(samples)} sample{'s' if len(samples) > 1 else ''}...")
 
-                    validation_passed, validation_error = current_llm_service._validate_solution_with_samples(
-                        solution_code,
-                        samples
+                validation_passed, validation_error = current_llm_service._validate_solution_with_samples(
+                    solution_code,
+                    samples
+                )
+
+                if validation_passed:
+                    logger.info(f"✓ Solution passed all {len(samples)} samples on {service_name} attempt {attempt}")
+                    update_progress_callback(f"✓ Solution verified with {len(samples)} samples using {service_name.upper()}")
+                    return (solution_result, validation_passed, validation_error, service_name)
+                else:
+                    logger.warning(
+                        f"{service_name} attempt {attempt}/{max_attempts} "
+                        f"failed validation: {validation_error}"
                     )
 
-                    if validation_passed:
-                        logger.info(f"✓ Solution passed all {len(samples)} samples on {service_name} attempt {attempt}")
-                        update_progress_callback(f"✓ Solution verified with {len(samples)} samples using {service_name.upper()}")
-                        used_service = service_name
-                        return (solution_result, validation_passed, validation_error, used_service)
+                    if attempt < max_attempts:
+                        # Prepare retry with error context
+                        previous_attempt = {
+                            'code': solution_code,
+                            'error': validation_error,
+                            'attempt_number': attempt
+                        }
+                        update_progress_callback(f"⚠ Sample test failed, retrying with error context...")
+                        continue
                     else:
-                        logger.warning(
-                            f"{service_name} attempt {attempt}/{max_attempts_per_service} "
-                            f"failed validation: {validation_error}"
-                        )
+                        # Last attempt failed
+                        logger.warning(f"⚠ {service_name} failed after {max_attempts} attempts")
+                        break
+            else:
+                logger.warning("No samples to validate")
+                return (solution_result, True, None, service_name)  # No samples, consider as passed
 
-                        if attempt < max_attempts_per_service:
-                            # Prepare retry with error context
-                            previous_attempt = {
-                                'code': solution_code,
-                                'error': validation_error,
-                                'attempt_number': attempt
-                            }
-                            update_progress_callback(f"⚠ Sample test failed, analyzing mistake...")
-                            continue
-                        else:
-                            # Last attempt failed for this service
-                            logger.warning(f"⚠ {service_name} failed after {max_attempts_per_service} attempts")
-                            used_service = service_name
-                            break
-                else:
-                    logger.warning("No samples to validate")
-                    used_service = service_name
-                    return (solution_result, True, None, used_service)  # No samples, consider as passed
+        except Exception as e:
+            logger.error(f"{service_name} attempt {attempt} failed: {e}", exc_info=True)
+            if attempt < max_attempts:
+                previous_attempt = {
+                    'code': solution_result['solution_code'] if solution_result else '',
+                    'error': str(e),
+                    'attempt_number': attempt
+                }
+                update_progress_callback(f"⚠ Attempt {attempt} failed: {str(e)[:100]}... Retrying...")
+                continue
+            else:
+                # Last attempt failed - raise exception to fail the task
+                logger.error(f"{service_name} failed after {max_attempts} attempts with error: {e}")
+                raise ValueError(f"Solution generation failed after {max_attempts} attempts: {str(e)}")
 
-            except Exception as e:
-                logger.error(f"{service_name} attempt {attempt} failed: {e}")
-                if attempt < max_attempts_per_service:
-                    previous_attempt = {
-                        'code': solution_result['solution_code'] if solution_result else '',
-                        'error': str(e),
-                        'attempt_number': attempt
-                    }
-                    continue
-                else:
-                    logger.error(f"{service_name} failed after {max_attempts_per_service} attempts")
-                    used_service = service_name
-                    break
-
-        # Check if we got a valid solution
-        if validation_passed:
-            logger.info(f"Successfully generated solution with {service_name}")
-            return (solution_result, validation_passed, validation_error, used_service)
-        else:
-            logger.warning(
-                f"All {max_attempts_per_service} attempts with {service_name} failed, "
-                f"will try next service if available..."
-            )
-
-    # All services failed - return last attempt
-    logger.error("All services exhausted, returning last attempt")
-    return (solution_result, validation_passed, validation_error, used_service)
+    # All attempts failed validation - raise exception to fail the task
+    logger.error(f"All {max_attempts} attempts with {service_name} exhausted. Last validation error: {validation_error}")
+    raise ValueError(f"Solution generation failed validation after {max_attempts} attempts: {validation_error}")

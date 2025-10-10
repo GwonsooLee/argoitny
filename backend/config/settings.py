@@ -677,6 +677,12 @@ LOGGING = {
             'level': LOG_LEVEL,
             'propagate': False,
         },
+        # Reduce verbosity for OpenAI service logs
+        'api.services.openai_service': {
+            'handlers': ['console'],
+            'level': 'WARNING',  # Only show warnings and errors
+            'propagate': False,
+        },
     },
 }
 

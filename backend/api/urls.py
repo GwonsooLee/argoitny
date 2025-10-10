@@ -29,6 +29,7 @@ from .views import (
     RetryExtractionView,
     JobProgressHistoryView,
     RegenerateSolutionView,
+    GetTestCasesView,
 )
 from .views.account import AccountStatsView, UpdatePlanView, PlanUsageView, UserProfileView
 from .views.health import health_check, readiness_check, liveness_check
@@ -63,6 +64,7 @@ urlpatterns = [
     path('problems/registered/', ProblemRegisteredView.as_view(), name='problem-registered'),
     path('problems/<int:problem_id>/', ProblemDetailView.as_view(), name='problem-detail'),
     path('problems/<str:platform>/<str:problem_identifier>/', ProblemDetailView.as_view(), name='problem-detail-by-platform'),
+    path('problems/<str:platform>/<str:problem_id>/testcases/', GetTestCasesView.as_view(), name='get-testcases'),
 
     # Code Execution
     path('execute/', ExecuteCodeView.as_view(), name='execute-code'),

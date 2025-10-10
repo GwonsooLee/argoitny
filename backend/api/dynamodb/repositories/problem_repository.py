@@ -151,6 +151,7 @@ class ProblemRepository(BaseRepository):
                 'constraints': item['dat'].get('con', ''),
                 'is_completed': item['dat'].get('cmp', False),
                 'test_case_count': item['dat'].get('tcc', 0),
+                'testcases': item['dat'].get('tcs', []),  # Include testcases from dat
                 'is_deleted': item['dat'].get('del', False),
                 'deleted_at': item['dat'].get('ddt'),
                 'deleted_reason': item['dat'].get('drs'),
@@ -212,6 +213,7 @@ class ProblemRepository(BaseRepository):
                     'constraints': item['dat'].get('con', ''),
                     'is_completed': item['dat'].get('cmp', False),
                     'test_case_count': item['dat'].get('tcc', 0),
+                    'testcases': item['dat'].get('tcs', []),  # Include testcases from dat
                     'is_deleted': item['dat'].get('del', False),
                     'deleted_at': item['dat'].get('ddt'),
                     'deleted_reason': item['dat'].get('drs'),
@@ -223,11 +225,17 @@ class ProblemRepository(BaseRepository):
                     'created_at': item.get('crt'),
                     'updated_at': item.get('upd')
                 }
-        # Test cases are now stored in S3, load them separately if needed
+
+        # Return problem with testcases
         if problem:
-            # Don't load test cases by default for performance
-            # Consumers should call get_testcases() separately if needed
-            problem['test_cases'] = []
+            # Load test cases using get_testcases method (handles TC# items and S3)
+            try:
+                test_cases = self.get_testcases(platform, problem_id)
+                problem['test_cases'] = test_cases
+            except Exception as e:
+                logger.warning(f"Failed to load testcases for {platform}/{problem_id}: {e}")
+                problem['test_cases'] = []
+
             return problem
 
         return None
@@ -266,6 +274,7 @@ class ProblemRepository(BaseRepository):
             'constraints': 'con',
             'is_completed': 'cmp',
             'test_case_count': 'tcc',
+            'testcases': 'tcs',  # Test cases stored in Problem dat
             'is_deleted': 'del',
             'deleted_at': 'ddt',
             'deleted_reason': 'drs',

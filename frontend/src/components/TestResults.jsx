@@ -34,10 +34,6 @@ function TestResults({ results, executionId, onHintsLoadingChange }) {
     total: testResults.length,
   };
 
-  // Debug logging
-  console.log('[TestResults] Props:', { results, executionId });
-  console.log('[TestResults] Parsed:', { testResults, summary, hasFailedTests: summary.failed > 0 });
-
   // Hints state
   const [hints, setHints] = useState(null);
   const [hintsLoading, setHintsLoading] = useState(false);
@@ -93,6 +89,10 @@ function TestResults({ results, executionId, onHintsLoadingChange }) {
           const errorData = await response.json();
           throw new Error('RATE_LIMIT_EXCEEDED');
         }
+        // Check if feature is not implemented (501)
+        if (response.status === 501) {
+          throw new Error('FEATURE_NOT_IMPLEMENTED');
+        }
         throw new Error('Failed to request hints');
       }
 
@@ -115,6 +115,9 @@ function TestResults({ results, executionId, onHintsLoadingChange }) {
       if (error.message === 'RATE_LIMIT_EXCEEDED') {
         setHintsError('You have reached your plan limit for hints. Please upgrade your plan to continue.');
         showSnackbar('Plan limit reached. Please upgrade to get more hints.', 'warning');
+      } else if (error.message === 'FEATURE_NOT_IMPLEMENTED') {
+        setHintsError('Hint generation is currently disabled. This feature will be available soon.');
+        showSnackbar('Hint feature is temporarily disabled', 'info');
       } else {
         setHintsError(error.message || 'Failed to request hints');
         showSnackbar('Failed to request hints', 'error');

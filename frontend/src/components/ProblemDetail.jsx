@@ -20,7 +20,16 @@ import {
   IconButton,
   Snackbar,
   Alert,
-  TextField
+  TextField,
+  FormControl,
+  FormLabel,
+  RadioGroup,
+  FormControlLabel,
+  Radio,
+  Select,
+  MenuItem,
+  InputLabel,
+  FormHelperText,
 } from '@mui/material';
 import {
   ArrowBack as ArrowBackIcon,
@@ -86,6 +95,11 @@ function ProblemDetail({ platform, problemId, onBack }) {
   const [editedSolutionCode, setEditedSolutionCode] = useState('');
   const [saving, setSaving] = useState(false);
 
+  // LLM Configuration State for Regenerate Solution
+  const [llmModel, setLlmModel] = useState('gpt-5');
+  const [reasoningEffort, setReasoningEffort] = useState('medium');
+  const [maxOutputTokens, setMaxOutputTokens] = useState(8192);
+
   const fetchProblemAndJobs = async () => {
     // Don't show refreshing indicator on initial load
     if (!loading) {
@@ -99,6 +113,30 @@ function ProblemDetail({ platform, problemId, onBack }) {
 
       if (problemResponse.ok) {
         problemData = await problemResponse.json();
+
+        // Fetch testcases separately
+        try {
+          const testcasesResponse = await apiGet(`${API_ENDPOINTS.problems}${platform}/${problemId}/testcases/`, { requireAuth: true });
+          if (testcasesResponse.ok) {
+            const testcasesData = await testcasesResponse.json();
+            problemData.test_cases = testcasesData.testcases || [];
+          }
+        } catch (testcaseError) {
+          console.error('Error fetching testcases:', testcaseError);
+        }
+
+        // Check if test case generation is complete
+        if (executingScript) {
+          const count = problemData.test_case_count || 0;
+          const targetCount = 10;
+
+          if (count >= targetCount) {
+            // Generation complete - stop executing state and close dialog
+            setExecutingScript(false);
+            setShowScript(false);
+          }
+        }
+
         // Backend already decodes solution_code from base64, no need to decode again
         setProblem(problemData);
       } else if (problemResponse.status === 403) {
@@ -135,60 +173,6 @@ function ProblemDetail({ platform, problemId, onBack }) {
           setProgressHistory([]);
         }
 
-        // Resume script execution polling if task_id exists
-        const scriptExecutionTaskId = problemData?.metadata?.script_execution_task_id;
-        if (scriptExecutionTaskId && !executingScript) {
-          setExecutingScript(true);
-          showSnackbar('Resuming test case generation...', 'info');
-          pollTaskStatus(
-            scriptExecutionTaskId,
-            async (result) => {
-              // Success - save test inputs
-              try {
-                const saveResponse = await apiPost('/register/save-test-inputs/', {
-                  platform: problemData.platform,
-                  problem_id: problemData.problem_id,
-                  test_inputs: result.test_cases
-                });
-
-                if (!saveResponse.ok) {
-                  const errorData = await saveResponse.json();
-                  throw new Error(errorData.error || 'Failed to save test cases');
-                }
-
-                // If solution code exists, generate outputs immediately
-                if (problemData.solution_code) {
-                  const outputResponse = await apiPost('/register/generate-outputs/', {
-                    platform: problemData.platform,
-                    problem_id: problemData.problem_id
-                  });
-
-                  if (!outputResponse.ok) {
-                    const errorData = await outputResponse.json();
-                    throw new Error(errorData.error || 'Failed to generate outputs');
-                  }
-
-                  showSnackbar(`Successfully generated ${result.count} test cases with outputs`, 'success');
-                } else {
-                  showSnackbar(`Successfully generated ${result.count} test case inputs (outputs can be generated later)`, 'success');
-                }
-
-                setShowScript(false);
-                fetchProblemAndJobs();
-              } catch (error) {
-                console.error('Error saving test cases:', error);
-                showSnackbar('Failed to save test cases: ' + error.message, 'error');
-              } finally {
-                setExecutingScript(false);
-              }
-            },
-            (error) => {
-              console.error('Task error:', error);
-              showSnackbar('Failed to execute script: ' + error, 'error');
-              setExecutingScript(false);
-            }
-          );
-        }
       }
     } catch (error) {
       console.error('Error fetching data:', error);
@@ -203,17 +187,11 @@ function ProblemDetail({ platform, problemId, onBack }) {
   useEffect(() => {
     fetchProblemAndJobs();
 
-    // Dynamic polling based on extraction status
-    const setupPolling = () => {
-      // Poll every 10 seconds
-      const pollInterval = 10000;
-      const interval = setInterval(fetchProblemAndJobs, pollInterval);
-      return interval;
-    };
-
-    const interval = setupPolling();
+    // Dynamic polling: 2 seconds during test case generation, 10 seconds otherwise
+    const pollInterval = executingScript ? 2000 : 10000;
+    const interval = setInterval(fetchProblemAndJobs, pollInterval);
     return () => clearInterval(interval);
-  }, [platform, problemId, problem?.metadata?.extraction_status]);
+  }, [platform, problemId, problem?.metadata?.extraction_status, executingScript]);
 
   const showSnackbar = (message, severity = 'info') => {
     setSnackbar({ open: true, message, severity });
@@ -269,48 +247,25 @@ function ProblemDetail({ platform, problemId, onBack }) {
     }
   };
 
-  const pollTaskStatus = async (taskId, onSuccess, onError) => {
-    const maxAttempts = 60; // 5 minutes with 5 second intervals
-    let attempts = 0;
-
-    const poll = async () => {
-      try {
-        const response = await apiGet(`/register/task-status/${taskId}/`);
-        const data = await response.json();
-
-        if (data.status === 'COMPLETED') {
-          onSuccess(data.result);
-          return;
-        } else if (data.status === 'FAILED') {
-          onError(data.error || 'Task failed');
-          return;
-        } else if (attempts >= maxAttempts) {
-          onError('Task timeout - please try again');
-          return;
-        }
-
-        // Continue polling
-        attempts++;
-        setTimeout(poll, 5000); // Poll every 5 seconds
-      } catch (error) {
-        onError(error.message);
-      }
-    };
-
-    poll();
-  };
-
   const handleExecuteScript = async () => {
     if (!selectedJob || !selectedJob.generator_code) return;
 
-    setExecutingScript(true);
-    showSnackbar('Starting test case generation...', 'info');
+    showSnackbar('Test case generation job created!', 'success');
 
     try {
+      setExecutingScript(true);
+
+      // Generate difficulties: 5 small + 5 medium
+      const difficulties = [
+        'small', 'small', 'small', 'small', 'small',
+        'medium', 'medium', 'medium', 'medium', 'medium'
+      ];
+
       // Start async execution
       const executeResponse = await apiPost(API_ENDPOINTS.executeTestCases, {
         generator_code: selectedJob.generator_code,
         num_cases: 10,
+        difficulties: difficulties,
         platform: problem.platform,
         problem_id: problem.problem_id
       });
@@ -320,58 +275,8 @@ function ProblemDetail({ platform, problemId, onBack }) {
         throw new Error(errorData.error || 'Failed to start execution');
       }
 
-      const executeData = await executeResponse.json();
-      const taskId = executeData.task_id;
+      setShowScript(false);
 
-      // Poll for completion
-      pollTaskStatus(
-        taskId,
-        async (result) => {
-          // Success - save test inputs
-          try {
-            const saveResponse = await apiPost('/register/save-test-inputs/', {
-              platform: problem.platform,
-              problem_id: problem.problem_id,
-              test_inputs: result.test_cases
-            });
-
-            if (!saveResponse.ok) {
-              const errorData = await saveResponse.json();
-              throw new Error(errorData.error || 'Failed to save test cases');
-            }
-
-            // If solution code exists, generate outputs immediately
-            if (problem.solution_code) {
-              const outputResponse = await apiPost('/register/generate-outputs/', {
-                platform: problem.platform,
-                problem_id: problem.problem_id
-              });
-
-              if (!outputResponse.ok) {
-                const errorData = await outputResponse.json();
-                throw new Error(errorData.error || 'Failed to generate outputs');
-              }
-
-              showSnackbar(`Successfully generated ${result.count} test cases with outputs`, 'success');
-            } else {
-              showSnackbar(`Successfully generated ${result.count} test case inputs (outputs can be generated later)`, 'success');
-            }
-
-            setShowScript(false);
-            fetchProblemAndJobs();
-          } catch (error) {
-            console.error('Error saving test cases:', error);
-            showSnackbar('Failed to save test cases: ' + error.message, 'error');
-          } finally {
-            setExecutingScript(false);
-          }
-        },
-        (error) => {
-          console.error('Task error:', error);
-          showSnackbar('Failed to execute script: ' + error, 'error');
-          setExecutingScript(false);
-        }
-      );
     } catch (error) {
       console.error('Error executing script:', error);
       showSnackbar('Failed to execute script: ' + error.message, 'error');
@@ -554,12 +459,31 @@ function ProblemDetail({ platform, problemId, onBack }) {
     }
   };
 
+  const handleReasoningEffortChange = (value) => {
+    setReasoningEffort(value);
+    // Auto-adjust tokens for high reasoning
+    if (value === 'high' && maxOutputTokens < 96000) {
+      setMaxOutputTokens(128000);
+    }
+  };
+
+  const handleResetLlmConfig = () => {
+    setLlmModel('gpt-5');
+    setReasoningEffort('medium');
+    setMaxOutputTokens(8192);
+  };
+
   const handleRegenerateSolution = async () => {
     setRegenerating(true);
     try {
       // Use platform/problem_id URL format
       const response = await apiPost(`/register/problems/${problem.platform}/${problem.problem_id}/regenerate-solution/`, {
-        additional_context: additionalContext
+        additional_context: additionalContext,
+        llm_config: {
+          model: llmModel,
+          reasoning_effort: reasoningEffort,
+          max_output_tokens: maxOutputTokens
+        }
       }, { requireAuth: true });
 
       if (!response.ok) {
@@ -1720,8 +1644,123 @@ function ProblemDetail({ platform, problemId, onBack }) {
             value={additionalContext}
             onChange={(e) => setAdditionalContext(e.target.value)}
             disabled={regenerating}
-            sx={{ mb: 2 }}
+            sx={{ mb: 3 }}
           />
+
+          <Divider sx={{ my: 3 }} />
+
+          {/* LLM Configuration Section */}
+          <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 2 }}>
+            LLM Configuration
+          </Typography>
+          <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 3 }}>
+            Configure the AI model settings for solution regeneration.
+          </Typography>
+
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+            {/* Model Selection */}
+            <FormControl component="fieldset">
+              <FormLabel component="legend" sx={{ mb: 1, fontSize: '0.875rem', fontWeight: 600 }}>
+                AI Model
+              </FormLabel>
+              <RadioGroup
+                row
+                value={llmModel}
+                onChange={(e) => setLlmModel(e.target.value)}
+                disabled={regenerating}
+              >
+                <FormControlLabel
+                  value="gpt-5"
+                  control={<Radio />}
+                  label="GPT-5"
+                  disabled={regenerating}
+                />
+                <FormControlLabel
+                  value="gemini"
+                  control={<Radio />}
+                  label="Gemini"
+                  disabled={regenerating}
+                />
+              </RadioGroup>
+              <FormHelperText>Select the AI model to use for solution regeneration</FormHelperText>
+            </FormControl>
+
+            {/* GPT-5 Specific Configuration */}
+            {llmModel === 'gpt-5' && (
+              <>
+                {/* Reasoning Effort */}
+                <FormControl fullWidth>
+                  <InputLabel id="regen-reasoning-effort-label">Reasoning Effort</InputLabel>
+                  <Select
+                    labelId="regen-reasoning-effort-label"
+                    value={reasoningEffort}
+                    label="Reasoning Effort"
+                    onChange={(e) => handleReasoningEffortChange(e.target.value)}
+                    disabled={regenerating}
+                  >
+                    <MenuItem value="low">Low</MenuItem>
+                    <MenuItem value="medium">Medium</MenuItem>
+                    <MenuItem value="high">High</MenuItem>
+                  </Select>
+                  <FormHelperText>
+                    Higher reasoning uses more tokens but may produce better solutions
+                  </FormHelperText>
+                </FormControl>
+
+                {/* Max Output Tokens */}
+                <FormControl fullWidth>
+                  <TextField
+                    type="number"
+                    label="Max Output Tokens"
+                    value={maxOutputTokens}
+                    onChange={(e) => {
+                      const value = parseInt(e.target.value, 10);
+                      if (value >= 1024 && value <= 128000) {
+                        setMaxOutputTokens(value);
+                      }
+                    }}
+                    disabled={regenerating}
+                    inputProps={{ min: 1024, max: 128000, step: 1024 }}
+                    helperText={
+                      reasoningEffort === 'high' && maxOutputTokens < 96000
+                        ? 'Warning: High reasoning requires more tokens. Recommended: 128000'
+                        : 'Recommended: 8192 for medium, 128000 for high reasoning (Range: 1024-128000)'
+                    }
+                    error={reasoningEffort === 'high' && maxOutputTokens < 96000}
+                  />
+                </FormControl>
+              </>
+            )}
+
+            {/* Gemini Information */}
+            {llmModel === 'gemini' && (
+              <Box sx={{
+                p: 2,
+                bgcolor: 'info.lighter',
+                borderRadius: 1,
+                border: '1px solid',
+                borderColor: 'info.light'
+              }}>
+                <Typography variant="body2" color="info.dark">
+                  Gemini uses fixed optimization settings (temperature and top_p) for consistent results. No additional configuration is required.
+                </Typography>
+              </Box>
+            )}
+
+            {/* Reset Button - Only show for GPT-5 */}
+            {llmModel === 'gpt-5' && (
+              <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  onClick={handleResetLlmConfig}
+                  disabled={regenerating}
+                >
+                  Reset to Defaults
+                </Button>
+              </Box>
+            )}
+          </Box>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setRegenerateDialogOpen(false)} disabled={regenerating}>
@@ -1922,7 +1961,7 @@ function ProblemDetail({ platform, problemId, onBack }) {
       {/* Snackbar for notifications */}
       <Snackbar
         open={snackbar.open}
-        autoHideDuration={4000}
+        autoHideDuration={6000}
         onClose={() => setSnackbar({ ...snackbar, open: false })}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       >

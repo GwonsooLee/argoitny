@@ -18,7 +18,8 @@ from .register import (
     ExtractProblemInfoView,
     RetryExtractionView,
     JobProgressHistoryView,
-    RegenerateSolutionView
+    RegenerateSolutionView,
+    GetTestCasesView
 )
 
 __all__ = [
@@ -50,4 +51,5 @@ __all__ = [
     'RetryExtractionView',
     'JobProgressHistoryView',
     'RegenerateSolutionView',
+    'GetTestCasesView',
 ]

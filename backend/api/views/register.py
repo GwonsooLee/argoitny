@@ -4,6 +4,7 @@ from adrf.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from asgiref.sync import sync_to_async
+from boto3.dynamodb.conditions import Key
 from ..services.gemini_service import GeminiService
 from ..serializers import (
     ProblemRegisterSerializer,
@@ -288,6 +289,7 @@ class ExecuteTestCasesView(APIView):
         num_cases = request.data.get('num_cases', 10)
         platform = request.data.get('platform')
         problem_id = request.data.get('problem_id')
+        difficulties = request.data.get('difficulties')  # Get difficulties array from frontend
 
         if not generator_code:
             return Response(
@@ -309,11 +311,14 @@ class ExecuteTestCasesView(APIView):
             )
 
         try:
-            # Start async task
+            # Start async task with platform and problem_id for incremental updates
             from api.tasks import execute_test_cases_task
             task = await sync_to_async(execute_test_cases_task.delay)(
                 generator_code=generator_code,
-                num_cases=num_cases
+                num_cases=num_cases,
+                platform=platform,
+                problem_id=problem_id,
+                difficulties=difficulties  # Pass difficulties to task
             )
 
             # Save task_id to Problem metadata if platform and problem_id provided
@@ -716,7 +721,7 @@ class SaveTestCaseInputsView(APIView):
 
     async def post(self, request):
         """
-        Save test case inputs to a problem
+        Save test case inputs to a problem in dat.testcases
 
         Request body:
             {
@@ -760,33 +765,78 @@ class SaveTestCaseInputsView(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-            # Delete existing test cases (by deleting and recreating problem with test cases)
-            # First, get the problem metadata
-            existing_testcases = await problem_repo.get_testcases(platform, problem_id)
+            # Initialize S3 service for large test cases
+            from api.services.s3_testcase_service import S3TestCaseService
+            s3_service = S3TestCaseService()
 
-            # Delete each test case
-            for tc in existing_testcases:
-                # Use delete_item from base repository
-                pk = f'PROB#{platform}#{problem_id}'
-                sk = f"TC#{tc['testcase_id']}"
-                await sync_to_async(problem_repo._repo.delete_item)(pk, sk)
+            # Store testcases and build metadata
+            s3_keys = []  # Only store S3 keys in dat.testcases
 
-            # Create new test cases with empty outputs (numbered 1, 2, 3...)
             for idx, inp in enumerate(test_inputs, start=1):
-                await problem_repo.add_testcase(
-                    platform=platform,
-                    problem_id=problem_id,
-                    testcase_id=str(idx),
-                    input_str=inp,
-                    output_str=''  # Empty output for now
-                )
+                testcase_id = str(idx)
+                # Empty output for now - will be filled when outputs are generated
+                output_str = ''
 
-            # Clear script_execution_task_id from metadata
+                # Check if should store in S3 (based on size)
+                use_s3 = s3_service.should_use_s3(inp, output_str)
+
+                if use_s3:
+                    # Store in S3 and save s3_key reference
+                    try:
+                        s3_metadata = await sync_to_async(s3_service.store_testcase)(
+                            platform=platform,
+                            problem_id=problem_id,
+                            testcase_id=testcase_id,
+                            input_str=inp,
+                            output_str=output_str
+                        )
+
+                        # Store S3 key in dat.testcases
+                        s3_keys.append({
+                            'testcase_id': testcase_id,
+                            's3_key': s3_metadata['s3_key']
+                        })
+
+                        logger.info(
+                            f"Stored large test case in S3: {platform}/{problem_id}/{testcase_id} "
+                            f"({s3_metadata['size']} bytes)"
+                        )
+
+                    except Exception as e:
+                        logger.error(f"Failed to store test case in S3, falling back to DynamoDB: {e}")
+                        # Fallback to DynamoDB TC# item (no dat.testcases entry needed)
+                        await problem_repo.add_testcase(
+                            platform=platform,
+                            problem_id=problem_id,
+                            testcase_id=testcase_id,
+                            input_str=inp,
+                            output_str=output_str
+                        )
+                else:
+                    # Store in DynamoDB as TC# item (queryable by PK/SK)
+                    await problem_repo.add_testcase(
+                        platform=platform,
+                        problem_id=problem_id,
+                        testcase_id=testcase_id,
+                        input_str=inp,
+                        output_str=output_str
+                    )
+
+            # Get existing metadata
+            metadata = problem.get('metadata', {})
+
+            # Update Problem with ONLY S3 keys in dat.testcases
+            # DynamoDB items can be queried by PK/SK, no need to duplicate
             await problem_repo.update_problem(
                 platform=platform,
                 problem_id=problem_id,
                 updates={
-                    'script_execution_task_id': ''
+                    'testcases': s3_keys,  # Only S3 references
+                    'test_case_count': len(test_inputs),
+                    'metadata': {
+                        **metadata,
+                        'script_execution_task_id': ''  # Clear task_id
+                    }
                 }
             )
 
@@ -1139,10 +1189,21 @@ class ExtractProblemInfoView(APIView):
 
         problem_url = serializer.validated_data['problem_url']
         samples = serializer.validated_data.get('samples', [])
+        llm_config = serializer.validated_data.get('llm_config', {
+            'model': 'gpt-5',
+            'reasoning_effort': 'medium',
+            'max_output_tokens': 8192
+        })
+
+        # Auto-adjust max_output_tokens based on reasoning_effort
+        if llm_config.get('reasoning_effort') == 'high' and llm_config.get('max_output_tokens', 0) < 96000:
+            llm_config['max_output_tokens'] = 128000  # High reasoning needs more tokens
+            logger.info(f"[ExtractProblemInfoView] Auto-adjusted max_output_tokens to 128000 for high reasoning")
 
         # Add logging
         logger.info(f"[ExtractProblemInfoView] Received URL: {problem_url}")
         logger.info(f"[ExtractProblemInfoView] User-provided samples: {len(samples)}")
+        logger.info(f"[ExtractProblemInfoView] LLM config: {llm_config}")
 
         try:
             # Parse URL to extract platform and problem_id
@@ -1259,12 +1320,13 @@ class ExtractProblemInfoView(APIView):
                 updates={'metadata': metadata}
             )
 
-            # Enqueue the job to Celery with samples if provided
+            # Enqueue the job to Celery with samples and LLM config
             task = await sync_to_async(extract_problem_info_task.apply_async)(
                 kwargs={
                     'problem_url': problem_url,
                     'job_id': job['id'],
-                    'samples': samples if samples else None
+                    'samples': samples if samples else None,
+                    'llm_config': llm_config
                 },
                 queue='ai'
             )
@@ -1475,8 +1537,18 @@ class RegenerateSolutionView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            # Get additional context
+            # Get additional context and LLM config
             additional_context = request.data.get('additional_context', '')
+            llm_config = request.data.get('llm_config', {
+                'model': 'gpt-5',
+                'reasoning_effort': 'medium',
+                'max_output_tokens': 8192
+            })
+
+            # Auto-adjust max_output_tokens based on reasoning_effort
+            if llm_config.get('reasoning_effort') == 'high' and llm_config.get('max_output_tokens', 0) < 96000:
+                llm_config['max_output_tokens'] = 128000  # High reasoning needs more tokens
+                logger.info(f"[RegenerateSolutionView] Auto-adjusted max_output_tokens to 128000 for high reasoning")
 
             # Validate problem URL exists
             problem_url = problem.get('problem_url', '')
@@ -1510,13 +1582,14 @@ class RegenerateSolutionView(APIView):
                 updates={'metadata': metadata}
             )
 
-            # Enqueue the extraction task with additional context
+            # Enqueue the extraction task with additional context and LLM config
             from ..tasks import extract_problem_info_task
             task = await sync_to_async(extract_problem_info_task.apply_async)(
                 kwargs={
                     'problem_url': problem_url,
                     'job_id': job['id'],
-                    'additional_context': additional_context
+                    'additional_context': additional_context,
+                    'llm_config': llm_config
                 },
                 queue='ai'
             )
@@ -1534,5 +1607,104 @@ class RegenerateSolutionView(APIView):
             logger.exception(f"[RegenerateSolutionView] Error: {str(e)}")
             return Response(
                 {'error': f'Failed to regenerate solution: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class GetTestCasesView(APIView):
+    """Get test cases for a problem (hybrid: from dat.testcases with S3 support)"""
+    permission_classes = [AllowAny]
+
+    async def get(self, request, platform, problem_id):
+        """
+        Get all test cases for a problem
+
+        Returns:
+            {
+                "testcases": [
+                    {
+                        "testcase_id": "1",
+                        "input": "1 2",
+                        "output": "3"
+                    },
+                    ...
+                ]
+            }
+        """
+        try:
+            # Initialize async DynamoDB repository
+            table = await sync_to_async(DynamoDBClient.get_table)()
+            problem_repo = AsyncProblemRepository(table)
+
+            # Get problem with testcases metadata
+            problem = await problem_repo.get_problem(platform, problem_id)
+            if not problem:
+                return Response(
+                    {'error': 'Problem not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            # Initialize S3 service for large test cases
+            from api.services.s3_testcase_service import S3TestCaseService
+            s3_service = S3TestCaseService()
+
+            testcases = []
+
+            # Query all TC# items from DynamoDB
+            pk = f'PROB#{platform}#{problem_id}'
+            items = await sync_to_async(problem_repo._repo.query)(
+                key_condition_expression=Key('PK').eq(pk) & Key('SK').begins_with('TC#')
+            )
+
+            logger.info(f"[GetTestCasesView] Found {len(items)} TC# items for {platform}/{problem_id}")
+
+            for item in items:
+                testcase_id = item['SK'].replace('TC#', '')
+                dat = item.get('dat', {})
+                storage = dat.get('storage', 'dynamodb')
+
+                try:
+                    if storage == 's3':
+                        # Load from S3
+                        s3_key = dat.get('s3_key')
+                        logger.info(f"[GetTestCasesView] Loading TC#{testcase_id} from S3: {s3_key}")
+                        testcase_data = await sync_to_async(s3_service.retrieve_testcase)(
+                            platform=platform,
+                            problem_id=problem_id,
+                            testcase_id=testcase_id
+                        )
+                        if testcase_data:
+                            testcases.append({
+                                'testcase_id': testcase_id,
+                                'input': testcase_data['input'],
+                                'output': testcase_data['output']
+                            })
+                        else:
+                            logger.warning(f"[GetTestCasesView] Failed to load TC#{testcase_id} from S3")
+                    else:
+                        # Load from DynamoDB dat.inp/dat.out
+                        testcases.append({
+                            'testcase_id': testcase_id,
+                            'input': dat.get('inp', ''),
+                            'output': dat.get('out', '')
+                        })
+                except Exception as e:
+                    logger.error(f"[GetTestCasesView] Failed to retrieve test case {testcase_id}: {e}")
+                    continue
+
+            # Sort by testcase_id (numeric sort if possible)
+            try:
+                testcases.sort(key=lambda x: int(x['testcase_id']) if x['testcase_id'].isdigit() else x['testcase_id'])
+            except:
+                testcases.sort(key=lambda x: x['testcase_id'])
+
+            return Response({
+                'testcases': testcases
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.exception(f"Failed to get test cases: {str(e)}")
+            return Response(
+                {'error': f'Failed to get test cases: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )

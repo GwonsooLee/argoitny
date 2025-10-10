@@ -189,7 +189,7 @@ function App() {
           showSnackbar('Please log in to test problems', 'warning');
         } else {
           // Fetch the problem
-          apiGet(`${API_ENDPOINTS.problems}${platform}/${problemId}/`).then(async (response) => {
+          apiGet(`${API_ENDPOINTS.problems}${platform}/${problemId}/`, { requireAuth: true }).then(async (response) => {
             if (response.ok) {
               const problem = await response.json();
               setSelectedProblem(problem);
@@ -685,7 +685,8 @@ function App() {
                     )}
                   </Box>
                   <CodeEditor
-                    problemId={selectedProblem.id}
+                    platform={selectedProblem.platform}
+                    problemId={selectedProblem.problem_id}
                     onTestResults={setTestResults}
                     hintsLoading={hintsLoading}
                   />

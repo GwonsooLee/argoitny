@@ -278,20 +278,39 @@ Return ONLY valid JSON."""
 
             completion = self.client.responses.create(
                 model=self.model,
-                instructions=system_context,  # System context in instructions
-                input=user_prompt,  # User prompt in input
-                modalities={"type": "json_object"},  # Ensure JSON response
-                top_p=1,  # Full probability distribution (GPT-5 default)
-                max_output_tokens=4096,  # Maximum output length for metadata
+                instructions=system_context,
+                input=user_prompt,
+                modalities={"type": "json_object"},
+                text={"format": {"type": "text"}, "verbosity": "low"},
+                max_output_tokens=4096,
             )
 
-            # Extract text from o1 model response structure
-            # Response has: output[0].content[0].text
-            if not completion.output or len(completion.output) == 0:
-                raise ValueError('OpenAI response has no output')
-            if not completion.output[0].content or len(completion.output[0].content) == 0:
-                raise ValueError('OpenAI response content is empty')
-            response_text = completion.output[0].content[0].text.strip()
+            # Extract text from OpenAI API response (responses.create format)
+            response_text = None
+
+            # Try structure 1: completion.output[0].content[0].text (GPT-5 responses format)
+            try:
+                if hasattr(completion, 'output') and completion.output and len(completion.output) > 0:
+                    if hasattr(completion.output[0], 'content') and completion.output[0].content and len(completion.output[0].content) > 0:
+                        response_text = completion.output[0].content[0].text.strip()
+                        logger.info(f"✓ Extracted using output[0].content[0].text format")
+            except Exception as e:
+                logger.warning(f"Failed to extract using output[0].content[0].text: {e}")
+
+            # Try structure 2: completion.choices[0].message.content (chat format fallback)
+            if not response_text:
+                try:
+                    if hasattr(completion, 'choices') and completion.choices and len(completion.choices) > 0:
+                        if hasattr(completion.choices[0], 'message') and completion.choices[0].message:
+                            response_text = completion.choices[0].message.content.strip()
+                            logger.info(f"✓ Extracted using choices[0].message.content format")
+                except Exception as e:
+                    logger.warning(f"Failed to extract using choices[0].message.content: {e}")
+
+            if not response_text:
+                logger.error(f"OpenAI response object: {completion}")
+                raise ValueError('Could not extract text from OpenAI response')
+
             logger.info(f"OpenAI response: {len(response_text)} chars")
 
             # Parse JSON
@@ -315,7 +334,7 @@ Return ONLY valid JSON."""
             logger.error(f"Error: {e}", exc_info=True)
             raise ValueError(f'Failed to extract: {str(e)}')
 
-    def generate_solution_for_problem(self, problem_metadata, difficulty_rating=None, previous_attempt=None, progress_callback=None):
+    def generate_solution_for_problem(self, problem_metadata, difficulty_rating=None, previous_attempt=None, progress_callback=None, llm_config=None):
         """
         Step 2: Generate solution code for the extracted problem
 
@@ -324,10 +343,18 @@ Return ONLY valid JSON."""
             difficulty_rating: Optional difficulty rating
             previous_attempt: dict with 'code', 'error' if retry
             progress_callback: Optional callback
+            llm_config: Optional LLM configuration dict with model, reasoning_effort, max_output_tokens
 
         Returns:
             dict: {'solution_code': str, 'attempt_number': int}
         """
+        # Apply default LLM config if not provided
+        if llm_config is None:
+            llm_config = {
+                'model': 'gpt-5',
+                'reasoning_effort': 'medium',
+                'max_output_tokens': 8192
+            }
         import logging
         import re
 
@@ -402,61 +429,135 @@ Solve this problem in C++17."""
 
         update_progress("Generating solution...")
 
-        # Log the full prompt being sent to OpenAI
+        # Log the full prompt being sent to OpenAI (DEBUG level for normal operation, INFO for important details)
         logger.info("="*80)
         logger.info("OPENAI SOLUTION GENERATION PROMPT:")
         logger.info("="*80)
-        logger.info(f"INSTRUCTIONS:\n{system_context}\n\nINPUT:\n{user_prompt}")
+        logger.debug(f"INSTRUCTIONS:\n{system_context}")
+        logger.info("="*80)
+        logger.debug(f"INPUT:\n{user_prompt}")
         logger.info("="*80)
 
-        # GPT-5 optimized parameters for code generation
+        # GPT-5 parameters from llm_config
+        reasoning_effort = llm_config.get('reasoning_effort', 'medium')
+        max_output_tokens = llm_config.get('max_output_tokens', 8192)
+
+        logger.info(f"[LLM Config] reasoning_effort={reasoning_effort}, max_output_tokens={max_output_tokens}")
+
         completion = self.client.responses.create(
             model=self.model,
-            instructions=system_context,  # System context in instructions
-            input=user_prompt,  # User prompt in input
-            reasoning={"effort": "high"},  # Maximum reasoning for complex algorithmic problems
-            top_p=1,  # Full probability distribution (GPT-5 default)
-            max_output_tokens=8192,  # Increased for complex solutions
+            instructions=system_context,
+            input=user_prompt,
+            reasoning={"effort": reasoning_effort},
+            text={"format": {"type": "text"}, "verbosity": "low"},
+            max_output_tokens=max_output_tokens,
         )
 
-        # Extract text from o1 model response structure
-        # Response has: output[0].content[0].text
-        if not completion.output or len(completion.output) == 0:
-            raise ValueError('OpenAI response has no output')
-        if not completion.output[0].content or len(completion.output[0].content) == 0:
-            raise ValueError('OpenAI response content is empty')
-        response_text = completion.output[0].content[0].text.strip()
+        # Extract text from OpenAI API response (responses.create format for GPT-5)
+        logger.debug(f"Completion type: {type(completion)}")
+        logger.debug(f"Completion attributes: {dir(completion)}")
 
-        # Log the OpenAI response
+        response_text = None
+
+        # Try structure 1: completion.output - find ResponseOutputMessage (skip ResponseReasoningItem)
+        try:
+            if hasattr(completion, 'output') and completion.output and len(completion.output) > 0:
+                # Find the first output item with type='message' (skip reasoning items)
+                for output_item in completion.output:
+                    if hasattr(output_item, 'type') and output_item.type == 'message':
+                        if hasattr(output_item, 'content') and output_item.content and len(output_item.content) > 0:
+                            response_text = output_item.content[0].text.strip()
+                            logger.info(f"✓ Extracted using output[i].content[0].text format (i={completion.output.index(output_item)})")
+                            break
+        except Exception as e:
+            logger.debug(f"Failed to extract using output[i].content[0].text: {e}")
+
+        # Try structure 2: completion.choices[0].message.content (chat format fallback)
+        if not response_text:
+            try:
+                if hasattr(completion, 'choices') and completion.choices and len(completion.choices) > 0:
+                    if hasattr(completion.choices[0], 'message') and completion.choices[0].message:
+                        response_text = completion.choices[0].message.content.strip()
+                        logger.info(f"✓ Extracted using choices[0].message.content format")
+            except Exception as e:
+                logger.debug(f"Failed to extract using choices[0].message.content: {e}")
+
+        if not response_text:
+            logger.error(f"OpenAI response object: {completion}")
+            raise ValueError('Could not extract text from OpenAI response - check logs above')
+
+        # Log the OpenAI response (INFO level for normal operation, DEBUG for full content)
         logger.info("="*80)
         logger.info("OPENAI SOLUTION GENERATION RESPONSE:")
+        logger.info(f"Response length: {len(response_text)} characters")
         logger.info("="*80)
-        logger.info(response_text)
+        logger.debug(f"Full response:\n{response_text}")
         logger.info("="*80)
 
-        # Extract C++ code
+        # Extract C++ code with multiple fallback methods
+        solution_code = None
+
+        # Method 1: Try code block with language specifier (```cpp ... ```)
         code_match = re.search(r'```(?:cpp|c\+\+)?\s*([\s\S]*?)```', response_text)
         if code_match:
             solution_code = code_match.group(1).strip()
-        else:
+            logger.info(f"✓ Extracted C++ from code block ({len(solution_code)} chars)")
+
+        # Method 2: Try finding code from #include to return 0;
+        if not solution_code or len(solution_code) < 100:
             include_match = re.search(r'(#include[\s\S]*?return\s+0\s*;[\s\S]*?\})', response_text)
             if include_match:
                 solution_code = include_match.group(1).strip()
-            else:
-                raise ValueError('Could not extract C++ code')
+                logger.info(f"✓ Extracted C++ from #include pattern ({len(solution_code)} chars)")
+
+        # Method 3: Try finding any code block without language specifier (``` ... ```)
+        if not solution_code or len(solution_code) < 100:
+            generic_block = re.search(r'```\s*\n(#include[\s\S]*?)\n```', response_text)
+            if generic_block:
+                solution_code = generic_block.group(1).strip()
+                logger.info(f"✓ Extracted C++ from generic code block ({len(solution_code)} chars)")
+
+        # Method 4: Try finding code starting from #include to end of response
+        if not solution_code or len(solution_code) < 100:
+            # Find #include and extract until end, stopping at non-code markers
+            if '#include' in response_text:
+                start_idx = response_text.find('#include')
+                # Stop at common text markers
+                end_markers = ['\n\nNote:', '\n\nThis code', '\n\nExplanation:', '\n\n---', '\n\nThe solution']
+                end_idx = len(response_text)
+                for marker in end_markers:
+                    marker_idx = response_text.find(marker, start_idx)
+                    if marker_idx != -1:
+                        end_idx = min(end_idx, marker_idx)
+
+                potential_code = response_text[start_idx:end_idx].strip()
+                if potential_code and len(potential_code) >= 100:
+                    solution_code = potential_code
+                    logger.info(f"✓ Extracted C++ from #include to end ({len(solution_code)} chars)")
+
+        if not solution_code:
+            logger.error(f"Could not extract C++ code. Response preview: {response_text[:500]}")
+            raise ValueError('Could not extract C++ code from OpenAI response')
 
         if len(solution_code) < 100:
-            raise ValueError('Generated code too short')
+            logger.error(f"Generated code too short ({len(solution_code)} chars): {solution_code}")
+            raise ValueError(f'Generated code too short ({len(solution_code)} chars)')
 
-        logger.info(f"Generated solution: {len(solution_code)} chars")
+        logger.info(f"Successfully generated solution: {len(solution_code)} chars")
 
         return {
             'solution_code': solution_code,
             'attempt_number': (previous_attempt.get('attempt_number', 0) + 1) if previous_attempt else 1
         }
 
-    def generate_test_case_generator_code(self, problem_info, previous_failure=None):
-        """Generate Python code for test case generation (similar to Gemini)"""
+    def generate_test_case_generator_code(self, problem_info, previous_failure=None, size='mixed'):
+        """Generate Python code for test case generation (similar to Gemini)
+
+        Args:
+            problem_info: Dict containing problem details
+            previous_failure: Dict containing previous failure info (optional)
+            size: str - 'small', 'medium', 'large', or 'mixed' (default)
+        """
         if not self.client:
             raise ValueError('OpenAI API key not configured')
 

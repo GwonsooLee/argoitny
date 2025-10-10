@@ -213,16 +213,51 @@ class ProblemDetailView(APIView):
                         status=status.HTTP_404_NOT_FOUND
                     )
 
-                # Get test cases
+                # Get test cases from TC# items
                 testcases_response = await table.query(
                     KeyConditionExpression='PK = :pk AND begins_with(SK, :sk)',
                     ExpressionAttributeValues={
                         ':pk': f'PROB#{platform}#{problem_identifier}',
-                        ':sk': 'TESTCASE#'
+                        ':sk': 'TC#'
                     }
                 )
 
-                test_cases = testcases_response.get('Items', [])
+                test_case_items = testcases_response.get('Items', [])
+
+                # Process test cases - handle both DynamoDB and S3 storage
+                from api.services.s3_testcase_service import S3TestCaseService
+                s3_service = S3TestCaseService()
+
+                processed_test_cases = []
+                for tc in test_case_items:
+                    testcase_id = tc.get('SK', '').replace('TC#', '')
+                    storage_type = tc.get('dat', {}).get('storage', 'dynamodb')
+
+                    if storage_type == 's3':
+                        # Retrieve from S3
+                        try:
+                            testcase_data = await sync_to_async(s3_service.retrieve_testcase)(
+                                platform=platform,
+                                problem_id=problem_identifier,
+                                testcase_id=testcase_id
+                            )
+                            if testcase_data:
+                                processed_test_cases.append({
+                                    'id': testcase_id,
+                                    'input': testcase_data['input'],
+                                    'output': testcase_data['output']
+                                })
+                        except Exception as e:
+                            logger.warning(f"Failed to retrieve S3 test case {testcase_id}: {e}")
+                    else:
+                        # Retrieve from DynamoDB
+                        processed_test_cases.append({
+                            'id': testcase_id,
+                            'input': tc.get('dat', {}).get('inp', ''),
+                            'output': tc.get('dat', {}).get('out', '')
+                        })
+
+                test_case_items = processed_test_cases
 
             # Extract platform and problem_id from PK
             # PK format: PROB#<platform>#<problem_id>
@@ -264,16 +299,10 @@ class ProblemDetailView(APIView):
                 'verified_by_admin': dat.get('vrf', False),
                 'reviewed_at': dat.get('met', {}).get('reviewed_at'),
                 'metadata': dat.get('met', {}),
+                'user_samples': dat.get('met', {}).get('user_samples', []),  # Add user_samples from metadata
                 'created_at': created_at_iso,
-                'test_cases': [
-                    {
-                        'id': tc.get('testcase_id', tc.get('SK', '').split('#')[-1]),
-                        'input': tc.get('input', ''),
-                        'output': tc.get('output', '')
-                    }
-                    for tc in test_cases
-                ],
-                'test_case_count': len(test_cases)
+                'test_cases': test_case_items,  # Already processed above
+                'test_case_count': dat.get('tcc', len(test_case_items))
             }
 
             return Response(response_data, status=status.HTTP_200_OK)
@@ -374,11 +403,6 @@ class ProblemDetailView(APIView):
                 )
 
                 logger.info(f"Hard delete completed successfully for {platform}/{problem_identifier}")
-
-            # Invalidate caches - async
-            await sync_to_async(cache.delete)("problem_drafts:all")
-            await sync_to_async(cache.delete)("problem_registered:all")
-            logger.info(f"[DELETE] Cache invalidated for problem_drafts:all and problem_registered:all")
 
             return Response(
                 {'message': 'Problem deleted successfully'},
@@ -492,10 +516,6 @@ class ProblemDetailView(APIView):
                 )
 
                 logger.info(f"Admin {user_email} updated problem {platform}#{problem_identifier}: samples={len(user_samples) if user_samples else 0}, solution_code={bool(solution_code)}")
-
-                # Invalidate caches
-                await sync_to_async(cache.delete)("problem_drafts:all")
-                await sync_to_async(cache.delete)("problem_registered:all")
 
                 # Get updated problem with test cases
                 updated_problem_response = await table.get_item(
@@ -654,10 +674,6 @@ class ProblemDetailView(APIView):
                     message = 'Problem marked as completed' if is_completed else 'Problem marked as draft'
                     logger.info(f"Admin {user_email} updated problem {platform}#{problem_identifier}: is_completed={is_completed}")
 
-                    # Invalidate caches - async
-                    await sync_to_async(cache.delete)("problem_drafts:all")
-                    await sync_to_async(cache.delete)("problem_registered:all")
-
                     # Get updated problem with test cases - async
                     updated_problem_response = await table.get_item(
                         Key={
@@ -772,15 +788,9 @@ class ProblemDraftsView(APIView):
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        cache_key = "problem_drafts:all"
-
-        # Try to get from cache - async
-        cached_data = await sync_to_async(cache.get)(cache_key)
-        if cached_data is not None:
-            logger.debug(f"Cache HIT: {cache_key}")
-            return Response(cached_data, status=status.HTTP_200_OK)
-
-        logger.debug(f"Cache MISS: {cache_key}")
+        # IMPORTANT: No caching for drafts to ensure real-time consistency
+        # DynamoDB GSI queries are fast enough (~10-50ms)
+        # Caching causes stale data when problems transition between draft/completed states
 
         try:
             problems = []
@@ -841,11 +851,7 @@ class ProblemDraftsView(APIView):
 
             response_data = {'drafts': result}
 
-            # Cache the result (shorter TTL for drafts as they change more frequently) - async
-            ttl = settings.CACHE_TTL.get('SHORT', 60)
-            await sync_to_async(cache.set)(cache_key, response_data, ttl)
-            logger.debug(f"Cached: {cache_key} (TTL: {ttl}s)")
-
+            # No caching - always fetch fresh data from DynamoDB
             return Response(response_data, status=status.HTTP_200_OK)
 
         except Exception as e:
@@ -882,15 +888,9 @@ class ProblemRegisteredView(APIView):
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        cache_key = "problem_registered:all"
-
-        # Try to get from cache - async
-        cached_data = await sync_to_async(cache.get)(cache_key)
-        if cached_data is not None:
-            logger.debug(f"Cache HIT: {cache_key}")
-            return Response(cached_data, status=status.HTTP_200_OK)
-
-        logger.debug(f"Cache MISS: {cache_key}")
+        # IMPORTANT: No caching for registered problems to ensure real-time consistency
+        # DynamoDB GSI queries are fast enough (~10-50ms)
+        # Caching causes stale data when problems transition between draft/completed states
 
         try:
             problems = []
@@ -952,11 +952,7 @@ class ProblemRegisteredView(APIView):
 
             response_data = {'problems': result}
 
-            # Cache the result - async
-            ttl = settings.CACHE_TTL.get('PROBLEM_LIST', 300)
-            await sync_to_async(cache.set)(cache_key, response_data, ttl)
-            logger.debug(f"Cached: {cache_key} (TTL: {ttl}s)")
-
+            # No caching - always fetch fresh data from DynamoDB
             return Response(response_data, status=status.HTTP_200_OK)
 
         except Exception as e:

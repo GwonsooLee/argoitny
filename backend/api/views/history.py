@@ -11,8 +11,8 @@ from django.core.cache import cache
 
 from api.dynamodb.async_client import AsyncDynamoDBClient
 from api.dynamodb.async_repositories import AsyncSearchHistoryRepository
-# DISABLED: from ..tasks import generate_hints_task
-# DISABLED: from ..utils.rate_limit import check_rate_limit, log_usage
+from ..tasks import generate_hints_task
+from ..utils.rate_limit import check_rate_limit, log_usage
 
 
 class SearchHistoryListView(APIView):
@@ -56,6 +56,7 @@ class SearchHistoryListView(APIView):
         try:
             # Get pagination params
             cursor_str = request.query_params.get('cursor')
+            # Hard limit of 100 items per request
             limit = min(int(request.query_params.get('limit', 20)), 100)
             my_only = request.query_params.get('my_only', 'false').lower() == 'true'
 
@@ -92,22 +93,60 @@ class SearchHistoryListView(APIView):
                     items = []
                     next_key = None
             else:
-                # For public timeline, always show public history
-                # Note: User's own private history requires separate implementation
-                # since we need to merge two queries (user history + public history)
+                # Show all public history + user's own private history
                 is_authenticated = await sync_to_async(lambda: request.user.is_authenticated)()
                 if is_authenticated:
-                    # TODO: For authenticated users showing "my history + public history",
-                    # we need to implement a merge strategy or use two separate queries.
-                    # For now, we'll show public history only.
-                    # To properly implement this, consider:
-                    # 1. Query user's history separately
-                    # 2. Query public history separately
-                    # 3. Merge and sort by timestamp
-                    items, next_key = await history_repo.list_public_history(
-                        limit=limit,
-                        last_evaluated_key=last_evaluated_key
+                    # Authenticated users: show their own history (public + private) + others' public history
+                    # Strategy: Fetch both and merge
+                    user_id = await sync_to_async(lambda: request.user.id)()
+
+                    # Fetch user's own history (all items, public + private)
+                    # Use a larger limit to get more items, we'll merge and limit later
+                    # But cap at 100 to prevent excessive queries
+                    user_items, _ = await history_repo.list_user_history(
+                        user_id=user_id,
+                        limit=min(limit * 2, 100),  # Cap at 100 items max
+                        last_evaluated_key=None  # Start from beginning
                     )
+
+                    # Fetch public history from others (time-partitioned)
+                    # Query recent time partitions to avoid hot partition
+                    from datetime import datetime, timedelta
+
+                    public_items = []
+                    hours_to_query = 24  # Query last 24 hours
+
+                    for i in range(hours_to_query):
+                        hour_time = datetime.now() - timedelta(hours=i)
+                        hour_partition = hour_time.strftime('%Y%m%d%H')
+
+                        items_batch, _ = await history_repo.list_public_history_by_partition(
+                            partition=hour_partition,
+                            limit=max(limit // hours_to_query, 5)  # Distribute limit across partitions
+                        )
+                        public_items.extend(items_batch)
+
+                        # Stop early if we have enough items (cap at 100)
+                        if len(public_items) >= min(limit * 2, 100):
+                            break
+
+                    # Merge: Remove duplicates (user's own public history appears in both queries)
+                    # and sort by timestamp descending
+                    seen_ids = set()
+                    merged_items = []
+
+                    for item in user_items + public_items:
+                        item_id = item.get('PK')
+                        if item_id not in seen_ids:
+                            seen_ids.add(item_id)
+                            merged_items.append(item)
+
+                    # Sort by timestamp descending (newest first)
+                    merged_items.sort(key=lambda x: x.get('crt', 0), reverse=True)
+
+                    # Apply hard limit of 100 items max (most recent)
+                    items = merged_items[:min(limit, 100)]
+                    next_key = None  # Simplified: no pagination for merged results
                 else:
                     # Anonymous users see only public history
                     items, next_key = await history_repo.list_public_history(
@@ -116,13 +155,18 @@ class SearchHistoryListView(APIView):
                     )
 
             # Transform DynamoDB items to serializer format
+            import logging
+            logger = logging.getLogger(__name__)
+
             results = []
             for item in items:
                 try:
                     serialized = await self._transform_item_to_list_format(item, request)
                     results.append(serialized)
+                    logger.info(f"[SearchHistory] Successfully transformed item: {item.get('PK')}")
                 except Exception as e:
                     # Skip invalid items
+                    logger.error(f"[SearchHistory] Failed to transform item {item.get('PK')}: {str(e)}", exc_info=True)
                     continue
 
             # Encode next cursor
@@ -131,6 +175,8 @@ class SearchHistoryListView(APIView):
             if next_key:
                 next_cursor = base64.b64encode(json.dumps(next_key).encode('utf-8')).decode('utf-8')
                 has_more = True
+
+            logger.info(f"[SearchHistory] Returning {len(results)} transformed results")
 
             return Response({
                 'results': results,
@@ -238,13 +284,23 @@ class SearchHistoryListView(APIView):
         Format Unix timestamp to ISO 8601 string
 
         Args:
-            timestamp: Unix timestamp
+            timestamp: Unix timestamp (can be int or Decimal from DynamoDB)
 
         Returns:
             ISO 8601 formatted datetime string
         """
         from datetime import datetime, timezone
+        from decimal import Decimal
+
         if timestamp:
+            # Convert Decimal to int if needed (DynamoDB returns Decimal for numbers)
+            if isinstance(timestamp, Decimal):
+                timestamp = int(timestamp)
+
+            # Convert milliseconds to seconds if timestamp is too large
+            if timestamp > 10000000000:  # > year 2286 in seconds means it's milliseconds
+                timestamp = timestamp / 1000
+
             dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
             return dt.isoformat()
         return None
@@ -316,11 +372,13 @@ class SearchHistoryDetailView(APIView):
             # Transform to serializer format
             result = self._transform_item_to_detail_format(item, history_id)
 
-            # Enrich test_results with input and expected output from TestCase
-            # Note: In DynamoDB, test results may already be embedded in the history
-            # If we need to fetch from Django TestCase model, we can do it here
-            if result.get('test_results'):
-                result['test_results'] = await self._enrich_test_results(result['test_results'])
+            # Enrich test_results with input and expected output from problem test cases
+            if result.get('test_results') and result.get('platform') and result.get('problem_number'):
+                result['test_results'] = await self._enrich_test_results(
+                    result['test_results'],
+                    result['platform'],
+                    result['problem_number']
+                )
 
             return Response(result, status=status.HTTP_200_OK)
 
@@ -366,46 +424,108 @@ class SearchHistoryDetailView(APIView):
 
         return result
 
-    async def _enrich_test_results(self, test_results: list) -> list:
+    async def _enrich_test_results(self, test_results: list, platform: str, problem_id: str) -> list:
         """
-        Enrich test results with input and expected output from Django TestCase model
+        Enrich test results with input and expected output from problem test cases
 
         Args:
-            test_results: List of test result dictionaries
+            test_results: List of test result dictionaries with format:
+                [{'tid': test_case_id, 'out': output, 'pas': passed, 'err': error, 'sts': status}, ...]
+            platform: Platform name (e.g., 'baekjoon', 'leetcode')
+            problem_id: Problem identifier
 
         Returns:
-            Enriched test results
+            Enriched test results with input and expected output
         """
-        # Extract test case IDs
-        test_case_ids = [tr['test_case_id'] for tr in test_results if 'test_case_id' in tr]
+        try:
+            # Import repository
+            from api.dynamodb.repositories.problem_repository import ProblemRepository
 
-        if not test_case_ids:
-            return test_results
+            # Get problem with test cases
+            problem_repo = ProblemRepository()
+            problem_data = await sync_to_async(problem_repo.get_problem_with_testcases)(
+                platform=platform,
+                problem_id=problem_id
+            )
 
-        # Import Django model for test cases
-        from ..models import TestCase
+            if not problem_data:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Problem not found: {platform}/{problem_id}")
+                # Return basic transformation without enrichment
+                return [
+                    {
+                        'test_case_id': result.get('tid'),
+                        'input': '',
+                        'expected': '',
+                        'output': result.get('out', ''),
+                        'passed': result.get('pas', False),
+                        'error': result.get('err'),
+                        'status': result.get('sts', '')
+                    }
+                    for result in test_results
+                ]
 
-        # Fetch test cases efficiently (use sync_to_async for Django ORM)
-        test_cases = await sync_to_async(
-            lambda: dict(TestCase.objects.filter(id__in=test_case_ids).only('id', 'input', 'output').in_bulk())
-        )()
+            # Create test case map: {testcase_id: {input, output}}
+            test_case_map = {}
+            for tc in problem_data.get('test_cases', []):
+                test_case_map[tc['testcase_id']] = {
+                    'input': tc['input'],
+                    'expected': tc['output']
+                }
 
-        # Enrich results
-        enriched = []
-        for result in test_results:
-            tc_id = result.get('test_case_id')
-            if tc_id and tc_id in test_cases:
-                tc = test_cases[tc_id]
-                result['input'] = tc.input
-                result['expected'] = tc.output
-            enriched.append(result)
+            # Enrich test results with input and expected output
+            enriched = []
+            for result in test_results:
+                tc_id = result.get('tid')
+                tc_data = test_case_map.get(tc_id, {})
 
-        return enriched
+                enriched_result = {
+                    'test_case_id': tc_id,
+                    'input': tc_data.get('input', ''),
+                    'expected': tc_data.get('expected', ''),
+                    'output': result.get('out', ''),
+                    'passed': result.get('pas', False),
+                    'error': result.get('err'),
+                    'status': result.get('sts', '')
+                }
+                enriched.append(enriched_result)
+
+            return enriched
+
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to enrich test results: {str(e)}", exc_info=True)
+
+            # Return basic transformation without enrichment
+            return [
+                {
+                    'test_case_id': result.get('tid'),
+                    'input': '',
+                    'expected': '',
+                    'output': result.get('out', ''),
+                    'passed': result.get('pas', False),
+                    'error': result.get('err'),
+                    'status': result.get('sts', '')
+                }
+                for result in test_results
+            ]
 
     def _format_timestamp(self, timestamp: int) -> str:
         """Format Unix timestamp to ISO 8601 string"""
         from datetime import datetime, timezone
+        from decimal import Decimal
+
         if timestamp:
+            # Convert Decimal to int if needed (DynamoDB returns Decimal for numbers)
+            if isinstance(timestamp, Decimal):
+                timestamp = int(timestamp)
+
+            # Convert milliseconds to seconds if timestamp is too large
+            if timestamp > 10000000000:  # > year 2286 in seconds means it's milliseconds
+                timestamp = timestamp / 1000
+
             dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
             return dt.isoformat()
         return None
@@ -473,40 +593,22 @@ class GenerateHintsView(APIView):
                     'message': 'Hints already exist'
                 }, status=status.HTTP_200_OK)
 
-            # Start async task (disabled for now)
-            # task = await sync_to_async(generate_hints_task.delay)(history_id)
+            # Start async task
+            task = await sync_to_async(generate_hints_task.delay)(history_id)
 
-            # # Log usage
-            # # Note: problem reference might need to be fetched from Django if needed
-            # from ..models import Problem
-            # problem = None
-            # if dat.get('pid'):
-            #     try:
-            #         problem = await sync_to_async(Problem.objects.get)(id=dat['pid'])
-            #     except Problem.DoesNotExist:
-            #         pass
-
+            # Log usage (optional - can be enabled later if needed)
             # await sync_to_async(log_usage)(
             #     user=request.user,
             #     action='hint',
-            #     problem=problem,
+            #     problem=None,
             #     metadata={'history_id': history_id, 'task_id': task.id}
             # )
 
-            # return Response({
-            #     'task_id': task.id,
-            #     'status': 'PENDING',
-            #     'message': 'Hint generation started',
-            #     'usage': {
-            #         'current_count': current_count + 1,
-            #         'limit': limit
-            #     }
-            # }, status=status.HTTP_202_ACCEPTED)
-
-            return Response(
-                {'error': 'Hint generation is currently disabled'},
-                status=status.HTTP_501_NOT_IMPLEMENTED
-            )
+            return Response({
+                'task_id': task.id,
+                'status': 'PENDING',
+                'message': 'Hint generation started'
+            }, status=status.HTTP_202_ACCEPTED)
 
         except Exception as e:
             return Response(

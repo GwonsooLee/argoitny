@@ -395,6 +395,9 @@ class AsyncSearchHistoryRepository:
     async def list_public_history(self, *args, **kwargs):
         return await sync_to_async(self._repo.list_public_history)(*args, **kwargs)
 
+    async def list_public_history_by_partition(self, *args, **kwargs):
+        return await sync_to_async(self._repo.list_public_history_by_partition)(*args, **kwargs)
+
     async def create_history(self, *args, **kwargs):
         return await sync_to_async(self._repo.create_history)(*args, **kwargs)
 
@@ -416,6 +419,9 @@ class AsyncUsageLogRepository:
 
     async def get_daily_usage_count_by_email(self, *args, **kwargs):
         return await sync_to_async(self._repo.get_daily_usage_count_by_email)(*args, **kwargs)
+
+    async def get_daily_usage_count(self, *args, **kwargs):
+        return await sync_to_async(self._repo.get_daily_usage_count)(*args, **kwargs)
 
     async def list_user_usage(self, *args, **kwargs):
         return await sync_to_async(self._repo.list_user_usage)(*args, **kwargs)

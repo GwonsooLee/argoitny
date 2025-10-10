@@ -176,8 +176,9 @@ class ExecuteCodeSerializer(serializers.Serializer):
     """Code execution serializer"""
     code = serializers.CharField()
     language = serializers.CharField()
-    platform = serializers.CharField()
-    problem_id = serializers.CharField()
+    platform = serializers.CharField(required=False, allow_blank=True)
+    problem_id = serializers.CharField(required=False, allow_blank=True)
+    problem_identifier = serializers.CharField(required=False, allow_blank=True)
     is_code_public = serializers.BooleanField(default=False)
     user_identifier = serializers.CharField(required=False, default='anonymous')
 
@@ -201,6 +202,31 @@ class AccountStatsSerializer(serializers.Serializer):
     failed_executions = serializers.IntegerField()
 
 
+class LLMConfigSerializer(serializers.Serializer):
+    """
+    LLM configuration serializer for SOLUTION CODE GENERATION ONLY
+
+    NOTE: This config ONLY affects solution code generation.
+    Metadata extraction and hint generation always use Gemini regardless of this config.
+    """
+    model = serializers.ChoiceField(
+        choices=['gpt-5', 'gemini'],
+        default='gpt-5',
+        help_text="LLM model to use for solution code generation (does NOT affect metadata/hints)"
+    )
+    reasoning_effort = serializers.ChoiceField(
+        choices=['low', 'medium', 'high'],
+        default='medium',
+        help_text="Reasoning effort level for GPT-5 (only used with gpt-5 model)"
+    )
+    max_output_tokens = serializers.IntegerField(
+        default=8192,
+        min_value=1024,
+        max_value=128000,
+        help_text="Maximum output tokens for solution generation"
+    )
+
+
 class ExtractProblemInfoSerializer(serializers.Serializer):
     """Extract problem info serializer"""
     problem_url = serializers.URLField()
@@ -209,6 +235,10 @@ class ExtractProblemInfoSerializer(serializers.Serializer):
         required=False,
         allow_empty=True,
         help_text="List of sample test cases with 'input' and 'output' keys"
+    )
+    llm_config = LLMConfigSerializer(
+        required=False,
+        help_text="LLM configuration for solution code generation ONLY (metadata/hints always use Gemini)"
     )
 
 

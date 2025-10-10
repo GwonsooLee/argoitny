@@ -140,7 +140,7 @@ function AdminUserManagement() {
 
     // Filter by subscription plan
     if (filterPlan !== 'all') {
-      filtered = filtered.filter(user => user.subscription_plan === parseInt(filterPlan));
+      filtered = filtered.filter(user => user.subscription_plan?.id === parseInt(filterPlan));
     }
 
     return filtered;

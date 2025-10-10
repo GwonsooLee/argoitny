@@ -391,7 +391,7 @@ Return ONLY the category name, nothing else."""
 
     def generate_test_case_generator_code(self, problem_info, previous_failure=None):
         """
-        Generate Python code that will generate test cases
+        Generate Python code that will generate test cases with runtime size parameter
 
         Args:
             problem_info: Dict containing:
@@ -406,7 +406,12 @@ Return ONLY the category name, nothing else."""
                 - error: str (error message from the failure)
 
         Returns:
-            str: Python code that generates test cases
+            str: Python code with function signature: def generate_test_cases(n, size='mixed')
+                 The generated function accepts size parameter at runtime:
+                 - 'small': Generate only small test cases
+                 - 'medium': Generate only medium test cases
+                 - 'large': Generate only large test cases
+                 - 'mixed': Generate mix of small (50%), medium (30%), large (20%)
 
         Raises:
             ValueError: If API key not configured or generation fails
@@ -470,6 +475,20 @@ Input Constraints:
 Task:
 Write a Python function that generates diverse test case inputs that match the EXACT input format expected by the solution code.
 
+IMPORTANT: The constraints may be provided in different formats:
+1. As a structured description (e.g., "1 ≤ n ≤ 10^5, string length ≤ 1000")
+2. As raw text explaining constraints
+3. CRITICAL: If constraints mention STRING inputs (e.g., "string", "string length", "consists of lowercase letters"), then:
+   - Generate STRING test cases, NOT integer test cases
+   - Example: If input is "a string s of length n", generate random strings like "abcdef", "xyz", "hello"
+   - Use string generation: ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(length))
+   - Pay attention to character restrictions (lowercase, uppercase, digits, special chars)
+
+When you see "string" in constraints:
+- DO NOT generate integers
+- Generate strings of appropriate length based on constraints
+- Consider character set constraints (lowercase only, alphanumeric, etc.)
+
 CRITICAL INPUT FORMAT REQUIREMENTS:
 1. If the solution code reads multiple test cases (has `int t` followed by a loop):
    - The generator must return a list of `n` COMPLETE input strings
@@ -488,34 +507,37 @@ CRITICAL INPUT FORMAT REQUIREMENTS:
    - Each string is ONE test case: "<input_data>"
    - LARGE cases can use full maximum constraints since there's only one case per input
 
-Test Case Distribution (STRICTLY ENFORCED):
-- 50% should be SMALL inputs:
+Test Case Size Parameter (RUNTIME):
+The function MUST accept a 'size' parameter at runtime to control test case size:
+- size='small': ALL test cases should be SMALL
   * Edge cases: minimum values (0, 1, -1 where applicable)
   * Boundary conditions
-  * Simple cases for manual verification
+  * For multi-test case: t = 1-5, small data per case
+  * For single test case: use 1-10% of maximum constraint
 
-- 30% should be MEDIUM inputs:
-  * Moderate size values (around 10-30% of maximum constraint)
+- size='medium': ALL test cases should be MEDIUM
+  * Moderate values (10-30% of maximum constraint)
   * Typical use cases
+  * For multi-test case: t = 5-50, medium data per case
+  * For single test case: use 10-30% of maximum constraint
 
-- 20% should be LARGE inputs (CRITICAL - MUST INCLUDE):
-  * Use MAXIMUM or NEAR-MAXIMUM values from the constraints
-  * Example: If constraint is "1 ≤ n ≤ 10^5", use n = 100000 or n = 99999
-  * Example: If constraint is "1 ≤ a[i] ≤ 10^9", use values like 10^9, 999999999
-  * Test performance at scale
-  * Stress test the algorithm
-  * MANDATORY: At least 20% of test cases MUST use maximum constraint values
+- size='large': ALL test cases should be LARGE
+  * MAXIMUM or NEAR-MAXIMUM values from constraints
+  * Example: If "1 ≤ n ≤ 10^5", use n = 100000
+  * Example: If "1 ≤ a[i] ≤ 10^9", use a[i] = 10^9
+  * For multi-test case: Keep t small (1-5) but use maximum values
+  * For single test case: use full maximum constraints
+
+- size='mixed' (default): Mix of 50% small, 30% medium, 20% large
 
 IMPORTANT REQUIREMENTS:
-- Create a function named `generate_test_cases(n)` that takes the number of cases as parameter
+- Create a function named `generate_test_cases(n, size='mixed')` that takes number of cases AND size parameter
 - Returns a list of exactly `n` input strings
 - Only use Python standard library (random, math, string, etc.)
 - NO external dependencies (no numpy, no external packages)
 - Each input string should be ready to be passed directly to stdin
 - For multi-line inputs, use newline character (\\n)
 - Include edge cases: minimum values, maximum values, boundary conditions
-- STRICTLY follow the 50/30/20 distribution for small/medium/large cases
-- For LARGE cases: Extract maximum values from constraints and USE THEM
 - Match the EXACT input format from the solution code
 
 CRITICAL: Return ONLY executable Python code. Do NOT include:
@@ -528,9 +550,9 @@ CRITICAL: Return ONLY executable Python code. Do NOT include:
 IMPORTANT: You MUST write the COMPLETE implementation. Do NOT use placeholders like "..." or "# TODO" or "# Your logic here".
 Every line of code must be fully implemented and ready to execute.
 
-You must return ONLY the function definition starting with "def generate_test_cases(n):" and nothing else.
+You must return ONLY the function definition starting with "def generate_test_cases(n, size='mixed'):" and nothing else.
 
-Example for MULTI-TEST CASE format (if solution has `int t` loop):
+Example 1: MULTI-TEST CASE format with INTEGERS (if solution has `int t` loop):
 '''
 Suppose the problem requires:
 - Input: First line has t (number of test cases). Each test case has n (array size) and an array of n integers.
@@ -538,46 +560,127 @@ Suppose the problem requires:
 
 Then your generator should look like:
 '''
-def generate_test_cases(n):
+def generate_test_cases(n, size='mixed'):
     import random
     test_cases = []
 
-    # Calculate distribution: 50% small, 30% medium, 20% large
-    num_small = n // 2
-    num_medium = (n * 3) // 10
-    num_large = n - num_small - num_medium
+    # Determine distribution based on size parameter
+    if size == 'small':
+        # ALL small cases
+        for _ in range(n):
+            t = random.randint(1, 5)
+            cases = []
+            for _ in range(t):
+                arr_size = random.randint(1, 10)
+                arr = [random.randint(1, 100) for _ in range(arr_size)]
+                cases.append(f"{{arr_size}}\\n{{' '.join(map(str, arr))}}")
+            test_cases.append(f"{{t}}\\n{{chr(10).join(cases)}}")
+    elif size == 'medium':
+        # ALL medium cases
+        for _ in range(n):
+            t = random.randint(5, 50)
+            cases = []
+            for _ in range(t):
+                arr_size = random.randint(100, 1000)
+                arr = [random.randint(1, 10**6) for _ in range(arr_size)]
+                cases.append(f"{{arr_size}}\\n{{' '.join(map(str, arr))}}")
+            test_cases.append(f"{{t}}\\n{{chr(10).join(cases)}}")
+    elif size == 'large':
+        # ALL large cases
+        for _ in range(n):
+            t = random.randint(1, 5)
+            cases = []
+            for _ in range(t):
+                arr_size = random.randint(90000, 100000)
+                arr = [random.randint(10**8, 10**9) for _ in range(arr_size)]
+                cases.append(f"{{arr_size}}\\n{{' '.join(map(str, arr))}}")
+            test_cases.append(f"{{t}}\\n{{chr(10).join(cases)}}")
+    else:  # mixed (default)
+        # 50% small, 30% medium, 20% large
+        num_small = n // 2
+        num_medium = (n * 3) // 10
+        num_large = n - num_small - num_medium
 
-    # SMALL cases (50%)
-    for _ in range(num_small):
-        t = random.randint(1, 3)  # Few test cases
-        cases = []
-        for _ in range(t):
-            arr_size = random.randint(1, 10)  # Small array
-            arr = [random.randint(1, 100) for _ in range(arr_size)]
-            cases.append(f"{{arr_size}}\\n{{' '.join(map(str, arr))}}")
-        test_cases.append(f"{{t}}\\n{{chr(10).join(cases)}}")
+        for _ in range(num_small):
+            t = random.randint(1, 5)
+            cases = []
+            for _ in range(t):
+                arr_size = random.randint(1, 10)
+                arr = [random.randint(1, 100) for _ in range(arr_size)]
+                cases.append(f"{{arr_size}}\\n{{' '.join(map(str, arr))}}")
+            test_cases.append(f"{{t}}\\n{{chr(10).join(cases)}}")
 
-    # MEDIUM cases (30%)
-    for _ in range(num_medium):
-        t = random.randint(5, 50)  # Moderate number of test cases
-        cases = []
-        for _ in range(t):
-            arr_size = random.randint(100, 1000)  # Medium array
-            arr = [random.randint(1, 10**6) for _ in range(arr_size)]
-            cases.append(f"{{arr_size}}\\n{{' '.join(map(str, arr))}}")
-        test_cases.append(f"{{t}}\\n{{chr(10).join(cases)}}")
+        for _ in range(num_medium):
+            t = random.randint(5, 50)
+            cases = []
+            for _ in range(t):
+                arr_size = random.randint(100, 1000)
+                arr = [random.randint(1, 10**6) for _ in range(arr_size)]
+                cases.append(f"{{arr_size}}\\n{{' '.join(map(str, arr))}}")
+            test_cases.append(f"{{t}}\\n{{chr(10).join(cases)}}")
 
-    # LARGE cases (20%) - USE MAXIMUM CONSTRAINT VALUES
-    for _ in range(num_large):
-        # Use MAXIMUM t value from constraints
-        t = random.randint(800, 1000)  # t <= 1000, so use close to max
-        cases = []
-        for _ in range(t):
-            # Use MAXIMUM n and a[i] values
-            arr_size = random.randint(90000, 100000)  # n <= 10^5
-            arr = [random.randint(10**8, 10**9) for _ in range(arr_size)]  # a[i] <= 10^9
-            cases.append(f"{{arr_size}}\\n{{' '.join(map(str, arr))}}")
-        test_cases.append(f"{{t}}\\n{{chr(10).join(cases)}}")
+        for _ in range(num_large):
+            t = random.randint(1, 5)
+            cases = []
+            for _ in range(t):
+                arr_size = random.randint(90000, 100000)
+                arr = [random.randint(10**8, 10**9) for _ in range(arr_size)]
+                cases.append(f"{{arr_size}}\\n{{' '.join(map(str, arr))}}")
+            test_cases.append(f"{{t}}\\n{{chr(10).join(cases)}}")
+
+    random.shuffle(test_cases)
+    return test_cases
+
+Example 2: SINGLE TEST CASE format with STRING input:
+'''
+Suppose the problem requires:
+- Input: A single string s consisting of lowercase letters
+- Constraints: 1 <= length(s) <= 10^6, string contains only lowercase letters
+
+Then your generator should look like:
+'''
+def generate_test_cases(n, size='mixed'):
+    import random
+    test_cases = []
+
+    if size == 'small':
+        # ALL small cases (short strings)
+        for _ in range(n):
+            length = random.randint(1, 100)
+            s = ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(length))
+            test_cases.append(s)
+    elif size == 'medium':
+        # ALL medium cases
+        for _ in range(n):
+            length = random.randint(100, 10000)
+            s = ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(length))
+            test_cases.append(s)
+    elif size == 'large':
+        # ALL large cases (maximum constraint)
+        for _ in range(n):
+            length = random.randint(900000, 1000000)
+            s = ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(length))
+            test_cases.append(s)
+    else:  # mixed (default)
+        # 50% small, 30% medium, 20% large
+        num_small = n // 2
+        num_medium = (n * 3) // 10
+        num_large = n - num_small - num_medium
+
+        for _ in range(num_small):
+            length = random.randint(1, 100)
+            s = ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(length))
+            test_cases.append(s)
+
+        for _ in range(num_medium):
+            length = random.randint(100, 10000)
+            s = ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(length))
+            test_cases.append(s)
+
+        for _ in range(num_large):
+            length = random.randint(900000, 1000000)
+            s = ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(length))
+            test_cases.append(s)
 
     random.shuffle(test_cases)
     return test_cases

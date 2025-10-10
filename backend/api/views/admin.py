@@ -59,6 +59,8 @@ class UserManagementView(APIView):
                 table = await resource.Table(AsyncDynamoDBClient._table_name)
                 user_repo = AsyncUserRepository(table)
                 plan_repo = AsyncSubscriptionPlanRepository(table)
+                # AsyncUsageLogRepository uses sync wrapper, don't pass async table
+                usage_repo = AsyncUsageLogRepository()
 
                 # Get all active users - async
                 users = await user_repo.list_active_users()
@@ -78,6 +80,9 @@ class UserManagementView(APIView):
                            search_lower in u.get('name', '').lower()
                     ]
 
+                # Get today's date for usage stats
+                today = datetime.now().strftime('%Y%m%d')
+
                 # Transform DynamoDB users to serializer format (inside async context)
                 users_data = []
                 for user in users:
@@ -93,6 +98,24 @@ class UserManagementView(APIView):
                                 'max_executions_per_day': plan.get('max_executions_per_day', 0)
                             }
 
+                    # Get usage stats for today - async
+                    user_id = user.get('id')
+                    hints_today = 0
+                    executions_today = 0
+
+                    if user_id:
+                        # Use get_daily_usage_count which is optimized for rate limiting
+                        hints_today = await usage_repo.get_daily_usage_count(
+                            user_id=user_id,
+                            action='hint',
+                            date_str=today
+                        )
+                        executions_today = await usage_repo.get_daily_usage_count(
+                            user_id=user_id,
+                            action='execution',
+                            date_str=today
+                        )
+
                     users_data.append({
                         'id': user.get('user_id'),  # DynamoDB uses 'user_id' not 'id'
                         'email': user['email'],
@@ -102,7 +125,11 @@ class UserManagementView(APIView):
                         'is_admin': user.get('is_staff', False),
                         'subscription_plan': plan_data,
                         'subscription_plan_name': plan_data['name'] if plan_data else None,
-                        'created_at': datetime.fromtimestamp(user.get('created_at', 0)).isoformat() if user.get('created_at') else None
+                        'created_at': datetime.fromtimestamp(float(user.get('created_at', 0))).isoformat() if user.get('created_at') else None,
+                        'usage_stats': {
+                            'hints_today': hints_today,
+                            'executions_today': executions_today
+                        }
                     })
 
             return Response({'users': users_data})
@@ -194,7 +221,7 @@ class UserManagementView(APIView):
                 'role': user.get('role', 'user'),
                 'is_active': user.get('is_active', True),
                 'subscription_plan': plan_data,
-                'created_at': datetime.fromtimestamp(user.get('created_at', 0)).isoformat() if user.get('created_at') else None
+                'created_at': datetime.fromtimestamp(float(user.get('created_at', 0))).isoformat() if user.get('created_at') else None
             }
 
             return Response(user_data)

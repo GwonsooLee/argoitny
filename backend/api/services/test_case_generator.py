@@ -87,14 +87,15 @@ class TestCaseGenerator:
         return True
 
     @staticmethod
-    def execute_generator_code(code: str, num_cases: int = 100, timeout: int = 10) -> List[str]:
+    def execute_generator_code(code: str, num_cases: int = 100, timeout: int = 10, size: str = 'mixed') -> List[str]:
         """
         Execute test case generator code safely
 
         Args:
-            code: Python code containing generate_test_cases(n) function
+            code: Python code containing generate_test_cases(n, size='mixed') function
             num_cases: Number of test cases to generate
             timeout: Maximum execution time in seconds
+            size: Test case size - 'small', 'medium', 'large', or 'mixed' (default)
 
         Returns:
             List of test case input strings
@@ -117,6 +118,7 @@ class TestCaseGenerator:
         import string
         import itertools
         import collections
+        import inspect
 
         safe_globals.update({
             'random': random,
@@ -136,7 +138,14 @@ class TestCaseGenerator:
 
             # Call the function with num_cases parameter
             generate_func = safe_globals['generate_test_cases']
-            test_cases = generate_func(num_cases)
+
+            # Check if function accepts size parameter (backwards compatibility)
+            sig = inspect.signature(generate_func)
+            if 'size' in sig.parameters:
+                test_cases = generate_func(num_cases, size=size)
+            else:
+                # Old function signature: generate_test_cases(n)
+                test_cases = generate_func(num_cases)
 
             # Validate output
             if not isinstance(test_cases, list):

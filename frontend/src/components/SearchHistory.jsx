@@ -41,12 +41,13 @@ const ITEMS_PER_PAGE = 20;
 
 function SearchHistory({ onRequestLogin }) {
   const [history, setHistory] = useState([]);
-  const [offset, setOffset] = useState(0);
-  const [totalItems, setTotalItems] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [nextCursor, setNextCursor] = useState(null);
+  const [prevCursors, setPrevCursors] = useState([]); // Stack of previous page cursors
   const [loading, setLoading] = useState(false);
   const [selectedCode, setSelectedCode] = useState(null);
   const [selectedExecution, setSelectedExecution] = useState(null);
-  const [hasMore, setHasMore] = useState(true);
+  const [hasMore, setHasMore] = useState(false);
   const [myOnly, setMyOnly] = useState(true); // Default to my history only
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
 
@@ -59,22 +60,30 @@ function SearchHistory({ onRequestLogin }) {
       }
       return;
     }
-    fetchHistory(0);
+    // Reset pagination when myOnly changes
+    setCurrentPage(1);
+    setPrevCursors([]);
+    setNextCursor(null);
+    fetchHistory(null);
   }, [myOnly]);
 
   const showSnackbar = (message, severity = 'info') => {
     setSnackbar({ open: true, message, severity });
   };
 
-  const fetchHistory = async (currentOffset) => {
+  const fetchHistory = async (cursor) => {
     setLoading(true);
     try {
       const user = getUser();
       const params = new URLSearchParams({
-        offset: currentOffset,
         limit: ITEMS_PER_PAGE,
         my_only: myOnly.toString()
       });
+
+      // Add cursor if provided
+      if (cursor) {
+        params.append('cursor', cursor);
+      }
 
       const response = await apiGet(`${API_ENDPOINTS.history}?${params.toString()}`, { requireAuth: true });
 
@@ -84,9 +93,8 @@ function SearchHistory({ onRequestLogin }) {
 
       const data = await response.json();
       setHistory(data.results);
-      setTotalItems(data.count);
+      setNextCursor(data.next_cursor);
       setHasMore(data.has_more);
-      setOffset(currentOffset);
     } catch (error) {
       console.error('Error fetching history:', error);
       showSnackbar('Failed to fetch history', 'error');
@@ -96,14 +104,29 @@ function SearchHistory({ onRequestLogin }) {
   };
 
   const handlePrevPage = () => {
-    if (offset >= ITEMS_PER_PAGE) {
-      fetchHistory(offset - ITEMS_PER_PAGE);
+    if (currentPage > 1) {
+      // Remove the last cursor from the stack
+      const newPrevCursors = [...prevCursors];
+      newPrevCursors.pop();
+      setPrevCursors(newPrevCursors);
+
+      // Get the cursor for the previous page (or null for page 1)
+      const prevCursor = newPrevCursors.length > 0 ? newPrevCursors[newPrevCursors.length - 1] : null;
+
+      // Update page and fetch
+      setCurrentPage(currentPage - 1);
+      fetchHistory(prevCursor);
     }
   };
 
   const handleNextPage = () => {
-    if (hasMore) {
-      fetchHistory(offset + ITEMS_PER_PAGE);
+    if (hasMore && nextCursor) {
+      // Add current next cursor to the stack for navigation back
+      setPrevCursors([...prevCursors, nextCursor]);
+
+      // Update page and fetch next
+      setCurrentPage(currentPage + 1);
+      fetchHistory(nextCursor);
     }
   };
 
@@ -196,7 +219,6 @@ function SearchHistory({ onRequestLogin }) {
                 checked={myOnly}
                 onChange={(e) => {
                   setMyOnly(e.target.checked);
-                  setOffset(0);
                 }}
               />
             }
@@ -206,6 +228,7 @@ function SearchHistory({ onRequestLogin }) {
                 fontSize: { xs: '0.875rem', sm: '1rem' }
               }
             }}
+            disabled={loading}
           />
         </Box>
 
@@ -423,7 +446,7 @@ function SearchHistory({ onRequestLogin }) {
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 3 }}>
                 <Button
                   onClick={handlePrevPage}
-                  disabled={offset === 0 || loading}
+                  disabled={currentPage === 1 || loading}
                   startIcon={<NavigateBefore />}
                   variant="outlined"
                 >
@@ -431,7 +454,7 @@ function SearchHistory({ onRequestLogin }) {
                 </Button>
 
                 <Typography variant="body2" color="text.secondary">
-                  {offset + 1} - {Math.min(offset + ITEMS_PER_PAGE, totalItems)} of {totalItems}
+                  Page {currentPage} - Showing {history.length} items{hasMore ? ' (more available)' : ''}
                 </Typography>
 
                 <Button

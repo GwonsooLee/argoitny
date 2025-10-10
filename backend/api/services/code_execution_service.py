@@ -2,6 +2,9 @@
 from django.conf import settings
 from .judge0_service import Judge0Service
 from .code_executor import CodeExecutor
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class CodeExecutionService:
@@ -31,37 +34,54 @@ class CodeExecutionService:
                     ...
                 ]
         """
+        logger.info(f"[CodeExecutionService] Executing {language} code with {len(test_inputs)} test inputs")
+        logger.info(f"[CodeExecutionService] Code length: {len(code)} chars")
+        logger.info(f"[CodeExecutionService] USE_JUDGE0: {settings.USE_JUDGE0}")
+
         if settings.USE_JUDGE0:
             # Use Judge0 API
             judge0_service = Judge0Service()
             return judge0_service.execute_with_test_cases(code, language, test_inputs)
         else:
             # Use local executor
+            logger.info(f"[CodeExecutionService] Using local CodeExecutor")
             results = []
-            for test_input in test_inputs:
+            success_count = 0
+            error_count = 0
+
+            for idx, test_input in enumerate(test_inputs):
                 try:
+                    logger.info(f"[CodeExecutionService] Executing test case {idx+1}/{len(test_inputs)}, input_len={len(test_input)}")
                     result = CodeExecutor.execute(code, language, test_input)
 
                     if result['success']:
+                        success_count += 1
                         results.append({
                             'input': test_input,
                             'output': result['output'],
                             'error': None,
                             'status': 'success',
                         })
+                        logger.info(f"[CodeExecutionService] Test case {idx+1} SUCCESS, output_len={len(result['output'])}")
                     else:
+                        error_count += 1
+                        error_msg = result.get('error', 'Execution failed')
                         results.append({
                             'input': test_input,
                             'output': result.get('output', ''),
-                            'error': result.get('error', 'Execution failed'),
+                            'error': error_msg,
                             'status': 'error',
                         })
+                        logger.error(f"[CodeExecutionService] Test case {idx+1} FAILED: {error_msg}")
                 except Exception as e:
+                    error_count += 1
                     results.append({
                         'input': test_input,
                         'output': '',
                         'error': str(e),
                         'status': 'error',
                     })
+                    logger.error(f"[CodeExecutionService] Test case {idx+1} EXCEPTION: {str(e)}", exc_info=True)
 
+            logger.info(f"[CodeExecutionService] Execution complete: {success_count} success, {error_count} errors")
             return results

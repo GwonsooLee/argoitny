@@ -4,7 +4,7 @@ from django.core.cache import cache
 from .services.llm_factory import LLMServiceFactory
 from .services.code_execution_service import CodeExecutionService
 from .utils.job_helper import JobHelper
-from .tasks_solution_generation import generate_solution_with_fallback
+from .tasks_solution_generation import generate_solution_with_retry
 import base64
 import re
 import logging
@@ -126,9 +126,27 @@ def generate_script_task(self, job_id):
         generator_code = llm_service.generate_test_case_generator_code(problem_info, previous_failure=previous_failure)
         logger.info(f"[generate_script_task] Gemini returned generator code ({len(generator_code)} chars)")
 
-        # VALIDATION: Check for placeholder code
-        if '"""' in generator_code or '"..."' in generator_code or "case_data = '...'" in generator_code:
+        # VALIDATION: Check for placeholder code patterns
+        import re
+        placeholder_patterns = [
+            r'"\.{3,}"',  # "..." or "...."
+            r"'\.{3,}'",  # '...' or '....'
+            r'#\s*TODO',  # # TODO
+            r'#\s*FIXME',  # # FIXME
+            r'pass\s*#.*placeholder',  # pass # placeholder
+            r'raise\s+NotImplementedError',  # raise NotImplementedError
+        ]
+
+        found_placeholder = False
+        for pattern in placeholder_patterns:
+            if re.search(pattern, generator_code, re.IGNORECASE):
+                found_placeholder = True
+                logger.warning(f"[generate_script_task] Found placeholder pattern: {pattern}")
+                break
+
+        if found_placeholder:
             logger.error(f"[generate_script_task] Generated code contains placeholder strings!")
+            logger.error(f"[generate_script_task] Generated code preview: {generator_code[:500]}")
             raise ValueError("Generated code contains placeholder strings - Gemini did not generate actual test case logic")
 
         # Update job with result
@@ -137,103 +155,6 @@ def generate_script_task(self, job_id):
             'status': 'COMPLETED',
             'generator_code': generator_code
         })
-
-        # Execute generator code to create test cases and save to Problem
-        try:
-            from .services.test_case_generator import TestCaseGenerator
-
-            # Generate test cases using the script
-            test_case_inputs = TestCaseGenerator.execute_generator_code(
-                code=generator_code,
-                num_cases=10
-            )
-
-            # Update problem metadata using DynamoDB (problem and solution_code already exist)
-            problem_updates = {
-                'title': job['title'],
-                'problem_url': job.get('problem_url') or '',
-                'tags': job.get('tags', []),
-                'language': job['language'],
-                'constraints': job['constraints']
-            }
-
-            problem_repo.update_problem(
-                platform=job['platform'],
-                problem_id=job['problem_id'],
-                updates=problem_updates
-            )
-
-            # Reload problem instance
-            problem = problem_repo.get_problem(
-                platform=job['platform'],
-                problem_id=job['problem_id']
-            )
-
-            # Execute solution code with generated inputs to get outputs
-            test_results = CodeExecutionService.execute_with_test_cases(
-                code=solution_code,
-                language=job['language'],
-                test_inputs=test_case_inputs
-            )
-
-            # Log execution results
-            success_count = sum(1 for r in test_results if r['status'] == 'success')
-            failed_count = len(test_results) - success_count
-            logger.info(
-                f"[generate_script_task] Test case execution: "
-                f"{success_count} succeeded, {failed_count} failed"
-            )
-
-            # Log failed test cases (only first 3 to avoid log spam)
-            for idx, r in enumerate(r for r in test_results if r['status'] != 'success'):
-                if idx >= 3:  # Limit to first 3 failures
-                    break
-                logger.warning(
-                    f"[generate_script_task] Failed test case {idx+1}: "
-                    f"input={r.get('input', '')[:50]}, error={r.get('error', 'Unknown')}"
-                )
-
-            # Prepare test cases for S3 storage
-            testcases_for_s3 = []
-            for idx, r in enumerate(r for r in test_results if r['status'] == 'success'):
-                testcases_for_s3.append({
-                    'testcase_id': str(idx + 1),
-                    'input': r['input'],
-                    'output': r['output']
-                })
-
-            # Store all test cases in S3 as a single file
-            if testcases_for_s3:
-                from api.services.s3_testcase_service import S3TestCaseService
-                s3_service = S3TestCaseService()
-
-                try:
-                    s3_service.store_testcases(
-                        platform=job['platform'],
-                        problem_id=job['problem_id'],
-                        testcases=testcases_for_s3
-                    )
-
-                    # Update problem metadata to reflect S3 storage
-                    problem_repo.update_problem(
-                        platform=job['platform'],
-                        problem_id=job['problem_id'],
-                        updates={
-                            'test_case_count': len(testcases_for_s3)
-                        }
-                    )
-
-                    logger.info(f"Stored {len(testcases_for_s3)} test cases in S3")
-                except Exception as e:
-                    logger.error(f"Failed to store test cases in S3: {e}")
-                    raise
-                logger.info(f"Problem remains in draft state - admin review required")
-            else:
-                logger.warning(f"No successful test cases generated")
-
-        except Exception as e:
-            # Log but don't fail the task if test case generation fails
-            logger.error(f"Failed to generate/save test cases for job {job_id}: {str(e)}", exc_info=True)
 
         return {
             'job_id': job_id,
@@ -379,6 +300,137 @@ def generate_outputs_task(self, platform, problem_id):
             exc_info=True
         )
         # Don't retry - handled by autoretry_for
+        raise
+
+
+# ============================================================================
+# GENERATE TESTCASES TASK (Input + Output)
+# ============================================================================
+@shared_task(
+    bind=True,
+    max_retries=MAX_RETRIES,
+    time_limit=900,  # 15 minutes
+    soft_time_limit=840,
+    acks_late=False,
+    reject_on_worker_lost=True,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_jitter=True,
+)
+def generate_testcases_task(self, platform, problem_id):
+    """
+    Generate test case inputs and outputs for a problem
+
+    Args:
+        platform: Platform name (e.g., 'baekjoon', 'codeforces')
+        problem_id: Problem ID
+
+    Returns:
+        dict: Result with status and count
+    """
+    try:
+        from api.dynamodb.repositories import ProblemRepository
+        from api.services.test_case_generator import TestCaseGenerator
+
+        logger.info(f"[generate_testcases_task] Starting for {platform}/{problem_id}")
+
+        problem_repo = ProblemRepository()
+        problem = problem_repo.get_problem(platform=platform, problem_id=problem_id)
+
+        if not problem:
+            logger.error(f"[generate_testcases_task] Problem not found: {platform}/{problem_id}")
+            return {'status': 'FAILED', 'error': 'Problem not found'}
+
+        # Get generator_code and solution_code
+        generator_code = problem.get('generator_code', '')
+        solution_code = problem.get('solution_code', '')
+        language = problem.get('language', 'python')
+
+        if not generator_code:
+            logger.error(f"[generate_testcases_task] No generator_code for {platform}/{problem_id}")
+            return {'status': 'FAILED', 'error': 'No generator_code'}
+
+        if not solution_code:
+            logger.error(f"[generate_testcases_task] No solution_code for {platform}/{problem_id}")
+            return {'status': 'FAILED', 'error': 'No solution_code'}
+
+        # Generate 5 small + 5 medium test case inputs
+        logger.info(f"[generate_testcases_task] Generating test case inputs...")
+        test_case_inputs = []
+
+        # 5 small
+        small_cases = TestCaseGenerator.execute_generator_code(
+            code=generator_code,
+            num_cases=5,
+            size='small'
+        )
+        test_case_inputs.extend(small_cases)
+        logger.info(f"[generate_testcases_task] Generated {len(small_cases)} small test cases")
+
+        # 5 medium
+        medium_cases = TestCaseGenerator.execute_generator_code(
+            code=generator_code,
+            num_cases=5,
+            size='medium'
+        )
+        test_case_inputs.extend(medium_cases)
+        logger.info(f"[generate_testcases_task] Generated {len(medium_cases)} medium test cases")
+
+        # Execute solution code to get outputs
+        logger.info(f"[generate_testcases_task] Executing solution code ({len(solution_code)} chars)")
+        test_results = CodeExecutionService.execute_with_test_cases(
+            code=solution_code,
+            language=language,
+            test_inputs=test_case_inputs
+        )
+
+        # Log results
+        success_count = sum(1 for r in test_results if r['status'] == 'success')
+        failed_count = len(test_results) - success_count
+        logger.info(f"[generate_testcases_task] Execution: {success_count} succeeded, {failed_count} failed")
+
+        # Log sample results
+        for idx, r in enumerate(test_results[:2]):
+            logger.info(
+                f"[generate_testcases_task] Result {idx+1}: status={r['status']}, "
+                f"input_len={len(r.get('input', ''))}, output_len={len(r.get('output', ''))}"
+            )
+
+        # Store as TC# items
+        successful_testcases = [r for r in test_results if r['status'] == 'success']
+
+        if successful_testcases:
+            logger.info(f"[generate_testcases_task] Storing {len(successful_testcases)} test cases as TC# items")
+
+            for idx, r in enumerate(successful_testcases):
+                testcase_id = str(idx + 1)
+                try:
+                    problem_repo.add_testcase(
+                        platform=platform,
+                        problem_id=problem_id,
+                        testcase_id=testcase_id,
+                        input_str=r['input'],
+                        output_str=r['output']
+                    )
+                    logger.info(f"[generate_testcases_task] Stored TC#{testcase_id}")
+                except Exception as e:
+                    logger.error(f"[generate_testcases_task] Failed to store TC#{testcase_id}: {e}")
+                    raise
+
+            logger.info(f"[generate_testcases_task] Successfully stored {len(successful_testcases)} test cases")
+        else:
+            logger.warning(f"[generate_testcases_task] No successful test cases generated")
+
+        return {
+            'status': 'COMPLETED',
+            'count': len(successful_testcases),
+            'failed_count': failed_count,
+            'message': f'Generated {len(successful_testcases)} test cases'
+        }
+
+    except Exception as e:
+        logger.error(f"[generate_testcases_task] Error for {platform}/{problem_id}: {str(e)}", exc_info=True)
         raise
 
 
@@ -544,11 +596,8 @@ def execute_code_task(self, code, language, platform=None, problem_identifier=No
             import time
             from api.dynamodb.repositories import SearchHistoryRepository
 
-            # Get problem title for history - use DynamoDB data if ORM problem doesn't exist
-            if orm_problem:
-                problem_title = orm_problem.title
-            elif platform and problem_identifier:
-                # Fallback: get from DynamoDB data
+            # Get problem title for history - use DynamoDB data
+            if platform and problem_identifier:
                 problem_title = problem_data.get('title', f'{platform}/{problem_identifier}')
             else:
                 problem_title = f'{platform}/{problem_identifier}'
@@ -586,14 +635,57 @@ def execute_code_task(self, code, language, platform=None, problem_identifier=No
             }
 
             # Create history in DynamoDB
+            # Note: SearchHistoryRepository stores history directly in dat field
+            # We need to create a custom item that stores execution history
             table = DynamoDBClient.get_table()
-            history_repo = SearchHistoryRepository(table)
-            history_repo.create_history(
-                history_id=history_id,
-                history_data=history_data
-            )
+
+            # Create history item with execution data
+            import time
+            from decimal import Decimal
+
+            timestamp_ms = int(time.time() * 1000)
+            timestamp_s = int(time.time())
+
+            history_item = {
+                'PK': f'HIST#{history_id}',
+                'SK': 'META',
+                'tp': 'hist',
+                'dat': history_data,
+                'crt': timestamp_ms,
+                'upd': timestamp_s
+            }
+
+            # Add GSI1 for user history queries (required!)
+            # Use milliseconds for proper sorting
+            if user_id:
+                history_item['GSI1PK'] = f'USER#{user_id}'
+                history_item['GSI1SK'] = f'HIST#{timestamp_ms}'
+
+            # Add GSI2 for public history queries (if code is public)
+            # Use time-based partitioning to avoid hot partition
+            if is_code_public:
+                from datetime import datetime
+                hour_partition = datetime.fromtimestamp(timestamp_s).strftime('%Y%m%d%H')
+                history_item['GSI2PK'] = f'PUBLIC#HIST#{hour_partition}'
+                history_item['GSI2SK'] = str(timestamp_ms)
+
+            table.put_item(Item=history_item)
 
             execution_id = history_id
+
+            # Update UserStats aggregation (async, non-blocking)
+            try:
+                from api.dynamodb.repositories.user_stats_repository import UserStatsRepository
+                stats_repo = UserStatsRepository(table)
+                stats_repo.increment_execution(
+                    user_id=user_id,
+                    platform=platform,
+                    problem_number=problem_identifier
+                )
+                logger.info(f"[STATS] Updated user stats for user {user_id}: {platform}/{problem_identifier}")
+            except Exception as e:
+                logger.error(f"[STATS] Failed to update user stats: {e}")
+                # Don't fail the task if stats update fails
 
             # Update problem execution count in DynamoDB metadata
             current_metadata = problem_data.get('metadata', {}) if problem_data else {}
@@ -650,7 +742,7 @@ def execute_code_task(self, code, language, platform=None, problem_identifier=No
     retry_backoff_max=300,
     retry_jitter=True,
 )
-def extract_problem_info_task(self, problem_url, job_id=None, additional_context=None, samples=None):
+def extract_problem_info_task(self, problem_url, job_id=None, additional_context=None, samples=None, llm_config=None):
     """
     Async task to extract problem information from URL using Gemini AI
 
@@ -666,6 +758,7 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
         additional_context: Optional additional context (e.g., counterexamples, edge cases)
                            to help AI generate better solution
         samples: Optional list of user-provided sample test cases with 'input' and 'output' keys
+        llm_config: Optional LLM configuration dict with model, reasoning_effort, max_output_tokens
 
     Returns:
         dict: {
@@ -677,7 +770,15 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
             'problem_id': str
         }
     """
-    logger.info(f"[Worker] extract_problem_info_task received - URL: {problem_url}, Job ID: {job_id}, Additional Context: {bool(additional_context)}")
+    # Apply default LLM config if not provided
+    if llm_config is None:
+        llm_config = {
+            'model': 'gpt-5',
+            'reasoning_effort': 'medium',
+            'max_output_tokens': 8192
+        }
+
+    logger.info(f"[Worker] extract_problem_info_task received - URL: {problem_url}, Job ID: {job_id}, Additional Context: {bool(additional_context)}, LLM Config: {llm_config}")
 
     # Initialize repositories at the beginning to avoid UnboundLocalError
     table = None
@@ -795,7 +896,8 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
             problem_info = cached_info
         else:
             # STEP 1: Extract problem metadata (title, constraints, samples) using GEMINI
-            # Always use Gemini for metadata extraction (more reliable and cost-effective)
+            # ALWAYS use Gemini for metadata extraction (ignores llm_config)
+            # Gemini is more reliable and cost-effective for metadata extraction
             update_progress("📄 Step 1/2: Extracting problem metadata with Gemini...")
             gemini_service = LLMServiceFactory.create_service('gemini')
             problem_metadata = gemini_service.extract_problem_metadata_from_url(
@@ -803,7 +905,7 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
                 progress_callback=lambda msg: update_progress(f"📄 {msg}"),
                 user_samples=samples  # Pass user-provided samples
             )
-            logger.info(f"Extracted metadata: {problem_metadata['title']}, {len(problem_metadata.get('samples', []))} samples")
+            logger.info(f"Extracted metadata with Gemini: {problem_metadata['title']}, {len(problem_metadata.get('samples', []))} samples")
 
             # Add additional_context to problem_metadata for solution generation
             if additional_context:
@@ -875,10 +977,13 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
                 except Exception as e:
                     logger.error(f"Failed to update problem with metadata: {e}")
 
-            # STEP 2: Generate solution with Gemini → OpenAI fallback
-            solution_result, validation_passed, validation_error, used_service = generate_solution_with_fallback(
+            # STEP 2: Generate solution with retry logic (uses model from llm_config)
+            # llm_config specifies which model to use (gpt-5 or gemini)
+            # Will retry same model 2 times, NO fallback to different model
+            solution_result, validation_passed, validation_error, used_service = generate_solution_with_retry(
                 problem_metadata,
-                update_progress
+                update_progress,
+                llm_config
             )
 
             # Log which service was used
@@ -953,22 +1058,10 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
                     problem_repo.update_problem(platform, problem_id, updates)
                     logger.info(f"Updated problem {platform}/{problem_id} with extracted title: {problem_info['title']}")
 
-                    # Save user-provided samples as test cases if validation passed
-                    samples_from_metadata = problem_info.get('samples', [])
-                    if samples_from_metadata and validation_passed:
-                        logger.info(f"Saving {len(samples_from_metadata)} validated samples as test cases")
-                        for idx, sample in enumerate(samples_from_metadata, start=1):
-                            try:
-                                problem_repo.add_testcase(
-                                    platform=platform,
-                                    problem_id=problem_id,
-                                    testcase_id=str(idx),
-                                    input_str=sample.get('input', ''),
-                                    output_str=sample.get('output', '')
-                                )
-                            except Exception as e:
-                                logger.warning(f"Failed to save sample {idx} as testcase: {e}")
-                        logger.info(f"Saved {len(samples_from_metadata)} samples as test cases")
+                    # NOTE: User-provided samples are for solution validation only
+                    # They are NOT saved as test cases - test cases must be generated via script
+                    if validation_passed:
+                        logger.info(f"Solution validated successfully with user-provided samples")
 
                     update_progress("Problem updated successfully", status='completed')
                     created = False
@@ -1001,22 +1094,10 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
                     )
                     logger.info(f"Created problem {platform}/{problem_id} in DynamoDB")
 
-                    # Save user-provided samples as test cases if validation passed
-                    samples_from_metadata = problem_info.get('samples', [])
-                    if samples_from_metadata and validation_passed:
-                        logger.info(f"Saving {len(samples_from_metadata)} validated samples as test cases")
-                        for idx, sample in enumerate(samples_from_metadata, start=1):
-                            try:
-                                problem_repo.add_testcase(
-                                    platform=platform,
-                                    problem_id=problem_id,
-                                    testcase_id=str(idx),
-                                    input_str=sample.get('input', ''),
-                                    output_str=sample.get('output', '')
-                                )
-                            except Exception as e:
-                                logger.warning(f"Failed to save sample {idx} as testcase: {e}")
-                        logger.info(f"Saved {len(samples_from_metadata)} samples as test cases")
+                    # NOTE: User-provided samples are for solution validation only
+                    # They are NOT saved as test cases - test cases must be generated via script
+                    if validation_passed:
+                        logger.info(f"Solution validated successfully with user-provided samples")
 
                     update_progress("Problem created successfully", status='completed')
                     created = True
@@ -1276,22 +1357,23 @@ def generate_hints_task(self, history_id):
             'language': language
         }
 
-        # Generate hints using LLM service (Gemini or OpenAI based on settings)
-        logger.info(f"[HINTS] History {history_id}: Calling LLM API to generate hints")
-        llm_service = LLMServiceFactory.create_service()
+        # Generate hints using Gemini ONLY (ignores llm_config)
+        # ALWAYS use Gemini for hint generation - it's more cost-effective and reliable
+        logger.info(f"[HINTS] History {history_id}: Calling Gemini API to generate hints")
+        llm_service = LLMServiceFactory.create_service('gemini')
         generated_hints = llm_service.generate_hints(
             user_code=code,
             solution_code=decoded_solution,
             test_failures=failed_tests,
             problem_info=problem_info
         )
-        logger.info(f"[HINTS] History {history_id}: LLM API returned {len(generated_hints) if generated_hints else 0} hints")
+        logger.info(f"[HINTS] History {history_id}: Gemini API returned {len(generated_hints) if generated_hints else 0} hints")
 
         # Save hints to history record in DynamoDB
         logger.info(f"[HINTS] History {history_id}: Saving hints to DynamoDB")
-        history_repo.update_hints(
+        history_repo.update_history(
             history_id=history_id,
-            hints=generated_hints
+            updates={'hnt': generated_hints}
         )
         logger.info(f"[HINTS] History {history_id}: Successfully saved {len(generated_hints)} hints to DynamoDB")
 
@@ -1724,85 +1806,239 @@ def recover_orphaned_jobs_task(self, timeout_minutes=30):
     retry_backoff_max=300,
     retry_jitter=True,
 )
-def execute_test_cases_task(self, generator_code, num_cases=10):
+def execute_test_cases_task(self, generator_code, num_cases=10, platform=None, problem_id=None, difficulties=None):
     """
     Async task to execute generator code and produce test case inputs
-    Uses incremental generation (1 at a time) and saves to temp files before uploading to S3
+    PROCESS ISOLATION: Each test case runs in separate process for memory isolation
+    REAL-TIME: Updates Problem.test_case_count incrementally for UI progress
 
     Args:
         generator_code: Python code to generate test inputs
-        num_cases: Number of test cases to generate
+        num_cases: Number of test cases to generate (used if difficulties not provided)
+        platform: Platform name (optional, for real-time updates)
+        problem_id: Problem ID (optional, for real-time updates)
+        difficulties: List of difficulties for each test case (e.g., ['small', 'small', 'medium', 'large'])
+                     If not provided, defaults to 'mixed' for all cases
 
     Returns:
-        dict: Result with test_cases and count
+        dict: Result with test_cases (array of strings ONLY)
     """
-    import tempfile
-    import os
-    import json
-
-    temp_files = []
-
     try:
+        import subprocess
+        import sys
+        import json
+        import tempfile
         from api.services.test_case_generator import TestCaseGenerator
 
-        logger.info(f"[Execute Test Cases Task] Starting incremental execution for {num_cases} test cases")
+        # If difficulties not provided, generate mixed test cases
+        if not difficulties:
+            difficulties = ['mixed'] * num_cases
 
-        # Execute the generator code incrementally (1 at a time)
-        test_cases = TestCaseGenerator.execute_generator_code_incrementally(
-            code=generator_code,
-            num_cases=num_cases
-        )
+        # Ensure we have the right number of difficulties
+        if len(difficulties) != num_cases:
+            logger.warning(f"[Execute Test Cases Task] Mismatch: num_cases={num_cases}, len(difficulties)={len(difficulties)}. Using num_cases.")
+            if len(difficulties) < num_cases:
+                # Pad with 'mixed'
+                difficulties.extend(['mixed'] * (num_cases - len(difficulties)))
+            else:
+                # Truncate
+                difficulties = difficulties[:num_cases]
 
-        logger.info(f"[Execute Test Cases Task] Successfully generated {len(test_cases)} test cases")
+        logger.info(f"[Execute Test Cases Task] Starting process-isolated execution for {num_cases} test cases")
+        logger.info(f"[Execute Test Cases Task] Difficulties: {difficulties}")
+        if platform and problem_id:
+            logger.info(f"[Execute Test Cases Task] Will update {platform}/{problem_id} in real-time")
 
-        # Save each test case to a temporary file
-        temp_dir = tempfile.mkdtemp()
-        for i, test_case in enumerate(test_cases):
-            file_path = os.path.join(temp_dir, f'testcase_{i+1}.txt')
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(test_case)
-            temp_files.append(file_path)
-            logger.info(f"[Execute Test Cases Task] Saved test case {i+1} to {file_path}")
+        # Validate code first
+        TestCaseGenerator.validate_code(generator_code)
 
-        # Combine all files into a single JSON structure
-        combined_data = []
-        for i, file_path in enumerate(temp_files):
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-                combined_data.append({
-                    'id': i + 1,
-                    'input': content
-                })
+        # Get problem repository for real-time updates
+        problem_repo = None
+        if platform and problem_id:
+            from api.dynamodb.repositories import ProblemRepository
+            problem_repo = ProblemRepository()
 
-        logger.info(f"[Execute Test Cases Task] Combined {len(combined_data)} test cases")
+        test_case_count = 0
+        test_case_inputs = []
 
-        # Clean up temp files
-        for file_path in temp_files:
+        # Generate ONE test case at a time in SEPARATE PROCESS
+        for i in range(num_cases):
+            difficulty = difficulties[i]
+            logger.info(f"[Execute Test Cases Task] Generating test case {i+1}/{num_cases} with difficulty={difficulty}")
             try:
-                os.remove(file_path)
-            except Exception as e:
-                logger.warning(f"[Execute Test Cases Task] Failed to remove temp file {file_path}: {e}")
+                # Create wrapper script that executes in subprocess
+                # Use the difficulty variable from outer scope
+                wrapper_script = f'''
+import json
+import sys
 
-        try:
-            os.rmdir(temp_dir)
-        except Exception as e:
-            logger.warning(f"[Execute Test Cases Task] Failed to remove temp dir {temp_dir}: {e}")
+# Safe builtins
+safe_builtins = {{
+    'abs': abs, 'all': all, 'any': any, 'bin': bin, 'bool': bool,
+    'chr': chr, 'dict': dict, 'divmod': divmod, 'enumerate': enumerate,
+    'filter': filter, 'float': float, 'format': format, 'hex': hex,
+    'int': int, 'isinstance': isinstance, 'len': len, 'list': list,
+    'map': map, 'max': max, 'min': min, 'oct': oct, 'ord': ord,
+    'pow': pow, 'range': range, 'repr': repr, 'reversed': reversed,
+    'round': round, 'set': set, 'slice': slice, 'sorted': sorted,
+    'str': str, 'sum': sum, 'tuple': tuple, 'type': type, 'zip': zip,
+    'True': True, 'False': False, 'None': None,
+}}
+
+safe_globals = {{
+    '__builtins__': safe_builtins,
+}}
+
+# Import safe modules
+import random
+import math
+import string
+import itertools
+import collections
+
+safe_globals.update({{
+    'random': random,
+    'math': math,
+    'string': string,
+    'itertools': itertools,
+    'collections': collections,
+}})
+
+# Execute generator code
+{generator_code}
+
+# Generate test case
+if 'generate_test_cases' not in globals():
+    print(json.dumps({{"error": "generate_test_cases function not found"}}))
+    sys.exit(1)
+
+try:
+    # Try calling with size parameter first (new signature)
+    import inspect
+    sig = inspect.signature(generate_test_cases)
+    if 'size' in sig.parameters:
+        result = generate_test_cases(1, size="{difficulty}")
+    else:
+        # Fallback to old signature
+        result = generate_test_cases(1)
+
+    if not isinstance(result, list) or len(result) == 0:
+        print(json.dumps({{"error": "generate_test_cases(1) must return a list with 1 element"}}))
+        sys.exit(1)
+
+    test_case = result[0]
+    if not isinstance(test_case, str):
+        print(json.dumps({{"error": f"Test case is not a string: {{type(test_case)}}"}}))
+        sys.exit(1)
+
+    print(json.dumps({{"test_case": test_case}}))
+except Exception as e:
+    print(json.dumps({{"error": str(e)}}))
+    sys.exit(1)
+'''
+
+                # Execute in subprocess with 10 minute timeout
+                result = subprocess.run(
+                    [sys.executable, '-c', wrapper_script],
+                    capture_output=True,
+                    text=True,
+                    timeout=600  # 10 minutes per test case
+                )
+
+                if result.returncode != 0:
+                    error_msg = f"Subprocess failed with code {result.returncode}"
+                    if result.stderr:
+                        error_msg += f": {result.stderr}"
+                    logger.error(f"[Execute Test Cases Task] {error_msg}")
+                    raise ValueError(error_msg)
+
+                # Parse JSON output
+                try:
+                    output_data = json.loads(result.stdout)
+                    if 'error' in output_data:
+                        raise ValueError(output_data['error'])
+
+                    test_case = output_data['test_case']
+                    test_case_inputs.append(test_case)
+                    test_case_count += 1
+
+                    logger.info(f"[Execute Test Cases Task] Generated test case {i+1}/{num_cases}")
+
+                    # Save testcase to DynamoDB or S3 immediately
+                    # add_testcase automatically handles S3/DynamoDB routing and creates TC# item
+                    if problem_repo and platform and problem_id:
+                        try:
+                            testcase_id = str(test_case_count)
+
+                            # Generate output using solution_code
+                            output_str = ''
+                            try:
+                                problem = problem_repo.get_problem(platform, problem_id)
+                                if problem and problem.get('solution_code'):
+                                    solution_code = problem['solution_code']
+                                    language = problem.get('language', 'python')
+
+                                    logger.info(f"[Execute Test Cases Task] Generating output for testcase {testcase_id}")
+                                    result = CodeExecutionService.execute_with_test_cases(
+                                        code=solution_code,
+                                        language=language,
+                                        test_inputs=[test_case]
+                                    )
+
+                                    if result and len(result) > 0 and result[0]['status'] == 'success':
+                                        output_str = result[0]['output']
+                                        logger.info(f"[Execute Test Cases Task] Generated output for testcase {testcase_id}, length={len(output_str)}")
+                                    else:
+                                        error_msg = result[0].get('error', 'Unknown error') if result else 'No result'
+                                        logger.warning(f"[Execute Test Cases Task] Failed to generate output for testcase {testcase_id}: {error_msg}")
+                                else:
+                                    logger.warning(f"[Execute Test Cases Task] No solution_code found for {platform}/{problem_id}")
+                            except Exception as exec_error:
+                                logger.error(f"[Execute Test Cases Task] Error generating output: {exec_error}")
+
+                            # Use add_testcase which automatically:
+                            # 1. Stores large test cases (>100KB) in S3
+                            # 2. Creates TC# item in DynamoDB with S3 reference or direct data
+                            problem_repo.add_testcase(
+                                platform=platform,
+                                problem_id=problem_id,
+                                testcase_id=testcase_id,
+                                input_str=test_case,
+                                output_str=output_str
+                            )
+                            logger.info(f"[Execute Test Cases Task] Stored testcase {testcase_id} with output_len={len(output_str)}")
+
+                            # Update Problem.test_case_count
+                            problem_repo.update_problem(
+                                platform=platform,
+                                problem_id=problem_id,
+                                updates={'test_case_count': test_case_count}
+                            )
+                            logger.info(f"[Execute Test Cases Task] Updated {platform}/{problem_id} count to {test_case_count}")
+                        except Exception as update_error:
+                            logger.warning(f"[Execute Test Cases Task] Failed to save testcase: {update_error}")
+
+                except json.JSONDecodeError as e:
+                    logger.error(f"[Execute Test Cases Task] Failed to parse output: {result.stdout}")
+                    raise ValueError(f"Invalid JSON output from generator: {str(e)}")
+
+            except subprocess.TimeoutExpired:
+                logger.error(f"[Execute Test Cases Task] Test case {i+1} generation timed out after 10 minutes")
+                raise ValueError(f'Test case {i+1} generation timed out')
+            except Exception as e:
+                logger.error(f"[Execute Test Cases Task] Error generating test case {i+1}: {e}")
+                raise ValueError(f'Failed to generate test case {i+1}: {str(e)}')
+
+        logger.info(f"[Execute Test Cases Task] Successfully generated {test_case_count} test cases")
 
         return {
             'status': 'SUCCESS',
-            'test_cases': test_cases,
-            'count': len(test_cases)
+            'test_cases': test_case_inputs,
+            'count': test_case_count
         }
 
     except ValueError as e:
         logger.error(f"[Execute Test Cases Task] Validation error: {str(e)}")
-        # Clean up on error
-        for file_path in temp_files:
-            try:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-            except:
-                pass
         return {
             'status': 'FAILED',
             'error': str(e),
@@ -1811,13 +2047,6 @@ def execute_test_cases_task(self, generator_code, num_cases=10):
         }
     except Exception as e:
         logger.error(f"[Execute Test Cases Task] Execution error: {str(e)}", exc_info=True)
-        # Clean up on error
-        for file_path in temp_files:
-            try:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-            except:
-                pass
         return {
             'status': 'FAILED',
             'error': f'Failed to execute generator code: {str(e)}',

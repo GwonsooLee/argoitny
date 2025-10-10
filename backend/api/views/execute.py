@@ -71,8 +71,8 @@ class ExecuteCodeView(APIView):
 
         # Extract problem identification - support both legacy and new approaches
         problem_id = serializer.validated_data.get('problem_id')
-        platform = request.data.get('platform')
-        problem_identifier = request.data.get('problem_identifier')
+        platform = serializer.validated_data.get('platform')
+        problem_identifier = serializer.validated_data.get('problem_identifier')
 
         try:
             # Determine platform and problem_identifier based on input
@@ -97,19 +97,12 @@ class ExecuteCodeView(APIView):
 
                     problem_data = problem_response['Item']
 
-                    # Get test cases using query
-                    testcases_response = await table.query(
-                        KeyConditionExpression='PK = :pk AND begins_with(SK, :sk)',
-                        ExpressionAttributeValues={
-                            ':pk': f'PROB#{platform}#{problem_identifier}',
-                            ':sk': 'TESTCASE#'
-                        }
-                    )
-
-                    test_cases = testcases_response.get('Items', [])
-
                     # Check if problem has test cases
-                    if not test_cases:
+                    # Always use dat.tcc for test case count
+                    dat = problem_data.get('dat', {})
+                    test_case_count = int(dat.get('tcc', 0))
+
+                    if test_case_count == 0:
                         return Response(
                             {'error': 'No test cases found for this problem'},
                             status=status.HTTP_400_BAD_REQUEST

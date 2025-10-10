@@ -1,0 +1,15 @@
+{
+  "Rules": [
+    {
+      "Id": "DeleteOldTestResults",
+      "Status": "Enabled",
+      "Prefix": "results/",
+      "Expiration": {
+        "Days": 90
+      },
+      "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 30
+      }
+    }
+  ]
+}
