@@ -52,6 +52,9 @@ echo "🔍 Testing Celery configuration..."
 python -c "
 import os
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
+
+print(f'  📍 ENVIRONMENT in celery.py context: {os.getenv(\"ENVIRONMENT\", \"NOT_SET\")}')
+
 import django
 django.setup()
 
@@ -60,6 +63,10 @@ try:
     app = Celery('config')
     app.config_from_object('django.conf:settings', namespace='CELERY')
     print('  ✅ Celery app configured successfully')
+
+    # Check broker URL
+    print(f'  ✅ Broker URL: {app.conf.broker_url}')
+    print(f'  ✅ Broker Transport Options: {app.conf.broker_transport_options}')
 
     # Test debug task only (no autodiscovery)
     from config.celery import debug_task
@@ -113,8 +120,18 @@ echo "========================================="
 echo "Command: celery -A config worker --loglevel=INFO --concurrency=4 --pool=threads --prefetch-multiplier=1 --queues=jobs,celery,ai,generation,execution,maintenance"
 echo ""
 
+# Final environment check before starting celery
+echo "🔍 Final Environment Check:"
+echo "  ENVIRONMENT=${ENVIRONMENT:-NOT_SET}"
+echo "  AWS_REGION=${AWS_REGION:-NOT_SET}"
+echo "  DJANGO_SETTINGS_MODULE=${DJANGO_SETTINGS_MODULE:-NOT_SET}"
+echo ""
+
 # Run celery with explicit settings and all queues
 # --prefetch-multiplier=1: Each worker prefetches only 1 task at a time
 # With 4 workers, total prefetch = 4 (not 16)
 export DJANGO_SETTINGS_MODULE=config.settings
+
+echo "🎯 Executing celery command..."
+set -x  # Enable command tracing
 exec celery -A config worker --loglevel=INFO --concurrency=4 --pool=threads --prefetch-multiplier=1 --queues=jobs,celery,ai,generation,execution,maintenance
