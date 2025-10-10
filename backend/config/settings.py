@@ -513,7 +513,7 @@ CELERY_BROKER_POOL_LIMIT = config.get_int('celery.broker_pool_limit', default=10
 # SQS specific configuration
 if IS_PRODUCTION:
     # Production: Use real AWS SQS with IAM roles
-    # Queue name will be: queue_name_prefix + queue_name = 'algoitny-jobs-prod'
+    # Kombu will auto-discover queues using the queue_name_prefix
     CELERY_BROKER_TRANSPORT_OPTIONS = {
         'region': AWS_DEFAULT_REGION,
         # With acks_late=False, messages are ACKed immediately on consume
@@ -521,14 +521,10 @@ if IS_PRODUCTION:
         # Set to task_time_limit * 2 for safety
         'visibility_timeout': 3600,  # 60 minutes (task_time_limit 30min * 2)
         'polling_interval': 1,  # 1 second
-        'queue_name_prefix': 'algoitny-jobs-',
+        # NOTE: Empty prefix because queue name is just 'jobs', not 'algoitny-jobs-jobs'
+        # Terraform creates queue with full name: 'algoitny-jobs-prod'
+        'queue_name_prefix': '',
         'is_secure': True,  # Use HTTPS in production
-        # Predefined queues to use the Terraform-created queue
-        'predefined_queues': {
-            'jobs': {
-                'url': f'https://sqs.{AWS_DEFAULT_REGION}.amazonaws.com/{{account_id}}/{SQS_QUEUE_NAME}',
-            }
-        }
     }
 else:
     # Local/Dev: Use LocalStack
@@ -561,29 +557,30 @@ CELERY_RESULT_EXPIRES = config.get_int('celery.result_expires', default=86400)
 CELERY_RESULT_COMPRESSION = config.get('celery.result_compression', default='gzip')
 
 # Default queue configuration
-# Queue name will be: queue_name_prefix + default_queue + environment suffix
-# Example: algoitny-jobs-prod (production) or algoitny-jobs (local)
-CELERY_TASK_DEFAULT_QUEUE = 'jobs'
+# Queue name in SQS: algoitny-jobs-prod (created by Terraform)
+# Celery queue name: use the full SQS queue name without prefix
+CELERY_TASK_DEFAULT_QUEUE = 'algoitny-jobs-prod' if IS_PRODUCTION else 'jobs'
 
 # Task routing for better load distribution
-# All tasks use the same queue for now (algoitny-jobs-prod)
+# All tasks use the same queue: algoitny-jobs-prod (in production)
+_queue_name = 'algoitny-jobs-prod' if IS_PRODUCTION else 'jobs'
 CELERY_TASK_ROUTES = {
     # High priority: User-facing tasks
-    'api.tasks.execute_code_task': {'queue': 'jobs', 'priority': 8},
+    'api.tasks.execute_code_task': {'queue': _queue_name, 'priority': 8},
 
     # Medium priority: Background generation tasks
-    'api.tasks.generate_script_task': {'queue': 'jobs', 'priority': 5},
-    'api.tasks.generate_outputs_task': {'queue': 'jobs', 'priority': 5},
+    'api.tasks.generate_script_task': {'queue': _queue_name, 'priority': 5},
+    'api.tasks.generate_outputs_task': {'queue': _queue_name, 'priority': 5},
 
     # Medium-high priority: AI-powered tasks
-    'api.tasks.generate_hints_task': {'queue': 'jobs', 'priority': 6},
-    'api.tasks.extract_problem_info_task': {'queue': 'jobs', 'priority': 4},
+    'api.tasks.generate_hints_task': {'queue': _queue_name, 'priority': 6},
+    'api.tasks.extract_problem_info_task': {'queue': _queue_name, 'priority': 4},
 
     # Low priority: Maintenance and cache tasks
-    'api.tasks.delete_job_task': {'queue': 'jobs', 'priority': 2},
-    'api.tasks.warm_problem_cache_task': {'queue': 'jobs', 'priority': 3},
-    'api.tasks.warm_user_stats_cache_task': {'queue': 'jobs', 'priority': 3},
-    'api.tasks.invalidate_cache_task': {'queue': 'jobs', 'priority': 4},
+    'api.tasks.delete_job_task': {'queue': _queue_name, 'priority': 2},
+    'api.tasks.warm_problem_cache_task': {'queue': _queue_name, 'priority': 3},
+    'api.tasks.warm_user_stats_cache_task': {'queue': _queue_name, 'priority': 3},
+    'api.tasks.invalidate_cache_task': {'queue': _queue_name, 'priority': 4},
 }
 
 # Task priority settings

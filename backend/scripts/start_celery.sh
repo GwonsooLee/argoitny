@@ -127,11 +127,23 @@ echo "  AWS_REGION=${AWS_REGION:-NOT_SET}"
 echo "  DJANGO_SETTINGS_MODULE=${DJANGO_SETTINGS_MODULE:-NOT_SET}"
 echo ""
 
+# Check actual broker configuration that will be used
+echo "🔍 Checking actual Celery broker configuration..."
+python -c "
+from config.celery import app
+print(f'  Broker URL: {app.conf.broker_url}')
+print(f'  Broker Transport Options:')
+for key, value in app.conf.broker_transport_options.items():
+    print(f'    {key}: {value}')
+" || echo "  ⚠️ Failed to load celery app config"
+echo ""
+
 # Run celery with explicit settings and all queues
 # --prefetch-multiplier=1: Each worker prefetches only 1 task at a time
 # With 4 workers, total prefetch = 4 (not 16)
 export DJANGO_SETTINGS_MODULE=config.settings
 
-echo "🎯 Executing celery command..."
+echo "🎯 Executing celery command with DEBUG logging..."
 set -x  # Enable command tracing
-exec celery -A config worker --loglevel=INFO --concurrency=4 --pool=threads --prefetch-multiplier=1 --queues=jobs,celery,ai,generation,execution,maintenance
+# Use DEBUG level to see connection errors
+exec celery -A config worker --loglevel=DEBUG --concurrency=4 --pool=threads --prefetch-multiplier=1 --queues=jobs,celery,ai,generation,execution,maintenance
