@@ -66,7 +66,9 @@ try:
 
     # Check broker URL
     print(f'  ✅ Broker URL: {app.conf.broker_url}')
-    print(f'  ✅ Broker Transport Options: {app.conf.broker_transport_options}')
+    print(f'  ✅ Broker Transport Options:')
+    import json
+    print(json.dumps(app.conf.broker_transport_options, indent=4, default=str))
 
     # Test debug task only (no autodiscovery)
     from config.celery import debug_task
