@@ -32,8 +32,8 @@ class SubscriptionPlanRepository(BaseRepository):
 
         # Convert to DynamoDB item with short field names
         item = {
-            'PK': f'PLAN#{plan_id}',
-            'SK': 'META',
+            'PK': 'PLAN',
+            'SK': f'META#{plan_id}',
             'tp': 'plan',
             'dat': {
                 'nm': plan_data['name'],
@@ -62,7 +62,7 @@ class SubscriptionPlanRepository(BaseRepository):
         Returns:
             Plan or None
         """
-        item = self.get_item(f'PLAN#{plan_id}', 'META')
+        item = self.get_item('PLAN', f'META#{plan_id}')
         if not item:
             return None
         return self._from_item_to_plan(item)
@@ -85,7 +85,7 @@ class SubscriptionPlanRepository(BaseRepository):
             return None
 
         dat = item['dat']
-        plan_id = item['PK'].replace('PLAN#', '')
+        plan_id = item['SK'].replace('META#', '')
 
         return {
             'id': int(plan_id),

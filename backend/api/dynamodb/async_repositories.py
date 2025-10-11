@@ -21,8 +21,8 @@ class AsyncSubscriptionPlanRepository:
         try:
             response = await self.table.get_item(
                 Key={
-                    'PK': f'PLAN#{plan_id}',
-                    'SK': 'META'
+                    'PK': 'PLAN',
+                    'SK': f'META#{plan_id}'
                 }
             )
 
@@ -37,24 +37,37 @@ class AsyncSubscriptionPlanRepository:
             raise
 
     async def list_plans(self, limit: int = 100) -> List[Dict]:
-        """List all subscription plans"""
-        try:
-            # Scan for plans (small dataset, ~5 items)
-            response = await self.table.scan(
-                FilterExpression='#tp = :tp AND SK = :sk',
-                ExpressionAttributeNames={
-                    '#tp': 'tp'
-                },
-                ExpressionAttributeValues={
-                    ':tp': 'plan',
-                    ':sk': 'META'
-                },
-                Limit=limit
-            )
+        """
+        List all subscription plans using efficient Query
 
+        Uses Query with PK=PLAN instead of Scan for better performance.
+        """
+        try:
             plans = []
-            for item in response.get('Items', []):
-                plans.append(self._transform_to_long_format(item))
+            last_evaluated_key = None
+
+            # Query with PK=PLAN to get all plans efficiently
+            while True:
+                query_kwargs = {
+                    'KeyConditionExpression': 'PK = :pk AND begins_with(SK, :sk)',
+                    'ExpressionAttributeValues': {
+                        ':pk': 'PLAN',
+                        ':sk': 'META#'
+                    }
+                }
+
+                if last_evaluated_key:
+                    query_kwargs['ExclusiveStartKey'] = last_evaluated_key
+
+                response = await self.table.query(**query_kwargs)
+
+                for item in response.get('Items', []):
+                    plans.append(self._transform_to_long_format(item))
+
+                # Check if there are more items to query
+                last_evaluated_key = response.get('LastEvaluatedKey')
+                if not last_evaluated_key:
+                    break
 
             return plans
 
@@ -69,8 +82,8 @@ class AsyncSubscriptionPlanRepository:
         timestamp = int(time.time())
 
         item = {
-            'PK': f'PLAN#{plan_id}',
-            'SK': 'META',
+            'PK': 'PLAN',
+            'SK': f'META#{plan_id}',
             'tp': 'plan',
             'dat': {
                 'nm': plan_data['name'],
@@ -128,8 +141,8 @@ class AsyncSubscriptionPlanRepository:
 
         response = await self.table.update_item(
             Key={
-                'PK': f'PLAN#{plan_id}',
-                'SK': 'META'
+                'PK': 'PLAN',
+                'SK': f'META#{plan_id}'
             },
             UpdateExpression=update_expression,
             ExpressionAttributeNames=expression_attribute_names,
@@ -144,8 +157,8 @@ class AsyncSubscriptionPlanRepository:
         try:
             await self.table.delete_item(
                 Key={
-                    'PK': f'PLAN#{plan_id}',
-                    'SK': 'META'
+                    'PK': 'PLAN',
+                    'SK': f'META#{plan_id}'
                 }
             )
             return True
@@ -155,7 +168,7 @@ class AsyncSubscriptionPlanRepository:
     def _transform_to_long_format(self, item: Dict) -> Dict:
         """Transform DynamoDB item to long format"""
         dat = item.get('dat', {})
-        plan_id = int(item['PK'].replace('PLAN#', ''))
+        plan_id = int(item['SK'].replace('META#', ''))
 
         return {
             'id': plan_id,
