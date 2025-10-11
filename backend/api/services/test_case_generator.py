@@ -40,6 +40,7 @@ class TestCaseGenerator:
         'chr': chr,
         'pow': pow,
         'divmod': divmod,
+        'hash': hash,  # Allow hash for duplicate detection
         'print': print,  # Allow print for debugging
         '__import__': __import__,  # Allow __import__ for module imports
     }
@@ -62,6 +63,8 @@ class TestCaseGenerator:
         # Built-in names that are always available
         builtin_names = set(TestCaseGenerator.SAFE_BUILTINS.keys())
         builtin_names.update(['True', 'False', 'None'])
+        # Add safe modules that will be injected at execution time
+        builtin_names.update(TestCaseGenerator.SAFE_MODULES)
 
         # Track defined names at module level and function level
         class NameChecker(ast.NodeVisitor):

@@ -276,6 +276,62 @@ class AsyncUserRepository:
         except ClientError:
             return []
 
+    async def create_user(self, user_data: Dict) -> Dict:
+        """Create a new user"""
+        user_id = user_data['user_id']
+        email = user_data['email']
+        timestamp = int(time.time())
+
+        # Build the dat map with short field names
+        dat = {
+            'em': email,
+            'nm': user_data.get('name', ''),
+            'pic': user_data.get('picture', ''),
+            'gid': user_data.get('google_id', ''),
+            'plan': user_data.get('subscription_plan_id'),
+            'act': user_data.get('is_active', True),
+            'stf': user_data.get('is_staff', False),
+            'pra': user_data.get('privacy_agreed_at'),
+            'tra': user_data.get('terms_agreed_at'),
+            'coa': user_data.get('code_ownership_agreed_at')
+        }
+
+        # Create the DynamoDB item
+        item = {
+            'PK': f'USR#{user_id}',
+            'SK': 'META',
+            'tp': 'usr',
+            'dat': dat,
+            'crt': timestamp,
+            'upd': timestamp,
+            'GSI1PK': f'EMAIL#{email}',
+            'GSI1SK': f'USR#{user_id}'
+        }
+
+        # Add GSI2 for Google ID if provided
+        if user_data.get('google_id'):
+            item['GSI2PK'] = f'GID#{user_data["google_id"]}'
+
+        await self.table.put_item(Item=item)
+
+        # Return normalized user data
+        return {
+            'id': user_id,
+            'user_id': user_id,
+            'email': email,
+            'name': dat['nm'],
+            'picture': dat['pic'],
+            'google_id': dat['gid'],
+            'subscription_plan_id': dat['plan'],
+            'is_active': dat['act'],
+            'is_staff': dat['stf'],
+            'privacy_agreed_at': dat['pra'],
+            'terms_agreed_at': dat['tra'],
+            'code_ownership_agreed_at': dat['coa'],
+            'created_at': timestamp,
+            'updated_at': timestamp
+        }
+
     async def get_user_by_email(self, email: str) -> Optional[Dict]:
         """Get user by email using GSI1"""
         try:
@@ -284,6 +340,46 @@ class AsyncUserRepository:
                 KeyConditionExpression='GSI1PK = :pk',
                 ExpressionAttributeValues={
                     ':pk': f'EMAIL#{email}'
+                },
+                Limit=1
+            )
+
+            items = response.get('Items', [])
+            if not items:
+                return None
+
+            item = items[0]
+            user_id = int(item['PK'].replace('USR#', ''))
+            dat = item.get('dat', {})
+
+            return {
+                'id': user_id,
+                'user_id': user_id,
+                'email': dat.get('em', ''),
+                'name': dat.get('nm', ''),
+                'picture': dat.get('pic', ''),
+                'google_id': dat.get('gid', ''),
+                'is_active': dat.get('act', True),
+                'is_staff': dat.get('stf', False),
+                'subscription_plan_id': dat.get('plan'),
+                'privacy_agreed_at': dat.get('pra'),
+                'terms_agreed_at': dat.get('tra'),
+                'code_ownership_agreed_at': dat.get('coa'),
+                'created_at': item.get('crt'),
+                'updated_at': item.get('upd'),
+            }
+
+        except ClientError:
+            return None
+
+    async def get_user_by_google_id(self, google_id: str) -> Optional[Dict]:
+        """Get user by Google ID using GSI2"""
+        try:
+            response = await self.table.query(
+                IndexName='GSI2',
+                KeyConditionExpression='GSI2PK = :pk',
+                ExpressionAttributeValues={
+                    ':pk': f'GID#{google_id}'
                 },
                 Limit=1
             )
@@ -361,11 +457,28 @@ class AsyncUserRepository:
 
             # Map of field names to short names
             field_mapping = {
+                'name': 'nm',
+                'picture': 'pic',
+                'google_id': 'gid',
                 'subscription_plan_id': 'plan',
+                'is_active': 'act',
+                'is_staff': 'stf',
+                'email': 'em',
                 'privacy_agreed_at': 'pra',
                 'terms_agreed_at': 'tra',
                 'code_ownership_agreed_at': 'coa',
             }
+
+            # Handle email update (requires GSI1PK update)
+            if 'email' in updates:
+                update_parts.append('GSI1PK = :gsi1pk')
+                attr_values[':gsi1pk'] = f'EMAIL#{updates["email"]}'
+
+            # Handle google_id update (requires GSI2PK update/removal)
+            if 'google_id' in updates:
+                if updates['google_id']:
+                    update_parts.append('GSI2PK = :gsi2pk')
+                    attr_values[':gsi2pk'] = f'GID#{updates["google_id"]}'
 
             # Update dat fields
             for field_name, short_name in field_mapping.items():

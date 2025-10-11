@@ -646,18 +646,49 @@ IMPORTANT REQUIREMENTS:
 
 Your generated code WILL BE REJECTED if it contains ANY undefined names or variables.
 
-MANDATORY RULES FOR ALL VARIABLES AND CONSTANTS:
-1. **ALWAYS define variables BEFORE using them** - no exceptions!
-2. **NEVER use undefined constants** like MAX_N, MAX_VAL, MIN_VAL, LIMIT, etc.
-3. **ALWAYS define constants at the TOP of your function or nested function**
-4. **Check EVERY variable name** - if it's not defined earlier, you MUST define it first
+MANDATORY RULES - FOLLOW EXACTLY OR YOUR CODE WILL BE REJECTED:
+
+1. **MODULES AND FUNCTIONS ARE AUTO-PROVIDED** - The following are automatically available:
+
+   **Modules (no import needed):**
+   - `random` (for random.randint, random.choice, etc.)
+   - `math` (for math.sqrt, math.pow, etc.)
+   - `string` (for string.ascii_lowercase, etc.)
+   - `itertools` (for itertools.permutations, etc.)
+   - `collections` (for collections.Counter, etc.)
+
+   **Built-in functions (always available):**
+   - Common: `range`, `len`, `str`, `int`, `float`, `list`, `dict`, `set`, `tuple`
+   - Iteration: `enumerate`, `zip`, `map`, `filter`, `sorted`, `reversed`
+   - Math: `sum`, `min`, `max`, `abs`, `round`, `pow`
+   - **Hashing: `hash`** (for duplicate detection with `seen = set()`)
+   - Others: `all`, `any`, `ord`, `chr`, `print`
+
+   ✅ You can use these directly WITHOUT importing
+   ✅ Example: `val = random.randint(1, 100)` works
+   ✅ Example: `case_hash = hash(case)` works for duplicate detection
+
+2. **DEFINE CONSTANTS FIRST** - Start with ALL constants from problem constraints:
+   ```python
+   def generate_test_cases(n, size='mixed'):
+       # Define ALL constants at the top
+       MAX_N = 100000
+       MAX_VAL = 1000000000
+       MIN_VAL = 1
+   ```
+   - Define MAX_N, MAX_VAL, MIN_VAL, etc. immediately
+   - Do NOT skip this step
+
+3. **ALWAYS define variables BEFORE using them** - no exceptions!
+
+4. **NEVER use undefined constants** like MAX_N, MAX_VAL without defining them
+
+5. **Check EVERY variable name** - if it's not defined earlier, you MUST define it first
 
 CORRECT PATTERN (ALWAYS DO THIS):
 ```python
 def generate_test_cases(n, size='mixed'):
-    import random
-
-    # ✅ CORRECT: Define ALL constants at the top
+    # ✅ CORRECT: Define ALL constants at the top (NO import needed - modules are auto-provided)
     MAX_N = 100000
     MAX_VAL = 1000000000
     MIN_VAL = 1
@@ -674,6 +705,7 @@ def generate_test_cases(n, size='mixed'):
             max_size = MAX_N  # ✅ Can use parent scope variable
             max_value = MAX_VAL
 
+        # ✅ random module is auto-provided, no import needed
         size = random.randint(1, max_size)
         arr = [random.randint(MIN_VAL, max_value) for _ in range(size)]
         return "{{}}\\n{{}}".format(size, ' '.join(map(str, arr)))
@@ -687,35 +719,52 @@ def generate_test_cases(n, size='mixed'):
 WRONG PATTERNS (NEVER DO THIS):
 ```python
 # ❌ WRONG: Using MAX_VAL without defining it
-val = random.randint(1, MAX_VAL)  # This will cause "Undefined name: MAX_VAL" error
+def generate_test_cases(n, size='mixed'):
+    val = random.randint(1, MAX_VAL)  # ERROR: "Undefined name: MAX_VAL"
+    # FIX: Define MAX_VAL at the top first
+
+# ✅ CORRECT: Define constants first
+def generate_test_cases(n, size='mixed'):
+    MAX_VAL = 1000  # ✅ Define first!
+    val = random.randint(1, MAX_VAL)  # ✅ Now it works
 
 # ❌ WRONG: Using constants without defining them first
 arr = [random.randint(1, MAX_VALUE) for _ in range(MAX_SIZE)]
+# FIX: Define MAX_VALUE and MAX_SIZE at the top
 
 # ❌ WRONG: Typo in variable name
 max_val = 1000
 val = random.randint(1, max_value)  # Typo: max_value vs max_val
+# FIX: Use consistent variable names
 
 # ❌ WRONG: Using variable before defining
 result.append(case)  # Error if result was never defined
 result = []
+# FIX: Define result = [] BEFORE using result.append()
 ```
 
 STEP-BY-STEP CHECKLIST BEFORE WRITING CODE:
-1. ✅ Identify ALL constants from problem constraints (e.g., max N, max value, min value)
-2. ✅ Define these constants at the TOP of your function
-3. ✅ For each nested function, define its own constants OR use parent scope variables
-4. ✅ DOUBLE-CHECK every variable name - is it defined before use?
-5. ✅ VERIFY no typos in variable names
-6. ✅ Import all needed modules (random, math, string, etc.) at the START
+1. ✅ **FIRST: Define constants** - Identify and define ALL constants from problem constraints (e.g., MAX_N, MAX_VAL, MIN_VAL)
+2. ✅ For each nested function, define its own constants OR use parent scope variables
+3. ✅ DOUBLE-CHECK every variable name - is it defined before use?
+4. ✅ VERIFY no typos in variable names
+5. ✅ Remember: random, math, string, itertools, collections are auto-provided (no import needed)
 
 VALIDATION CHECKS YOUR CODE MUST PASS:
-- ✅ No undefined variables or constants
-- ✅ All imports at the top
-- ✅ All constants defined before use
+- ✅ No undefined variables or constants (e.g., MAX_VAL must be defined before use)
+- ✅ All constants defined at the TOP of the function
 - ✅ No scope errors
-- ✅ No typos in variable names
+- ✅ No typos in variable names (max_val vs max_value)
 - ✅ Syntactically correct Python
+
+COMMON VALIDATION ERRORS TO AVOID:
+❌ "Undefined name detected: 'MAX_VAL' at line X"
+   → This means you used MAX_VAL without defining it first!
+   → FIX: Define MAX_VAL at the top of your function
+
+❌ "Undefined name detected: 'result' at line X"
+   → This means you used a variable before defining it!
+   → FIX: Define result = [] before using result.append()
 
 CRITICAL: Return ONLY executable Python code. Do NOT include:
 - Markdown code blocks (```python or ```)
@@ -738,10 +787,9 @@ Suppose the problem requires:
 Then your generator should look like:
 '''
 def generate_test_cases(n, size='mixed'):
-    import random
-
     # ✅ IMPORTANT: Define all constants from constraints at the TOP
-    # Even though not used in this example, if you need MAX_N or MAX_VAL, define them here:
+    # random module is auto-provided, no import needed
+    # If you need MAX_N or MAX_VAL, define them here:
     # MAX_N = 100000
     # MAX_VAL = 1000000000
 
@@ -881,9 +929,8 @@ Suppose the problem requires:
 Then your generator should look like:
 '''
 def generate_test_cases(n, size='mixed'):
-    import random
-
     # ✅ IMPORTANT: Define all constants from constraints at the TOP
+    # random module is auto-provided, no import needed
     MAX_LENGTH = 1000000
     ALPHABET = 'abcdefghijklmnopqrstuvwxyz'
 
@@ -991,7 +1038,7 @@ def generate_test_cases(n, size='mixed'):
 ⚠️ FINAL REMINDER BEFORE YOU START:
 1. Define ALL constants at the TOP of your function (MAX_N, MAX_VAL, MIN_VAL, etc.)
 2. NEVER use undefined variables - check EVERY variable name
-3. Import all modules at the START (import random, import math, etc.)
+3. random, math, string, itertools, collections are AUTO-PROVIDED (no import needed)
 4. DOUBLE-CHECK for typos in variable names
 5. If you use a constant, it MUST be defined earlier in the code
 
