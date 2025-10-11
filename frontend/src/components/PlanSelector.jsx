@@ -152,6 +152,23 @@ const PlanSelector = ({ onSelectPlan, selectedPlan = 'Free', showComingSoon = tr
           min-width: 250px;
         }
 
+        /* Mobile responsiveness */
+        @media (max-width: 768px) {
+          .plan-selector {
+            padding: 10px;
+          }
+
+          .plans-grid {
+            flex-direction: column;
+            gap: 15px;
+          }
+
+          .plan-card {
+            max-width: 100%;
+            min-width: 100%;
+          }
+        }
+
         .plan-card:hover:not(.disabled) {
           border-color: #4285f4;
           box-shadow: 0 4px 12px rgba(66, 133, 244, 0.2);

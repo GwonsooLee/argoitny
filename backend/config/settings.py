@@ -415,9 +415,20 @@ CACHE_TTL = config.get_dict('cache.ttl', default={
     'LONG': 60 * 30,
 })
 
+# ============================================
+# Django DynamoDB Configuration
+# ============================================
+# Dedicated DynamoDB table for Django-related data (sessions, celery results, etc.)
+DJANGO_DYNAMODB_TABLE_NAME = config.get(
+    'django.dynamodb_table_name',
+    env_var='DJANGO_DYNAMODB_TABLE_NAME',
+    default='algoitny_django'
+)
+
 # Session Configuration
-SESSION_ENGINE = 'django.contrib.sessions.backends.cache'
-SESSION_CACHE_ALIAS = 'default'
+# Using DynamoDB for async session storage
+SESSION_ENGINE = 'api.sessions'
+DYNAMODB_SESSION_TABLE_NAME = DJANGO_DYNAMODB_TABLE_NAME  # Use Django-specific table
 SESSION_COOKIE_AGE = config.get_int('session.cookie_age', env_var='SESSION_COOKIE_AGE', default=3600)
 SESSION_SAVE_EVERY_REQUEST = config.get_bool('session.save_every_request', default=False)
 SESSION_COOKIE_SECURE = config.get_bool('session.cookie_secure', env_var='SESSION_COOKIE_SECURE', default=False)
@@ -478,9 +489,25 @@ else:
         default=f'sqs://{AWS_ACCESS_KEY_ID}:{AWS_SECRET_ACCESS_KEY}@'
     )
 
-# CELERY_RESULT_BACKEND disabled - not using Celery result backend
-# Job state is tracked in DynamoDB (Job tables), not in Celery result backend
-CELERY_RESULT_BACKEND = None
+# Celery Result Backend Configuration
+# Using DynamoDB for task result storage
+USE_CELERY_RESULT_BACKEND = config.get_bool(
+    'celery.use_result_backend',
+    env_var='USE_CELERY_RESULT_BACKEND',
+    default=True  # Enabled - Store Celery task results in DynamoDB
+)
+
+if USE_CELERY_RESULT_BACKEND:
+    # DynamoDB result backend
+    CELERY_RESULT_BACKEND = 'api.celery_backends.dynamodb.DynamoDBBackend'
+    CELERY_RESULT_EXPIRES = config.get_int(
+        'celery.result_expires',
+        env_var='CELERY_RESULT_EXPIRES',
+        default=86400  # 24 hours
+    )
+else:
+    # Disabled - Job state tracked in DynamoDB Job tables
+    CELERY_RESULT_BACKEND = None
 
 # Serialization
 CELERY_ACCEPT_CONTENT = ['application/json']

@@ -616,6 +616,9 @@ def execute_code_task(self, code, language, platform=None, problem_identifier=No
                     'sts': result.get('status', '')  # status
                 })
 
+            # Encode code as base64 before storing
+            encoded_code = base64.b64encode(code.encode('utf-8')).decode('utf-8')
+
             # Prepare history data with short field names for DynamoDB
             history_data = {
                 'uid': user_id,  # user_id
@@ -625,13 +628,14 @@ def execute_code_task(self, code, language, platform=None, problem_identifier=No
                 'pno': problem_identifier,  # problem_number
                 'ptt': problem_title,  # problem_title
                 'lng': language,  # language
-                'cod': code,  # code
+                'cod': encoded_code,  # code (base64 encoded)
                 'res': 'Passed' if failed_count == 0 else 'Failed',  # result_summary
                 'psc': passed_count,  # passed_count
                 'fsc': failed_count,  # failed_count
                 'toc': len(test_cases),  # total_count
                 'pub': is_code_public,  # is_code_public
-                'trs': dynamodb_test_results  # test_results
+                'trs': dynamodb_test_results,  # test_results
+                'tid': self.request.id  # task_id (Celery task ID)
             }
 
             # Create history in DynamoDB
@@ -941,10 +945,11 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
                         updates = {
                             'title': problem_metadata['title'],
                             'constraints': problem_metadata.get('constraints', ''),
+                            'tags': problem_metadata.get('tags', []),
                             'metadata': metadata
                         }
                         problem_repo.update_problem(platform, problem_id, updates)
-                        logger.info(f"Updated problem {platform}/{problem_id} with metadata: {problem_metadata['title']}")
+                        logger.info(f"Updated problem {platform}/{problem_id} with metadata: {problem_metadata['title']}, tags: {problem_metadata.get('tags', [])}")
                     else:
                         # Create problem with metadata
                         metadata = {
@@ -967,12 +972,12 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
                                 'constraints': problem_metadata.get('constraints', ''),
                                 'solution_code': '',  # Will be added in Step 2
                                 'language': 'cpp',
-                                'tags': [],
+                                'tags': problem_metadata.get('tags', []),
                                 'is_completed': False,
                                 'metadata': metadata
                             }
                         )
-                        logger.info(f"Created problem {platform}/{problem_id} with metadata")
+                        logger.info(f"Created problem {platform}/{problem_id} with metadata, tags: {problem_metadata.get('tags', [])}")
 
                 except Exception as e:
                     logger.error(f"Failed to update problem with metadata: {e}")
@@ -1051,6 +1056,7 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
                         'constraints': problem_info['constraints'],
                         'solution_code': problem_info['solution_code'],
                         'language': 'cpp',
+                        'tags': problem_info.get('tags', []),
                         'is_completed': False,  # Keep as draft
                         'needs_review': problem_info.get('needs_review', False),  # Save to main data (dat.nrv)
                         'metadata': metadata
@@ -1086,7 +1092,7 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
                             'constraints': problem_info['constraints'],
                             'solution_code': problem_info['solution_code'],
                             'language': 'cpp',
-                            'tags': [],
+                            'tags': problem_info.get('tags', []),
                             'is_completed': False,  # Draft state
                             'needs_review': problem_info.get('needs_review', False),  # Save to main data (dat.nrv)
                             'metadata': metadata

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   Box,
   Typography,
@@ -16,7 +16,7 @@ import {
   Alert
 } from '@mui/material';
 import { PlayArrow as PlayArrowIcon } from '@mui/icons-material';
-import { apiPost } from '../utils/api-client';
+import { apiPost, apiGet } from '../utils/api-client';
 import { API_ENDPOINTS } from '../config/api';
 import { getUser, isAuthenticated } from '../utils/auth';
 
@@ -57,6 +57,12 @@ function CodeEditor({ platform, problemId, onTestResults, hintsLoading = false }
   const [isCodePublic, setIsCodePublic] = useState(false);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
   const [progress, setProgress] = useState({ current: 0, total: 0 });
+  const [currentTaskId, setCurrentTaskId] = useState(null);
+
+  // Use refs to track intervals, timeouts, and task_id
+  const pollingIntervalRef = useRef(null);
+  const pollingTimeoutRef = useRef(null);
+  const taskIdRef = useRef(null);
 
   useEffect(() => {
     if (code.trim()) {
@@ -65,11 +71,121 @@ function CodeEditor({ platform, problemId, onTestResults, hintsLoading = false }
     }
   }, [code]);
 
+  // Cleanup polling interval and timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
+      if (pollingTimeoutRef.current) {
+        clearTimeout(pollingTimeoutRef.current);
+        pollingTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
   const showSnackbar = (message, severity = 'info') => {
     setSnackbar({ open: true, message, severity });
   };
 
+  const stopPolling = (shouldResetLoading = true) => {
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+    }
+    if (pollingTimeoutRef.current) {
+      clearTimeout(pollingTimeoutRef.current);
+      pollingTimeoutRef.current = null;
+    }
+    if (shouldResetLoading) {
+      setLoading(false);
+    }
+    setCurrentTaskId(null);
+    taskIdRef.current = null;
+  };
+
+  const pollForResults = async () => {
+    try {
+      // Fetch history for this specific task_id (use ref to avoid closure issues)
+      const taskId = taskIdRef.current;
+      if (!taskId) {
+        console.error('No task_id available for polling');
+        return;
+      }
+
+      const response = await apiGet(
+        `${API_ENDPOINTS.history}?my_only=true&task_id=${taskId}&limit=1`,
+        { requireAuth: true }
+      );
+
+      if (!response.ok) {
+        console.error('Failed to fetch history');
+        return;
+      }
+
+      const data = await response.json();
+      const results = data.results || [];
+
+      // Get the execution matching this task_id
+      // There should be exactly one result since we filter by task_id
+      const recentExecution = results[0];
+
+      if (recentExecution) {
+        // Found a result! Stop polling
+        stopPolling();
+
+        // Fetch detailed results
+        const detailResponse = await apiGet(
+          API_ENDPOINTS.historyDetail(recentExecution.id),
+          { requireAuth: true }
+        );
+
+        if (detailResponse.ok) {
+          const detailData = await detailResponse.json();
+
+          // Update progress
+          setProgress({
+            current: detailData.passed_count + detailData.failed_count,
+            total: detailData.total_count
+          });
+
+          // Transform data for TestResults component
+          const resultsForDisplay = {
+            results: detailData.test_results || [],
+            summary: {
+              passed: detailData.passed_count || 0,
+              failed: detailData.failed_count || 0,
+              total: detailData.total_count || 0
+            },
+            execution_id: detailData.id
+          };
+
+          // Pass results to parent
+          onTestResults(resultsForDisplay);
+
+          // Show success/failure message
+          if (detailData.failed_count === 0) {
+            showSnackbar(`All ${detailData.total_count} test cases passed!`, 'success');
+          } else {
+            showSnackbar(
+              `${detailData.passed_count}/${detailData.total_count} test cases passed`,
+              'warning'
+            );
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error polling for results:', error);
+    }
+  };
+
   const handleExecute = async () => {
+    // Prevent double-click
+    if (loading) {
+      return;
+    }
+
     if (!code.trim()) {
       showSnackbar('Please enter your code', 'warning');
       return;
@@ -103,21 +219,42 @@ function CodeEditor({ platform, problemId, onTestResults, hintsLoading = false }
       }
 
       const data = await response.json();
+      console.log('Execute API response:', data);
 
-      // TODO: Code execution is async but Celery result backend was removed
-      // Need to implement one of the following:
-      // 1. Make execution synchronous (wait for results)
-      // 2. Create new polling endpoint that queries DynamoDB SearchHistory
-      // 3. Use WebSockets for real-time updates
-      // For now, showing a message that execution is in progress
+      // Extract task_id
+      const taskId = data.task_id;
+      console.log('Task ID:', taskId);
+      if (!taskId) {
+        console.error('Response data:', data);
+        throw new Error('No task_id returned from server');
+      }
 
-      setLoading(false);
-      showSnackbar('Code execution started. Please refresh to see results.', 'info');
+      showSnackbar('Code execution started. Waiting for results...', 'info');
+
+      // Clear any existing polling (but keep loading state)
+      stopPolling(false);
+
+      // Store task_id for polling AFTER clearing (use both state and ref to avoid closure issues)
+      setCurrentTaskId(taskId);
+      taskIdRef.current = taskId;
+      console.log('Set currentTaskId to:', taskId);
+
+      // Keep loading state true during polling
+      setLoading(true);
+
+      // Poll every 2 seconds
+      pollingIntervalRef.current = setInterval(pollForResults, 2000);
+
+      // Stop polling after 2 minutes (timeout)
+      pollingTimeoutRef.current = setTimeout(() => {
+        stopPolling();
+        showSnackbar('Execution timeout. Please check your history.', 'warning');
+      }, 120000);
 
     } catch (error) {
       console.error('Error executing code:', error);
+      stopPolling();
       showSnackbar(error.message || 'An error occurred while executing your code', 'error');
-      setLoading(false);
     }
   };
 
@@ -230,7 +367,7 @@ function CodeEditor({ platform, problemId, onTestResults, hintsLoading = false }
 
       <Snackbar
         open={snackbar.open}
-        autoHideDuration={4000}
+        autoHideDuration={6000}
         onClose={() => setSnackbar({ ...snackbar, open: false })}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       >

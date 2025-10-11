@@ -47,7 +47,7 @@ services:
       - /app/.venv
     networks:
       - algoitny-network
-    command: sh -c "python manage.py migrate && python scripts/init_dynamodb.py && python scripts/seed_default_plans.py"
+    command: sh -c "python manage.py migrate && python scripts/init_dynamodb.py && python scripts/init_django_dynamodb.py && python scripts/seed_default_plans.py"
     restart: "no"
 
   backend:

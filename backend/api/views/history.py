@@ -27,6 +27,7 @@ class SearchHistoryListView(APIView):
             cursor: Pagination cursor (base64-encoded last_evaluated_key)
             limit: Number of items to fetch (default: 20, max: 100)
             my_only: Show only current user's history (default: false)
+            task_id: Filter by specific Celery task ID (optional)
 
         Returns:
             {
@@ -59,6 +60,7 @@ class SearchHistoryListView(APIView):
             # Hard limit of 100 items per request
             limit = min(int(request.query_params.get('limit', 20)), 100)
             my_only = request.query_params.get('my_only', 'false').lower() == 'true'
+            task_id = request.query_params.get('task_id')  # Optional task_id filter
 
             # Decode cursor if provided
             last_evaluated_key = None
@@ -153,6 +155,10 @@ class SearchHistoryListView(APIView):
                         limit=limit,
                         last_evaluated_key=last_evaluated_key
                     )
+
+            # Filter by task_id if provided
+            if task_id:
+                items = [item for item in items if item.get('dat', {}).get('tid') == task_id]
 
             # Transform DynamoDB items to serializer format
             import logging

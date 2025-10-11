@@ -46,6 +46,7 @@ hiredis>=2.2.0  # C parser for Redis (performance boost)
 # API Integrations
 google-generativeai>=0.3.0
 requests>=2.31.0
+cloudscraper>=1.2.71  # Cloudflare bypass for web scraping
 pycurl>=7.45.0
 
 # AWS Services

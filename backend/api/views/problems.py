@@ -418,13 +418,14 @@ class ProblemDetailView(APIView):
 
     async def post(self, request, problem_id=None, platform=None, problem_identifier=None):
         """
-        Update problem samples and solution code
+        Update problem samples, solution code, and tags
         Admin only - requires authentication
 
         Request body:
             {
                 "user_samples": [{"input": "...", "output": "..."}],
-                "solution_code": "..."
+                "solution_code": "...",
+                "tags": ["tag1", "tag2", ...]
             }
 
         Returns:
@@ -457,6 +458,7 @@ class ProblemDetailView(APIView):
 
             user_samples = request.data.get('user_samples', [])
             solution_code = request.data.get('solution_code')
+            tags = request.data.get('tags')
 
             # Async DynamoDB operations
             async with AsyncDynamoDBClient.get_resource() as resource:
@@ -498,6 +500,11 @@ class ProblemDetailView(APIView):
                     update_parts.append('dat.sol = :solution')
                     expr_values[':solution'] = encoded_solution
 
+                # Update tags
+                if tags is not None:
+                    update_parts.append('dat.tag = :tags')
+                    expr_values[':tags'] = tags
+
                 if not update_parts:
                     return Response(
                         {'error': 'No valid fields to update provided'},
@@ -515,7 +522,7 @@ class ProblemDetailView(APIView):
                     ExpressionAttributeValues=expr_values
                 )
 
-                logger.info(f"Admin {user_email} updated problem {platform}#{problem_identifier}: samples={len(user_samples) if user_samples else 0}, solution_code={bool(solution_code)}")
+                logger.info(f"Admin {user_email} updated problem {platform}#{problem_identifier}: samples={len(user_samples) if user_samples else 0}, solution_code={bool(solution_code)}, tags={bool(tags)}")
 
                 # Get updated problem with test cases
                 updated_problem_response = await table.get_item(

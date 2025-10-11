@@ -93,6 +93,8 @@ function ProblemDetail({ platform, problemId, onBack }) {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editedSamples, setEditedSamples] = useState([]);
   const [editedSolutionCode, setEditedSolutionCode] = useState('');
+  const [editedTags, setEditedTags] = useState([]);
+  const [tagInput, setTagInput] = useState('');
   const [saving, setSaving] = useState(false);
 
   // LLM Configuration State for Regenerate Solution
@@ -510,6 +512,8 @@ function ProblemDetail({ platform, problemId, onBack }) {
     // Initialize with current values
     setEditedSamples(problem.metadata?.user_samples || []);
     setEditedSolutionCode(problem.solution_code || '');
+    setEditedTags(problem.tags || []);
+    setTagInput('');
     setEditDialogOpen(true);
   };
 
@@ -527,6 +531,25 @@ function ProblemDetail({ platform, problemId, onBack }) {
     setEditedSamples(newSamples);
   };
 
+  const handleAddTag = () => {
+    const trimmedTag = tagInput.trim().toLowerCase();
+    if (trimmedTag && !editedTags.includes(trimmedTag)) {
+      setEditedTags([...editedTags, trimmedTag]);
+      setTagInput('');
+    }
+  };
+
+  const handleRemoveTag = (tagToRemove) => {
+    setEditedTags(editedTags.filter(tag => tag !== tagToRemove));
+  };
+
+  const handleTagInputKeyPress = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleAddTag();
+    }
+  };
+
   const handleSaveEdit = async () => {
     setSaving(true);
     try {
@@ -535,7 +558,8 @@ function ProblemDetail({ platform, problemId, onBack }) {
 
       const response = await apiPost(`${API_ENDPOINTS.problems}${problem.platform}/${problem.problem_id}/`, {
         user_samples: validSamples,
-        solution_code: editedSolutionCode
+        solution_code: editedSolutionCode,
+        tags: editedTags
       }, { requireAuth: true });
 
       if (!response.ok) {
@@ -1851,8 +1875,58 @@ function ProblemDetail({ platform, problemId, onBack }) {
         </DialogTitle>
         <DialogContent>
           <Typography variant="body1" sx={{ mb: 2 }}>
-            Edit User-Provided Samples and Solution Code
+            Edit Tags, User-Provided Samples, and Solution Code
           </Typography>
+
+          {/* Tags Section */}
+          <Box sx={{ mb: 3 }}>
+            <Typography variant="subtitle2" gutterBottom sx={{ fontWeight: 600 }}>
+              Tags:
+            </Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+              Add algorithm/category tags for this problem (e.g., "dp", "greedy", "graphs")
+            </Typography>
+
+            {/* Display current tags */}
+            {editedTags.length > 0 && (
+              <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mb: 2 }}>
+                {editedTags.map((tag, idx) => (
+                  <Chip
+                    key={idx}
+                    label={tag}
+                    size="small"
+                    color="primary"
+                    variant="outlined"
+                    onDelete={() => handleRemoveTag(tag)}
+                    disabled={saving}
+                  />
+                ))}
+              </Box>
+            )}
+
+            {/* Tag input */}
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Add Tag"
+                placeholder="e.g., dp, greedy, graphs"
+                value={tagInput}
+                onChange={(e) => setTagInput(e.target.value)}
+                onKeyPress={handleTagInputKeyPress}
+                disabled={saving}
+              />
+              <Button
+                variant="outlined"
+                onClick={handleAddTag}
+                disabled={saving || !tagInput.trim()}
+              >
+                Add
+              </Button>
+            </Box>
+          </Box>
+
+          <Divider sx={{ my: 2 }} />
 
           {/* Solution Code Section */}
           <Box sx={{ mb: 3 }}>

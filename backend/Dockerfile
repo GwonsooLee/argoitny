@@ -65,6 +65,7 @@ COPY --chown=django:django gunicorn.conf.py ./
 COPY --chown=django:django config ./config
 COPY --chown=django:django api ./api
 COPY --chown=django:django scripts ./scripts
+COPY --chown=django:django legal_documents ./legal_documents
 
 # Create necessary directories and collect static files
 RUN mkdir -p /app/staticfiles /app/mediafiles /app/logs /app/tmp && \

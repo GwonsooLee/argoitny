@@ -30,7 +30,13 @@ from .views import (
     RegenerateSolutionView,
     GetTestCasesView,
 )
-from .views.account import UpdatePlanView, PlanUsageView, UserProfileView
+from .views.account import (
+    UpdatePlanView,
+    PlanUsageView,
+    UserProfileView,
+    SubmitConsentsView,
+    GetConsentsView
+)
 from .views.health import health_check, readiness_check, liveness_check
 from .views.admin import (
     UserManagementView,
@@ -104,6 +110,8 @@ urlpatterns = [
     path('account/me/', UserProfileView.as_view(), name='user-profile'),
     path('account/plan/', UpdatePlanView.as_view(), name='update-plan'),
     path('account/plan-usage/', PlanUsageView.as_view(), name='plan-usage'),
+    path('account/consents/', SubmitConsentsView.as_view(), name='submit-consents'),
+    path('account/consents/status/', GetConsentsView.as_view(), name='get-consents'),
 
     # Admin
     path('admin/users/', UserManagementView.as_view(), name='admin-users'),

@@ -195,6 +195,11 @@ function SearchHistory({ onRequestLogin }) {
     }
   };
 
+  const handleProblemClick = (item) => {
+    // Navigate to problem test page
+    window.location.href = `/test/${item.platform}/${item.problem_number}`;
+  };
+
   return (
     <Box sx={{ p: { xs: 2, sm: 3 } }}>
       <Paper sx={{ p: { xs: 2, sm: 3 } }}>
@@ -257,7 +262,19 @@ function SearchHistory({ onRequestLogin }) {
                   >
                     <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1.5 }}>
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flex: 1 }}>
-                        <Typography variant="subtitle2" sx={{ fontWeight: 600, fontSize: '0.875rem' }}>
+                        <Typography
+                          variant="subtitle2"
+                          sx={{
+                            fontWeight: 600,
+                            fontSize: '0.875rem',
+                            color: 'primary.main',
+                            cursor: 'pointer',
+                            '&:hover': {
+                              textDecoration: 'underline'
+                            }
+                          }}
+                          onClick={() => handleProblemClick(item)}
+                        >
                           {item.problem_title}
                         </Typography>
                         {item.has_hints && (
@@ -388,7 +405,18 @@ function SearchHistory({ onRequestLogin }) {
                         <TableCell>{item.problem_number}</TableCell>
                         <TableCell>
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                            {item.problem_title}
+                            <Typography
+                              sx={{
+                                color: 'primary.main',
+                                cursor: 'pointer',
+                                '&:hover': {
+                                  textDecoration: 'underline'
+                                }
+                              }}
+                              onClick={() => handleProblemClick(item)}
+                            >
+                              {item.problem_title}
+                            </Typography>
                             {item.has_hints && (
                               <Tooltip title="Hints available">
                                 <LightbulbIcon sx={{ fontSize: '1.125rem', color: '#f57c00' }} />

@@ -19,7 +19,8 @@ import {
   History as HistoryIcon,
   Add as AddIcon,
   Logout as LogoutIcon,
-  AdminPanelSettings as AdminIcon
+  AdminPanelSettings as AdminIcon,
+  Upgrade as UpgradeIcon
 } from '@mui/icons-material';
 
 import ProblemSearch from './components/ProblemSearch';
@@ -37,9 +38,10 @@ import TermsOfService from './components/TermsOfService';
 import PrivacyPolicy from './components/PrivacyPolicy';
 import AdminUserManagement from './components/AdminUserManagement';
 import AdminPlanManagement from './components/AdminPlanManagement';
-import PlanSelectionModal from './components/PlanSelectionModal';
+import ConsentModal from './components/ConsentModal';
+import UpgradePlanModal from './components/UpgradePlanModal';
 import { getUser, saveUser, logout, isAuthenticated, refreshToken } from './utils/auth';
-import { apiGet } from './utils/api-client';
+import { apiGet, apiPost } from './utils/api-client';
 import { API_ENDPOINTS } from './config/api';
 
 function App() {
@@ -54,7 +56,8 @@ function App() {
   const [anchorEl, setAnchorEl] = useState(null);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
   const [returnToView, setReturnToView] = useState(null);
-  const [showPlanModal, setShowPlanModal] = useState(false);
+  const [showConsentModal, setShowConsentModal] = useState(false);
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [planUsage, setPlanUsage] = useState(null);
 
   const fetchPlanUsage = async () => {
@@ -95,15 +98,23 @@ function App() {
           }
           return res.json();
         })
-        .then(data => {
+        .then(async data => {
           // Update user with latest data from server
           setUser(data);
           saveUser(data);
           setUserLoading(false);
 
-          // Check if user has subscription plan (but not for admin users)
-          if (!data.subscription_plan_name && !data.is_admin) {
-            setShowPlanModal(true);
+          // Check consent status (all users should have Free plan auto-assigned now)
+          try {
+            const consentsRes = await apiGet(API_ENDPOINTS.getConsents, { requireAuth: true });
+            if (consentsRes.ok) {
+              const consentsData = await consentsRes.json();
+              if (!consentsData.all_consents_given) {
+                setShowConsentModal(true);
+              }
+            }
+          } catch (err) {
+            console.error('Failed to check consent status:', err);
           }
         })
         .catch(err => {
@@ -120,9 +131,18 @@ function App() {
           // For other errors, keep using cached user data
           setUserLoading(false);
 
-          // Check if user has subscription plan (but not for admin users)
-          if (currentUser && !currentUser.subscription_plan_name && !currentUser.is_admin) {
-            setShowPlanModal(true);
+          // Check consent status even with cached user data
+          if (currentUser) {
+            apiGet(API_ENDPOINTS.getConsents, { requireAuth: true })
+              .then(res => res.json())
+              .then(consentsData => {
+                if (!consentsData.all_consents_given) {
+                  setShowConsentModal(true);
+                }
+              })
+              .catch(err => {
+                console.error('Failed to check consent status:', err);
+              });
           }
         });
 
@@ -137,7 +157,13 @@ function App() {
     const path = window.location.pathname;
 
     if (path === '/login') {
-      setCurrentView('login');
+      // If user is already logged in, redirect to home
+      if (isAuthenticated()) {
+        setCurrentView('search');
+        window.history.pushState({}, '', '/');
+      } else {
+        setCurrentView('login');
+      }
     } else if (path === '/register' && urlParams.has('draft_id')) {
       setCurrentView('register');
     } else if (path === '/register') {
@@ -264,13 +290,6 @@ function App() {
     setUser(userData);
     showSnackbar('Successfully logged in!', 'success');
 
-    // Check if user has subscription plan (but not for admin users)
-    if (!userData.subscription_plan_name && !userData.is_admin) {
-      setShowPlanModal(true);
-      // Don't navigate yet - wait for plan selection
-      return;
-    }
-
     // Fetch plan usage in background (non-blocking) after a delay
     setTimeout(() => {
       fetchPlanUsage().catch(err => {
@@ -279,6 +298,7 @@ function App() {
       });
     }, 500); // Wait 500ms to ensure tokens are ready
 
+    // Note: Consent check is already handled in GoogleLogin component
     // Return to the view user was trying to access
     if (returnToView) {
       setCurrentView(returnToView);
@@ -293,6 +313,35 @@ function App() {
       setCurrentView('search');
       window.history.pushState({}, '', '/');
     }
+  };
+
+  const handleConsentsComplete = async (consents) => {
+    try {
+      // Submit consents to backend
+      const res = await apiPost(API_ENDPOINTS.submitConsents, consents, { requireAuth: true });
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || 'Failed to save consents');
+      }
+
+      // Hide consent modal
+      setShowConsentModal(false);
+      showSnackbar('Consents saved successfully', 'success');
+    } catch (err) {
+      console.error('Consent submission error:', err);
+      throw err; // Re-throw to let ConsentModal handle the error
+    }
+  };
+
+  const handleConsentsCancel = () => {
+    // User declined consents - logout
+    logout();
+    setUser(null);
+    setShowConsentModal(false);
+    setCurrentView('login');
+    window.history.pushState({}, '', '/login');
+    showSnackbar('You must accept all terms to use the service', 'warning');
   };
 
   const handleRequestLogin = (targetView) => {
@@ -578,6 +627,28 @@ function App() {
                       Plan Management
                     </MenuItem>
                   ]}
+                  {!user.is_admin && (
+                    <>
+                      <Divider />
+                      <MenuItem
+                        onClick={() => {
+                          setAnchorEl(null);
+                          setShowUpgradeModal(true);
+                        }}
+                        sx={{
+                          bgcolor: 'primary.main',
+                          color: 'white',
+                          fontWeight: 600,
+                          '&:hover': {
+                            bgcolor: 'primary.dark',
+                          }
+                        }}
+                      >
+                        <UpgradeIcon sx={{ mr: 1 }} fontSize="small" />
+                        Upgrade Plan
+                      </MenuItem>
+                    </>
+                  )}
                   <Divider />
                   <MenuItem onClick={handleLogout}>
                     <LogoutIcon sx={{ mr: 1 }} fontSize="small" />
@@ -820,31 +891,29 @@ function App() {
         </Alert>
       </Snackbar>
 
-      {/* Plan Selection Modal - forced for users without plan */}
-      {showPlanModal && user && (
-        <PlanSelectionModal
-          open={showPlanModal}
+
+      {/* Consent Modal - required for all users */}
+      {showConsentModal && user && (
+        <ConsentModal
+          open={showConsentModal}
+          onComplete={handleConsentsComplete}
+          onCancel={handleConsentsCancel}
+        />
+      )}
+
+      {/* Upgrade Plan Modal */}
+      {showUpgradeModal && user && (
+        <UpgradePlanModal
+          open={showUpgradeModal}
           user={user}
           onComplete={(updatedUser) => {
             setUser(updatedUser);
-            setShowPlanModal(false);
-            showSnackbar('Subscription plan updated successfully', 'success');
-
-            // Navigate to the intended view after plan selection
-            if (returnToView) {
-              setCurrentView(returnToView);
-              const viewUrlMap = {
-                'history': '/history',
-                'problems': '/problems',
-                'register': '/register'
-              };
-              window.history.pushState({}, '', viewUrlMap[returnToView] || '/');
-              setReturnToView(null);
-            } else if (currentView === 'login') {
-              setCurrentView('search');
-              window.history.pushState({}, '', '/');
-            }
+            setShowUpgradeModal(false);
+            showSnackbar('Plan updated successfully', 'success');
+            // Fetch updated plan usage
+            fetchPlanUsage();
           }}
+          onCancel={() => setShowUpgradeModal(false)}
         />
       )}
     </Box>

@@ -213,3 +213,139 @@ resource "aws_cloudwatch_metric_alarm" "high_read_capacity" {
     ManagedBy   = "Terraform"
   }
 }
+
+# ============================================================================
+# Django/Celery DynamoDB Table
+# ============================================================================
+# Dedicated table for Django-related data:
+# - Session storage (Django sessions)
+# - Celery task results
+# - Cache storage (optional)
+#
+# Table Structure:
+#   PK: SESSION#{key}, TASK#{id}, CACHE#{key}
+#   SK: META (or timestamp-based)
+#   tp: Type attribute (session, task_result, cache) for TypeIndex GSI
+#   exp: TTL attribute for automatic expiration
+
+resource "aws_dynamodb_table" "algoitny_django" {
+  name           = "${var.project_name}_django"
+  billing_mode   = var.billing_mode
+  hash_key       = "PK"
+  range_key      = "SK"
+
+  # Enable deletion protection in production
+  deletion_protection_enabled = var.enable_deletion_protection
+
+  # Primary Key Attributes
+  attribute {
+    name = "PK"
+    type = "S"
+  }
+
+  attribute {
+    name = "SK"
+    type = "S"
+  }
+
+  # Type attribute for GSI (to query by type: session, task_result, cache)
+  attribute {
+    name = "tp"
+    type = "S"
+  }
+
+  # TypeIndex GSI: Query items by type (session, task_result, cache)
+  # Pattern: Query all sessions, all tasks, or all cache entries
+  #   - tp = "session" | "task_result" | "cache"
+  #   - SK = timestamp or META
+  global_secondary_index {
+    name            = "TypeIndex"
+    hash_key        = "tp"
+    range_key       = "SK"
+    projection_type = "ALL"
+  }
+
+  # DynamoDB Streams for event processing
+  stream_enabled   = var.enable_streams
+  stream_view_type = var.enable_streams ? var.stream_view_type : null
+
+  # Point-in-Time Recovery for data protection
+  point_in_time_recovery {
+    enabled = var.enable_point_in_time_recovery
+  }
+
+  # Server-side encryption (enabled by default with AWS managed key)
+  server_side_encryption {
+    enabled = true
+  }
+
+  # Time to Live (TTL) for automatic data expiration
+  # Used for:
+  # - Session expiration (based on SESSION_COOKIE_AGE)
+  # - Celery task result expiration (24 hours by default)
+  # - Cache entry expiration
+  ttl {
+    attribute_name = "exp"
+    enabled        = true
+  }
+
+  # Tags for resource management
+  tags = merge(
+    {
+      Name        = "${var.project_name}_django"
+      Environment = var.environment
+      Project     = var.project_name
+      ManagedBy   = "Terraform"
+      Purpose     = "Django/Celery data storage"
+    },
+    var.tags
+  )
+}
+
+# CloudWatch Alarms for Django Table
+
+# Alarm for Read Throttle Events
+resource "aws_cloudwatch_metric_alarm" "django_read_throttle_events" {
+  alarm_name          = "${var.project_name}-django-dynamodb-read-throttle"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "ReadThrottleEvents"
+  namespace           = "AWS/DynamoDB"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 10
+  alarm_description   = "This metric monitors DynamoDB read throttle events for Django table"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    TableName = aws_dynamodb_table.algoitny_django.name
+  }
+
+  tags = {
+    Environment = var.environment
+    ManagedBy   = "Terraform"
+  }
+}
+
+# Alarm for Write Throttle Events
+resource "aws_cloudwatch_metric_alarm" "django_write_throttle_events" {
+  alarm_name          = "${var.project_name}-django-dynamodb-write-throttle"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "WriteThrottleEvents"
+  namespace           = "AWS/DynamoDB"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 10
+  alarm_description   = "This metric monitors DynamoDB write throttle events for Django table"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    TableName = aws_dynamodb_table.algoitny_django.name
+  }
+
+  tags = {
+    Environment = var.environment
+    ManagedBy   = "Terraform"
+  }
+}

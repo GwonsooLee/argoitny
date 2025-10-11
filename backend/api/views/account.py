@@ -276,3 +276,161 @@ class PlanUsageView(APIView):
         logger.debug(f"Cached: {cache_key} (TTL: {ttl}s)")
 
         return Response(response_data, status=status.HTTP_200_OK)
+
+
+class SubmitConsentsView(APIView):
+    """Submit user consents for privacy, terms, and code ownership"""
+    authentication_classes = [CustomJWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    async def post(self, request):
+        """
+        Submit user consents
+
+        Request body:
+            {
+                "privacy_agreed": true,
+                "terms_agreed": true,
+                "code_ownership_agreed": true
+            }
+
+        Returns:
+            {
+                "message": "Consents saved successfully",
+                "consents": {
+                    "privacy_agreed_at": "2025-01-11T12:00:00Z",
+                    "terms_agreed_at": "2025-01-11T12:00:00Z",
+                    "code_ownership_agreed_at": "2025-01-11T12:00:00Z"
+                }
+            }
+        """
+        try:
+            # Get user email from JWT token
+            user_email = await sync_to_async(lambda: request.user.email)()
+
+            # Get consent flags from request
+            privacy_agreed = request.data.get('privacy_agreed', False)
+            terms_agreed = request.data.get('terms_agreed', False)
+            code_ownership_agreed = request.data.get('code_ownership_agreed', False)
+
+            # Validate that all consents are True
+            if not (privacy_agreed and terms_agreed and code_ownership_agreed):
+                return Response(
+                    {'error': 'All consents must be accepted to continue'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Get current timestamp
+            timestamp = int(timezone.now().timestamp())
+
+            # Initialize async repository
+            async with AsyncDynamoDBClient.get_resource() as resource:
+                table = await resource.Table(AsyncDynamoDBClient._table_name)
+                user_repo = AsyncUserRepository(table)
+
+                # Get user by email
+                user_dict = await user_repo.get_user_by_email(user_email)
+                if not user_dict:
+                    return Response(
+                        {'error': 'User not found'},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+
+                # Update consent timestamps
+                await user_repo.update_user(
+                    user_id=user_dict['user_id'],
+                    updates={
+                        'privacy_agreed_at': timestamp,
+                        'terms_agreed_at': timestamp,
+                        'code_ownership_agreed_at': timestamp
+                    }
+                )
+
+                # Get updated user
+                updated_user = await user_repo.get_user_by_email(user_email)
+
+            # Format timestamps for response
+            consent_timestamps = {
+                'privacy_agreed_at': updated_user.get('privacy_agreed_at'),
+                'terms_agreed_at': updated_user.get('terms_agreed_at'),
+                'code_ownership_agreed_at': updated_user.get('code_ownership_agreed_at')
+            }
+
+            return Response(
+                {
+                    'message': 'Consents saved successfully',
+                    'consents': consent_timestamps
+                },
+                status=status.HTTP_200_OK
+            )
+
+        except Exception as e:
+            logger.error(f'Error saving consents: {e}')
+            return Response(
+                {'error': f'Failed to save consents: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class GetConsentsView(APIView):
+    """Get user's consent status"""
+    authentication_classes = [CustomJWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    async def get(self, request):
+        """
+        Get user's consent status
+
+        Returns:
+            {
+                "privacy_agreed_at": "2025-01-11T12:00:00Z" or null,
+                "terms_agreed_at": "2025-01-11T12:00:00Z" or null,
+                "code_ownership_agreed_at": "2025-01-11T12:00:00Z" or null,
+                "all_consents_given": true/false
+            }
+        """
+        try:
+            # Get user email from JWT token
+            user_email = await sync_to_async(lambda: request.user.email)()
+
+            # Initialize async repository
+            async with AsyncDynamoDBClient.get_resource() as resource:
+                table = await resource.Table(AsyncDynamoDBClient._table_name)
+                user_repo = AsyncUserRepository(table)
+
+                # Get user by email
+                user_dict = await user_repo.get_user_by_email(user_email)
+                if not user_dict:
+                    return Response(
+                        {'error': 'User not found'},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+
+            # Extract consent timestamps
+            privacy_agreed_at = user_dict.get('privacy_agreed_at')
+            terms_agreed_at = user_dict.get('terms_agreed_at')
+            code_ownership_agreed_at = user_dict.get('code_ownership_agreed_at')
+
+            # Check if all consents are given
+            all_consents_given = all([
+                privacy_agreed_at is not None,
+                terms_agreed_at is not None,
+                code_ownership_agreed_at is not None
+            ])
+
+            return Response(
+                {
+                    'privacy_agreed_at': privacy_agreed_at,
+                    'terms_agreed_at': terms_agreed_at,
+                    'code_ownership_agreed_at': code_ownership_agreed_at,
+                    'all_consents_given': all_consents_given
+                },
+                status=status.HTTP_200_OK
+            )
+
+        except Exception as e:
+            logger.error(f'Error fetching consent status: {e}')
+            return Response(
+                {'error': f'Failed to fetch consent status: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

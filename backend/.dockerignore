@@ -85,3 +85,7 @@ systemd/
 nginx/
 *.md
 AWS_*.md
+
+# Allow legal documents (exception to *.md rule)
+!legal_documents/
+!legal_documents/**/*.md

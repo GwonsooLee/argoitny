@@ -69,6 +69,13 @@ export const logout = () => {
 };
 
 /**
+ * Clear all authentication data (alias for removeTokens)
+ */
+export const clearAuth = () => {
+  removeTokens();
+};
+
+/**
  * Refresh access token using refresh token
  */
 export const refreshToken = async () => {

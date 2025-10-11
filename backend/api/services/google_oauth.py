@@ -75,7 +75,7 @@ class GoogleOAuthService:
         # Get all plans and find the right one
         all_plans = plan_repo.list_plans()
 
-        plan_id = 1  # Default to plan ID 1 (Free)
+        plan_id = None
 
         if is_admin_user:
             # Admin users get Admin plan automatically (ID: 3)
@@ -84,9 +84,9 @@ class GoogleOAuthService:
         elif plan_name:
             # Use provided plan name (must be active and not Admin)
             custom_plan = next((p for p in all_plans if p['name'] == plan_name and p.get('is_active', True) and p['name'] != 'Admin'), None)
-            plan_id = custom_plan['id'] if custom_plan else 1
+            plan_id = custom_plan['id'] if custom_plan else None
         else:
-            # Default to Free plan (ID: 1)
+            # Default to Free plan for new users
             free_plan = next((p for p in all_plans if p['name'] == 'Free' and p.get('is_active', True)), None)
             plan_id = free_plan['id'] if free_plan else 1
 
@@ -101,7 +101,7 @@ class GoogleOAuthService:
             if is_admin_user and existing_user.get('subscription_plan_id') != plan_id:
                 updates['subscription_plan_id'] = plan_id
 
-            # If existing user with no plan, assign plan
+            # If existing user with no plan, assign Free plan (or provided plan)
             if not existing_user.get('subscription_plan_id'):
                 updates['subscription_plan_id'] = plan_id
 
@@ -123,8 +123,10 @@ class GoogleOAuthService:
                     'google_id': google_user_info['google_id'],
                     'name': google_user_info['name'],
                     'picture': google_user_info['picture'],
-                    'subscription_plan_id': plan_id
                 }
+                # Assign plan if user doesn't have one (defaults to Free)
+                if not email_user.get('subscription_plan_id'):
+                    updates['subscription_plan_id'] = plan_id
                 updated_user = user_repo.update_user(email_user['user_id'], updates)
                 return updated_user, False
 
@@ -135,9 +137,9 @@ class GoogleOAuthService:
                 'name': google_user_info['name'],
                 'picture': google_user_info['picture'],
                 'google_id': google_user_info['google_id'],
-                'subscription_plan_id': plan_id,
                 'is_active': True,
                 'is_staff': is_admin_user,
+                'subscription_plan_id': plan_id,  # Assign Free plan by default
             }
 
             new_user = user_repo.create_user(user_data)

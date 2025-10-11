@@ -49,7 +49,10 @@ class UserRepository(BaseRepository):
             'gid': user_data.get('google_id', ''),
             'plan': user_data.get('subscription_plan_id'),
             'act': user_data.get('is_active', True),
-            'stf': user_data.get('is_staff', False)
+            'stf': user_data.get('is_staff', False),
+            'pra': user_data.get('privacy_agreed_at'),  # Privacy policy agreed at
+            'tra': user_data.get('terms_agreed_at'),  # Terms of service agreed at
+            'coa': user_data.get('code_ownership_agreed_at')  # Code ownership agreed at
         }
 
         # Create the DynamoDB item
@@ -155,7 +158,10 @@ class UserRepository(BaseRepository):
             'subscription_plan_id': 'plan',
             'is_active': 'act',
             'is_staff': 'stf',
-            'email': 'em'
+            'email': 'em',
+            'privacy_agreed_at': 'pra',
+            'terms_agreed_at': 'tra',
+            'code_ownership_agreed_at': 'coa'
         }
 
         # Build update expression for dat fields
@@ -285,6 +291,9 @@ class UserRepository(BaseRepository):
             'subscription_plan_id': dat.get('plan'),
             'is_active': dat.get('act', True),
             'is_staff': dat.get('stf', False),
+            'privacy_agreed_at': dat.get('pra'),
+            'terms_agreed_at': dat.get('tra'),
+            'code_ownership_agreed_at': dat.get('coa'),
             'created_at': item.get('crt'),
             'updated_at': item.get('upd')
         }
@@ -325,7 +334,10 @@ class UserRepository(BaseRepository):
                 'gid': user_data.get('google_id', ''),
                 'plan': user_data.get('subscription_plan_id'),
                 'act': user_data.get('is_active', True),
-                'stf': user_data.get('is_staff', False)
+                'stf': user_data.get('is_staff', False),
+                'pra': user_data.get('privacy_agreed_at'),
+                'tra': user_data.get('terms_agreed_at'),
+                'coa': user_data.get('code_ownership_agreed_at')
             }
 
             item = {

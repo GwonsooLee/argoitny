@@ -36,9 +36,9 @@ class SecurityHeadersMiddleware:
 
     def _add_security_headers(self, response):
         """Add security headers to response"""
-        # Set Cross-Origin-Opener-Policy to same-origin-allow-popups
-        # This allows Google OAuth popup/iframe to work while maintaining security
-        response['Cross-Origin-Opener-Policy'] = 'same-origin-allow-popups'
+        # Set Cross-Origin-Opener-Policy to unsafe-none for Google OAuth compatibility
+        # Google Sign-In requires this setting to allow postMessage communication
+        response['Cross-Origin-Opener-Policy'] = 'unsafe-none'
 
         # Set Cross-Origin-Embedder-Policy (optional, for additional security)
         # Use 'unsafe-none' to allow Google OAuth to work

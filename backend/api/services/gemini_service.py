@@ -1,6 +1,7 @@
 """Gemini AI Service"""
 import json
 import requests
+import cloudscraper
 import google.generativeai as genai
 from django.conf import settings
 
@@ -911,8 +912,8 @@ Now write the COMPLETE function based on the solution code format and constraint
             # Add random delay to avoid rate limiting (3-7 seconds)
             time.sleep(random.uniform(3, 7))
 
-            # Use session to maintain cookies
-            session = requests.Session()
+            # Use cloudscraper to bypass Cloudflare protection
+            session = cloudscraper.create_scraper()
             session.headers.update(headers)
 
             # Try to get the page with retry logic
@@ -1568,8 +1569,8 @@ Now generate the hints:"""
             # Add random delay to avoid rate limiting (3-7 seconds)
             time.sleep(random.uniform(3, 7))
 
-            # Use session to maintain cookies
-            session = requests.Session()
+            # Use cloudscraper to bypass Cloudflare protection
+            session = cloudscraper.create_scraper()
             session.headers.update(headers)
 
             # Try to get the page with retry logic
@@ -1610,8 +1611,9 @@ Now generate the hints:"""
             # Platform-specific HTML parsing to extract only problem content
             update_progress("Extracting problem content...")
             problem_content = None
+            extracted_tags = []
 
-            # Codeforces: Extract problem statement div
+            # Codeforces: Extract problem statement div and tags
             if 'codeforces.com' in problem_url:
                 # Try to find problem statement div
                 problem_div = soup.find('div', class_='problem-statement')
@@ -1621,7 +1623,20 @@ Now generate the hints:"""
                 else:
                     logger.warning("Could not find problem-statement div, using full content")
 
-            # Baekjoon: Extract problem content
+                # Extract tags from tag-box class
+                tag_elements = soup.find_all('span', class_='tag-box')
+                if tag_elements:
+                    for tag_elem in tag_elements:
+                        tag_text = tag_elem.get_text(strip=True).lower()
+                        # Remove special characters and asterisks
+                        tag_text = tag_text.replace('*', '').strip()
+                        if tag_text and tag_text not in extracted_tags:
+                            extracted_tags.append(tag_text)
+                    logger.info(f"Extracted {len(extracted_tags)} tags from Codeforces: {extracted_tags}")
+                else:
+                    logger.warning("Could not find tag-box elements on Codeforces page")
+
+            # Baekjoon: Extract problem content and tags
             elif 'acmicpc.net' in problem_url:
                 problem_div = soup.find('div', id='problem-body') or soup.find('div', id='problem_description')
                 if problem_div:
@@ -1629,6 +1644,21 @@ Now generate the hints:"""
                     problem_content = problem_div
                 else:
                     logger.warning("Could not find problem body div, using full content")
+
+                # Extract tags from problem-tags or algorithm tags
+                # Baekjoon often has tags in a specific section
+                tag_section = soup.find('div', class_='problem-tag') or soup.find('section', id='problem_tags')
+                if tag_section:
+                    tag_links = tag_section.find_all('a')
+                    for tag_link in tag_links:
+                        tag_text = tag_link.get_text(strip=True).lower()
+                        # Clean up Korean classification markers
+                        tag_text = tag_text.replace('분류:', '').replace('알고리즘:', '').strip()
+                        if tag_text and tag_text not in extracted_tags:
+                            extracted_tags.append(tag_text)
+                    logger.info(f"Extracted {len(extracted_tags)} tags from Baekjoon: {extracted_tags}")
+                else:
+                    logger.warning("Could not find tag section on Baekjoon page")
 
             # Use extracted content or fall back to full soup
             if problem_content:
@@ -1709,7 +1739,18 @@ Extract the problem metadata in structured JSON format. DO NOT solve the problem
 - DO NOT include input/output format, constraints, or samples here
 - This is the narrative that explains the problem scenario
 
-### 3. Constraints (INPUT FORMAT ONLY)
+### 3. Tags (PROBLEM CATEGORIES)
+You must extract problem tags/categories when available:
+- Look for tags, categories, or topics associated with the problem
+- Common tags include: "math", "implementation", "dp", "greedy", "graphs", "strings", "data structures", "binary search", "sorting", "brute force", "geometry", "number theory", etc.
+- On Codeforces: Look for the "Problem tags" section (usually at the bottom of the problem page)
+  * Extract ALL tags listed in the "Problem tags" section
+  * Example tags: "implementation", "dp", "math", "greedy", "graphs", "binary search"
+- On Baekjoon: Look for "분류" (classification) or algorithm tags
+- If no explicit tags are found, return an empty array []
+- Return as an array of lowercase strings: ["tag1", "tag2", "tag3"]
+
+### 4. Constraints (INPUT FORMAT ONLY)
 You must extract with PRECISE detail:
 - First line format: "First line contains..."
 - Subsequent line formats: "Next N lines contain..."
@@ -1788,6 +1829,7 @@ Return ONLY valid JSON (no markdown, no code blocks):
 {{
     "title": "Problem Title",
     "description": "Full problem description explaining what to solve (the narrative/story)",
+    "tags": ["math", "implementation", "dp"],
     "constraints": "First line: integer N (1 ≤ N ≤ 10^5)\\nNext N lines: each contains two integers A_i, B_i (1 ≤ A_i, B_i ≤ 10^9)",
     "samples": [
         {{"input": "3\\n1 2\\n3 4\\n5 6", "output": "6\\n12\\n30"}},
@@ -1813,31 +1855,68 @@ Return ONLY valid JSON, nothing else."""
             result = None
 
             # Method 0: Remove markdown code blocks first (most common case)
-            cleaned_text = response_text
-            # Remove ```json\n ... \n``` or ```json ... ``` patterns
-            cleaned_text = re.sub(r'^```json\s*\n', '', cleaned_text, flags=re.MULTILINE)
-            cleaned_text = re.sub(r'^```json\s*', '', cleaned_text, flags=re.MULTILINE)
-            cleaned_text = re.sub(r'\n```\s*$', '', cleaned_text, flags=re.MULTILINE)
-            cleaned_text = re.sub(r'```\s*$', '', cleaned_text, flags=re.MULTILINE)
+            cleaned_text = response_text.strip()
+
+            # Remove leading ```json or ``` with optional newline
+            if cleaned_text.startswith('```json'):
+                cleaned_text = cleaned_text[7:]  # Remove '```json'
+                if cleaned_text.startswith('\n'):
+                    cleaned_text = cleaned_text[1:]  # Remove leading newline
+            elif cleaned_text.startswith('```'):
+                cleaned_text = cleaned_text[3:]  # Remove '```'
+                if cleaned_text.startswith('\n'):
+                    cleaned_text = cleaned_text[1:]  # Remove leading newline
+
+            # Remove trailing ``` with optional preceding newline
+            if cleaned_text.endswith('```'):
+                if cleaned_text.endswith('\n```'):
+                    cleaned_text = cleaned_text[:-4]  # Remove '\n```'
+                else:
+                    cleaned_text = cleaned_text[:-3]  # Remove '```'
+
             cleaned_text = cleaned_text.strip()
+
+            # Fix invalid JSON escape sequences (LaTeX commands like \dots, \le, etc.)
+            # Valid JSON escape sequences are: \", \\, \/, \b, \f, \n, \r, \t, \uXXXX
+            # We need to escape backslashes that are followed by invalid characters
+            def fix_json_escapes(text):
+                """Fix invalid JSON escape sequences by escaping backslashes."""
+                import re
+                # Replace invalid escapes by doubling the backslash
+                # Valid JSON escapes: \", \\, \/, \b, \f, \n, \r, \t, \uXXXX
+                # Use negative lookahead to match backslashes NOT followed by valid escape chars
+                result = re.sub(r'\\(?!["\\/bfnrtu]|u[0-9a-fA-F]{4})', r'\\\\', text)
+                logger.debug(f"fix_json_escapes: Fixed {len(re.findall(r'\\\\(?![\"\\\\/ bfnrtu]|u[0-9a-fA-F]{4})', result))} invalid escapes")
+                return result
+
+            cleaned_text = fix_json_escapes(cleaned_text)
 
             # Try parsing cleaned text directly
             if not result:
                 try:
                     result = json_module.loads(cleaned_text)
-                    logger.info("Extracted JSON after removing markdown blocks")
-                except:
+                    logger.info("Extracted JSON after removing markdown blocks and fixing escapes")
+                except Exception as e:
+                    logger.error(f"Method 0 failed with error: {e}")
+                    logger.error(f"Cleaned text sample (first 500 chars): {cleaned_text[:500]}")
+                    logger.error(f"Cleaned text sample (last 200 chars): {cleaned_text[-200:]}")
                     pass
 
             # Method 1: Find JSON in code blocks using regex
             if not result:
-                json_match = re.search(r'```(?:json)?\s*\n?([\s\S]*?)\n?```', response_text)
+                json_match = re.search(r'```(?:json)?\s*\n?([\s\S]*?)\n?```', response_text, re.DOTALL)
                 if json_match:
                     try:
-                        result = json_module.loads(json_match.group(1).strip())
+                        json_content = json_match.group(1).strip()
+                        json_content = fix_json_escapes(json_content)
+                        result = json_module.loads(json_content)
                         logger.info("Extracted JSON from code block with regex")
-                    except:
+                    except Exception as e:
+                        logger.error(f"Method 1 failed with error: {e}")
+                        logger.error(f"JSON content sample (first 300 chars): {json_content[:300]}")
                         pass
+                else:
+                    logger.debug("Method 1: No code block pattern found")
 
             # Method 2: Find complete JSON object with balanced braces
             if not result:
@@ -1871,11 +1950,15 @@ Return ONLY valid JSON, nothing else."""
                                 if brace_count == 0:
                                     json_str = response_text[first_brace:i+1]
                                     try:
+                                        json_str = fix_json_escapes(json_str)
                                         result = json_module.loads(json_str)
                                         logger.info("Extracted JSON with balanced brace matching")
-                                    except:
+                                    except Exception as e:
+                                        logger.debug(f"Method 2 failed: {e}")
                                         pass
                                     break
+                else:
+                    logger.debug("Method 2: No opening brace found")
 
             # Method 3: Find largest JSON object (fallback)
             if not result:
@@ -1889,13 +1972,19 @@ Return ONLY valid JSON, nothing else."""
 
                 if largest_match:
                     try:
-                        result = json_module.loads(largest_match.group())
+                        json_str = fix_json_escapes(largest_match.group())
+                        result = json_module.loads(json_str)
                         logger.info("Extracted JSON from largest object")
-                    except:
+                    except Exception as e:
+                        logger.debug(f"Method 3 failed: {e}")
                         pass
+                else:
+                    logger.debug("Method 3: No JSON objects found")
 
             if not result:
-                logger.error(f"Failed to parse JSON. Full response: {response_text}")
+                logger.error(f"All JSON extraction methods failed!")
+                logger.error(f"Full response ({len(response_text)} chars): {response_text}")
+                logger.error(f"Cleaned text ({len(cleaned_text)} chars): {cleaned_text[:500]}")
                 raise ValueError(f'No valid JSON found in response. Preview: {response_text[:200]}...')
 
             logger.info(f"Parsed JSON result: {result}")
@@ -1914,12 +2003,20 @@ Return ONLY valid JSON, nothing else."""
                 logger.info(f"Replacing extracted samples with {len(user_samples)} user-provided samples")
                 result['samples'] = user_samples
 
+            # Use scraped tags if available (more reliable than Gemini extraction)
+            if extracted_tags:
+                logger.info(f"Using scraped tags instead of Gemini-extracted tags: {extracted_tags}")
+                result['tags'] = extracted_tags
+            elif 'tags' not in result or not result.get('tags'):
+                logger.warning('No tags found from scraping or Gemini, using empty array')
+                result['tags'] = []
+
             # Parse problem URL
             platform, problem_id = self._parse_problem_url(problem_url)
             result['platform'] = platform
             result['problem_id'] = problem_id
 
-            logger.info(f"Successfully extracted metadata: {result['title']}, {len(result.get('samples', []))} samples")
+            logger.info(f"Successfully extracted metadata: {result['title']}, {len(result.get('samples', []))} samples, {len(result.get('tags', []))} tags")
             return result
 
         except requests.RequestException as e:

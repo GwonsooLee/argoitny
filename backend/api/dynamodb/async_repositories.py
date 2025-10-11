@@ -264,6 +264,9 @@ class AsyncUserRepository:
                     'is_active': dat.get('act', True),
                     'is_staff': dat.get('stf', False),
                     'subscription_plan_id': dat.get('plan'),
+                    'privacy_agreed_at': dat.get('pra'),
+                    'terms_agreed_at': dat.get('tra'),
+                    'code_ownership_agreed_at': dat.get('coa'),
                     'created_at': item.get('crt'),
                     'updated_at': item.get('upd'),
                 })
@@ -303,6 +306,9 @@ class AsyncUserRepository:
                 'is_active': dat.get('act', True),
                 'is_staff': dat.get('stf', False),
                 'subscription_plan_id': dat.get('plan'),
+                'privacy_agreed_at': dat.get('pra'),
+                'terms_agreed_at': dat.get('tra'),
+                'code_ownership_agreed_at': dat.get('coa'),
                 'created_at': item.get('crt'),
                 'updated_at': item.get('upd'),
             }
@@ -336,6 +342,9 @@ class AsyncUserRepository:
                 'is_active': dat.get('act', True),
                 'is_staff': dat.get('stf', False),
                 'subscription_plan_id': dat.get('plan'),
+                'privacy_agreed_at': dat.get('pra'),
+                'terms_agreed_at': dat.get('tra'),
+                'code_ownership_agreed_at': dat.get('coa'),
                 'created_at': item.get('crt'),
                 'updated_at': item.get('upd'),
             }
@@ -350,11 +359,21 @@ class AsyncUserRepository:
             attr_names = {}
             attr_values = {}
 
-            if 'subscription_plan_id' in updates:
-                update_parts.append('#dat.#plan = :plan')
-                attr_names['#dat'] = 'dat'
-                attr_names['#plan'] = 'plan'
-                attr_values[':plan'] = updates['subscription_plan_id']
+            # Map of field names to short names
+            field_mapping = {
+                'subscription_plan_id': 'plan',
+                'privacy_agreed_at': 'pra',
+                'terms_agreed_at': 'tra',
+                'code_ownership_agreed_at': 'coa',
+            }
+
+            # Update dat fields
+            for field_name, short_name in field_mapping.items():
+                if field_name in updates:
+                    update_parts.append(f'#dat.#{short_name} = :{short_name}')
+                    attr_names['#dat'] = 'dat'
+                    attr_names[f'#{short_name}'] = short_name
+                    attr_values[f':{short_name}'] = updates[field_name]
 
             # Always update timestamp
             update_parts.append('#upd = :upd')

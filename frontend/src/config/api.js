@@ -60,6 +60,8 @@ export const API_ENDPOINTS = {
   accountStats: '/account/stats/',
   updatePlan: '/account/plan/',
   planUsage: '/account/plan-usage/',
+  submitConsents: '/account/consents/',
+  getConsents: '/account/consents/status/',
 
   // Admin
   adminUsers: '/admin/users/',
