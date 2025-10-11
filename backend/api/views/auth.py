@@ -74,10 +74,10 @@ class GoogleLoginView(APIView):
             # Verify Google token (sync operation wrapped in async)
             google_user_info = await sync_to_async(GoogleOAuthService.verify_token)(token)
 
-            # Get or create user in DynamoDB (sync operation wrapped in async)
-            # GoogleOAuthService internally uses UserRepository for DynamoDB operations
+            # Get or create user in DynamoDB (ASYNC - now truly async with aioboto3)
+            # GoogleOAuthService internally uses AsyncUserRepository for DynamoDB operations
             # Returns: (user_dict, created_boolean)
-            user_dict, created = await sync_to_async(GoogleOAuthService.get_or_create_user)(
+            user_dict, created = await GoogleOAuthService.get_or_create_user(
                 google_user_info,
                 plan_name
             )
@@ -86,9 +86,9 @@ class GoogleLoginView(APIView):
             # JWT helper works with user dicts (not Django User objects)
             tokens = await sync_to_async(generate_tokens_for_user)(user_dict)
 
-            # Serialize user data to match expected frontend format (sync operation wrapped in async)
+            # Serialize user data to match expected frontend format (ASYNC)
             # Converts DynamoDB user dict to API response format
-            serialized_user = await sync_to_async(serialize_dynamodb_user)(user_dict)
+            serialized_user = await serialize_dynamodb_user(user_dict)
 
             return Response({
                 'user': serialized_user,

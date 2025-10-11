@@ -39,6 +39,8 @@ class ScriptGenerationJobRepository(BaseRepository):
         upd: updated_timestamp
         GSI1PK: 'SGJOB#STATUS#{status}'     (for listing by status)
         GSI1SK: created_timestamp (Number)
+        GSI2PK: 'SGJOB#{platform}#{problem_id}'  (for listing by platform+problem_id)
+        GSI2SK: created_timestamp (Number)
 
     Note: solution_code is NOT stored in SGJOB - it should be fetched from Problem entity
     """
@@ -102,7 +104,10 @@ class ScriptGenerationJobRepository(BaseRepository):
             'upd': timestamp,
             # GSI1 for status-based queries
             'GSI1PK': f'SGJOB#STATUS#{status}',
-            'GSI1SK': f'{timestamp:020d}#{job_id}'  # Zero-padded timestamp for sorting + unique ID
+            'GSI1SK': f'{timestamp:020d}#{job_id}',  # Zero-padded timestamp for sorting + unique ID
+            # GSI2 for platform+problem_id queries
+            'GSI2PK': f'SGJOB#{platform}#{problem_id}',
+            'GSI2SK': f'{timestamp:020d}#{job_id}'
         }
 
         self.table.put_item(Item=item)
@@ -197,6 +202,18 @@ class ScriptGenerationJobRepository(BaseRepository):
                 created_at = int(job_id_from_pk.get('created_at', timestamp))
                 expression_values[':gsi1sk'] = f'{created_at:020d}#{job_id}'
 
+        # Update GSI2PK/GSI2SK if platform or problem_id is being updated
+        if 'platform' in updates or 'problem_id' in updates:
+            job_data = self.get_job(job_id)
+            if job_data:
+                new_platform = updates.get('platform', job_data.get('platform'))
+                new_problem_id = updates.get('problem_id', job_data.get('problem_id'))
+                created_at = int(job_data.get('created_at', timestamp))
+
+                update_parts.append('GSI2PK = :gsi2pk, GSI2SK = :gsi2sk')
+                expression_values[':gsi2pk'] = f'SGJOB#{new_platform}#{new_problem_id}'
+                expression_values[':gsi2sk'] = f'{created_at:020d}#{job_id}'
+
         if not update_parts:
             return self.get_job(job_id)
 
@@ -254,8 +271,31 @@ class ScriptGenerationJobRepository(BaseRepository):
         Returns:
             Tuple of (list of jobs, next pagination cursor)
         """
-        # If status filter provided, use GSI1
-        if status:
+        # Priority 1: If platform AND problem_id provided, use GSI2 (most efficient)
+        if platform and problem_id:
+            query_params = {
+                'IndexName': 'GSI2',
+                'KeyConditionExpression': Key('GSI2PK').eq(f'SGJOB#{platform}#{problem_id}'),
+                'Limit': limit,
+                'ScanIndexForward': False  # Newest first
+            }
+
+            if last_evaluated_key:
+                query_params['ExclusiveStartKey'] = last_evaluated_key
+
+            response = self.table.query(**query_params)
+            gsi_items = response.get('Items', [])
+
+            # GSI2 has KEYS_ONLY projection, so fetch full items
+            items = []
+            for gsi_item in gsi_items:
+                pk = gsi_item['PK']
+                sk = gsi_item['SK']
+                full_item_response = self.table.get_item(Key={'PK': pk, 'SK': sk})
+                if 'Item' in full_item_response:
+                    items.append(full_item_response['Item'])
+        # Priority 2: If status filter provided, use GSI1
+        elif status:
             query_params = {
                 'IndexName': 'GSI1',
                 'KeyConditionExpression': Key('GSI1PK').eq(f'SGJOB#STATUS#{status}'),
@@ -268,8 +308,8 @@ class ScriptGenerationJobRepository(BaseRepository):
 
             response = self.table.query(**query_params)
             items = response.get('Items', [])
+        # Priority 3: Otherwise, scan with filter
         else:
-            # Otherwise, scan with filter
             scan_params = {
                 'FilterExpression': Attr('tp').eq('sgjob'),
                 'Limit': limit
@@ -281,12 +321,14 @@ class ScriptGenerationJobRepository(BaseRepository):
             response = self.table.scan(**scan_params)
             items = response.get('Items', [])
 
-        # Apply additional filters
+        # Apply additional filters (only needed if not using GSI2)
         filtered_items = items
-        if platform:
-            filtered_items = [item for item in filtered_items if item.get('dat', {}).get('plt') == platform]
-        if problem_id:
-            filtered_items = [item for item in filtered_items if item.get('dat', {}).get('pid') == problem_id]
+        # Skip filtering if we already queried by platform+problem_id using GSI2
+        if not (platform and problem_id):
+            if platform:
+                filtered_items = [item for item in filtered_items if item.get('dat', {}).get('plt') == platform]
+            if problem_id:
+                filtered_items = [item for item in filtered_items if item.get('dat', {}).get('pid') == problem_id]
 
         # Transform items
         result = []

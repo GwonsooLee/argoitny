@@ -2,6 +2,7 @@
 from typing import Dict, Optional, List, Any
 from boto3.dynamodb.conditions import Key, Attr
 from .base_repository import BaseRepository
+from asgiref.sync import async_to_sync
 import logging
 
 logger = logging.getLogger(__name__)
@@ -16,7 +17,7 @@ class ProblemRepository(BaseRepository):
 
         Args:
             table: DynamoDB table resource. If None, will be fetched from DynamoDBClient
-            s3_service: S3TestCaseService instance. If None, will be created
+            s3_service: AsyncS3TestCaseService instance. If None, will be created
         """
         if table is None:
             from ..client import DynamoDBClient
@@ -25,8 +26,8 @@ class ProblemRepository(BaseRepository):
 
         # Initialize S3 service for large test cases
         if s3_service is None:
-            from api.services.s3_testcase_service import S3TestCaseService
-            s3_service = S3TestCaseService()
+            from api.services.async_s3_testcase_service import AsyncS3TestCaseService
+            s3_service = AsyncS3TestCaseService()
         self.s3_service = s3_service
 
     def create_problem(
@@ -367,7 +368,7 @@ class ProblemRepository(BaseRepository):
 
         # Delete S3 test cases
         try:
-            self.s3_service.delete_testcases(platform, problem_id)
+            async_to_sync(self.s3_service.delete_testcases)(platform, problem_id)
             logger.info(f"Deleted S3 test cases for {platform}/{problem_id}")
         except Exception as e:
             logger.error(f"Failed to delete S3 test cases: {e}")
@@ -405,7 +406,7 @@ class ProblemRepository(BaseRepository):
         if use_s3:
             # Store in S3 and save reference in DynamoDB
             try:
-                s3_metadata = self.s3_service.store_testcase(
+                s3_metadata = async_to_sync(self.s3_service.store_testcase)(
                     platform=platform,
                     problem_id=problem_id,
                     testcase_id=testcase_id,
@@ -507,7 +508,7 @@ class ProblemRepository(BaseRepository):
                     # Retrieve from S3 using s3_key
                     s3_key = item['dat'].get('s3_key')
                     if s3_key:
-                        testcase_data = self.s3_service.retrieve_testcase(
+                        testcase_data = async_to_sync(self.s3_service.retrieve_testcase)(
                             platform=platform,
                             problem_id=problem_id,
                             testcase_id=testcase_id

@@ -752,7 +752,6 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
 
     OPTIMIZATIONS:
     - Use only() + update_fields for minimal database updates
-    - Cache problem info for repeated requests (only if no additional context)
     - Early validation and exit
     - Proper exception handling with logging
 
@@ -791,11 +790,6 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
     validation_passed = False  # Initialize validation_passed
 
     try:
-        # OPTIMIZATION: Check cache first (skip if additional context or user samples provided)
-        cache_key = f"problem_info:{problem_url}"
-        cached_info = None
-        if not additional_context and not samples:
-            cached_info = cache.get(cache_key)
 
         # Update job status if job_id provided
         if job_id:
@@ -893,94 +887,88 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
             except Exception as e:
                 logger.error(f"[Progress] Failed to update progress: {e}")
 
-        # Use cached info if available
-        if cached_info:
-            logger.info(f"Using cached problem info for {problem_url}")
-            update_progress("Loading from cache...")
-            problem_info = cached_info
-        else:
-            # STEP 1: Extract problem metadata (title, constraints, samples) using GEMINI FLASH
-            # Use Gemini Flash (94% cheaper) for simple metadata extraction
-            # Flash is ideal for title, constraints, and sample extraction tasks
-            update_progress("📄 Step 1/2: Extracting problem metadata with Gemini Flash...")
-            flash_service = LLMServiceFactory.create_service(task_tier='simple')
-            problem_metadata = flash_service.extract_problem_metadata_from_url(
-                problem_url,
-                progress_callback=lambda msg: update_progress(f"📄 {msg}"),
-                user_samples=samples  # Pass user-provided samples
-            )
-            logger.info(f"[FLASH] Extracted metadata: {problem_metadata['title']}, {len(problem_metadata.get('samples', []))} samples")
+        # STEP 1: Extract problem metadata (title, constraints, samples) using GEMINI FLASH
+        # Use Gemini Flash (94% cheaper) for simple metadata extraction
+        # Flash is ideal for title, constraints, and sample extraction tasks
+        update_progress("📄 Step 1/2: Extracting problem metadata with Gemini Flash...")
+        flash_service = LLMServiceFactory.create_service(task_tier='simple')
+        problem_metadata = flash_service.extract_problem_metadata_from_url(
+            problem_url,
+            progress_callback=lambda msg: update_progress(f"📄 {msg}"),
+            user_samples=samples  # Pass user-provided samples
+        )
+        logger.info(f"[FLASH] Extracted metadata: {problem_metadata['title']}, {len(problem_metadata.get('samples', []))} samples")
 
-            # Add additional_context to problem_metadata for solution generation
-            if additional_context:
-                problem_metadata['additional_context'] = additional_context
-                logger.info(f"Added additional_context to problem_metadata ({len(additional_context)} chars)")
+        # Add additional_context to problem_metadata for solution generation
+        if additional_context:
+            problem_metadata['additional_context'] = additional_context
+            logger.info(f"Added additional_context to problem_metadata ({len(additional_context)} chars)")
 
-            # Update Problem with metadata immediately after extraction
-            if job_id:
-                try:
-                    from api.dynamodb.client import DynamoDBClient
-                    from api.dynamodb.repositories import ProblemRepository
+        # Update Problem with metadata immediately after extraction
+        if job_id:
+            try:
+                from api.dynamodb.client import DynamoDBClient
+                from api.dynamodb.repositories import ProblemRepository
 
-                    table = DynamoDBClient.get_table()
-                    problem_repo = ProblemRepository(table)
+                table = DynamoDBClient.get_table()
+                problem_repo = ProblemRepository(table)
 
-                    # Check if problem exists
-                    existing_problem = problem_repo.get_problem(platform, problem_id)
+                # Check if problem exists
+                existing_problem = problem_repo.get_problem(platform, problem_id)
 
-                    if existing_problem:
-                        # Update with metadata
-                        metadata = {
-                            **(existing_problem.get('metadata') or {}),
-                            'extraction_job_id': job_id,
-                            'extraction_status': 'PROCESSING',
-                            'extracted_title': problem_metadata['title'],
-                            'progress': f"Metadata extracted: {problem_metadata['title']}"
-                        }
+                if existing_problem:
+                    # Update with metadata
+                    metadata = {
+                        **(existing_problem.get('metadata') or {}),
+                        'extraction_job_id': job_id,
+                        'extraction_status': 'PROCESSING',
+                        'extracted_title': problem_metadata['title'],
+                        'progress': f"Metadata extracted: {problem_metadata['title']}"
+                    }
 
-                        # Store user-provided samples in metadata for retry purposes
-                        if samples:
-                            metadata['user_samples'] = samples
+                    # Store user-provided samples in metadata for retry purposes
+                    if samples:
+                        metadata['user_samples'] = samples
 
-                        updates = {
+                    updates = {
+                        'title': problem_metadata['title'],
+                        'constraints': problem_metadata.get('constraints', ''),
+                        'tags': problem_metadata.get('tags', []),
+                        'metadata': metadata
+                    }
+                    problem_repo.update_problem(platform, problem_id, updates)
+                    logger.info(f"Updated problem {platform}/{problem_id} with metadata: {problem_metadata['title']}, tags: {problem_metadata.get('tags', [])}")
+                else:
+                    # Create problem with metadata
+                    metadata = {
+                        'extraction_job_id': job_id,
+                        'extraction_status': 'PROCESSING',
+                        'extracted_title': problem_metadata['title'],
+                        'progress': f"Metadata extracted: {problem_metadata['title']}"
+                    }
+
+                    # Store user-provided samples in metadata for retry purposes
+                    if samples:
+                        metadata['user_samples'] = samples
+
+                    problem_repo.create_problem(
+                        platform=platform,
+                        problem_id=problem_id,
+                        problem_data={
                             'title': problem_metadata['title'],
+                            'problem_url': problem_url,
                             'constraints': problem_metadata.get('constraints', ''),
+                            'solution_code': '',  # Will be added in Step 2
+                            'language': 'cpp',
                             'tags': problem_metadata.get('tags', []),
+                            'is_completed': False,
                             'metadata': metadata
                         }
-                        problem_repo.update_problem(platform, problem_id, updates)
-                        logger.info(f"Updated problem {platform}/{problem_id} with metadata: {problem_metadata['title']}, tags: {problem_metadata.get('tags', [])}")
-                    else:
-                        # Create problem with metadata
-                        metadata = {
-                            'extraction_job_id': job_id,
-                            'extraction_status': 'PROCESSING',
-                            'extracted_title': problem_metadata['title'],
-                            'progress': f"Metadata extracted: {problem_metadata['title']}"
-                        }
+                    )
+                    logger.info(f"Created problem {platform}/{problem_id} with metadata, tags: {problem_metadata.get('tags', [])}")
 
-                        # Store user-provided samples in metadata for retry purposes
-                        if samples:
-                            metadata['user_samples'] = samples
-
-                        problem_repo.create_problem(
-                            platform=platform,
-                            problem_id=problem_id,
-                            problem_data={
-                                'title': problem_metadata['title'],
-                                'problem_url': problem_url,
-                                'constraints': problem_metadata.get('constraints', ''),
-                                'solution_code': '',  # Will be added in Step 2
-                                'language': 'cpp',
-                                'tags': problem_metadata.get('tags', []),
-                                'is_completed': False,
-                                'metadata': metadata
-                            }
-                        )
-                        logger.info(f"Created problem {platform}/{problem_id} with metadata, tags: {problem_metadata.get('tags', [])}")
-
-                except Exception as e:
-                    logger.error(f"Failed to update problem with metadata: {e}")
+            except Exception as e:
+                logger.error(f"Failed to update problem with metadata: {e}")
 
             # STEP 2: Generate solution with retry logic (uses model from llm_config)
             # llm_config specifies which model to use (gpt-5 or gemini)
@@ -1014,9 +1002,6 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
                 problem_info['validation_passed'] = True
                 problem_info['needs_review'] = False  # Validation passed, no review needed
                 logger.info(f"✓ Solution validation passed with {used_service}")
-
-            # OPTIMIZATION: Cache the result
-            cache.set(cache_key, problem_info, CACHE_TTL_LONG)
 
         # Update job with results if job_id provided
         if job_id:

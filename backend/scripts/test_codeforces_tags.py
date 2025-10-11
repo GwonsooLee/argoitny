@@ -118,5 +118,5 @@ def test_tag_extraction(url):
             logger.info(f"  {idx}. Parent: {parent.name}, Class: {parent.get('class')}, Text: {text.strip()[:100]}")
 
 if __name__ == "__main__":
-    test_url = "https://codeforces.com/contest/1037/problem/D"
+    test_url = "https://codeforces.com/problemset/problem/295/B"
     test_tag_extraction(test_url)

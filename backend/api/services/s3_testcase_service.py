@@ -48,17 +48,16 @@ class S3TestCaseService:
                 aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY', 'test'),
                 region_name=os.getenv('AWS_DEFAULT_REGION', 'us-east-1')
             )
-            logger.info(f"[S3 Init] Using LocalStack S3 at {localstack_url} with bucket '{self.bucket_name}'")
+            logger.debug(f"[S3 Init] Using LocalStack S3 at {localstack_url} with bucket '{self.bucket_name}'")
         else:
             # Production AWS configuration
             self.s3_client = boto3.client('s3')
-            logger.info(f"[S3 Init] Using AWS S3 with bucket '{self.bucket_name}'")
+            logger.debug(f"[S3 Init] Using AWS S3 with bucket '{self.bucket_name}'")
 
         self._ensure_bucket_exists()
 
         # Mark as initialized
         S3TestCaseService._initialized = True
-        logger.info(f"[S3 Init] S3TestCaseService initialized successfully")
 
     def _ensure_bucket_exists(self):
         """Ensure S3 bucket exists, create if not"""

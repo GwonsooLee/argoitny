@@ -225,8 +225,8 @@ class ProblemDetailView(APIView):
                 test_case_items = testcases_response.get('Items', [])
 
                 # Process test cases - handle both DynamoDB and S3 storage
-                from api.services.s3_testcase_service import S3TestCaseService
-                s3_service = S3TestCaseService()
+                from api.services.async_s3_testcase_service import AsyncS3TestCaseService
+                s3_service = AsyncS3TestCaseService()
 
                 processed_test_cases = []
                 for tc in test_case_items:
@@ -236,7 +236,7 @@ class ProblemDetailView(APIView):
                     if storage_type == 's3':
                         # Retrieve from S3
                         try:
-                            testcase_data = await sync_to_async(s3_service.retrieve_testcase)(
+                            testcase_data = await s3_service.retrieve_testcase(
                                 platform=platform,
                                 problem_id=problem_identifier,
                                 testcase_id=testcase_id

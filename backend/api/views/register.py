@@ -73,9 +73,9 @@ class GenerateTestCasesView(APIView):
             )
 
         try:
-            # Create a job record using JobHelper (sync operation wrapped)
-            from ..utils.job_helper import JobHelper
-            job = await sync_to_async(JobHelper.create_script_generation_job)(
+            # Create a job record using AsyncJobHelper (true async, no sync_to_async wrapper)
+            from ..utils.async_job_helper import AsyncJobHelper
+            job = await AsyncJobHelper.create_script_generation_job(
                 platform=serializer.validated_data['platform'],
                 problem_id=serializer.validated_data['problem_id'],
                 title=serializer.validated_data['title'],
@@ -90,7 +90,7 @@ class GenerateTestCasesView(APIView):
             task = await sync_to_async(generate_script_task.delay)(job['id'])
 
             # Update job with task ID
-            await sync_to_async(JobHelper.update_script_generation_job)(job['id'], {'celery_task_id': task.id})
+            await AsyncJobHelper.update_script_generation_job(job['id'], {'celery_task_id': task.id})
 
             return Response({
                 'job_id': job['id'],
@@ -99,6 +99,7 @@ class GenerateTestCasesView(APIView):
             }, status=status.HTTP_202_ACCEPTED)
 
         except Exception as e:
+            logger.exception(f"Failed to create job: {str(e)}")
             return Response(
                 {'error': f'Failed to create job: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -171,7 +172,7 @@ class RegisterProblemView(APIView):
         language = serializer.validated_data['language']
 
         try:
-            # Initialize async DynamoDB repository
+            # Initialize async DynamoDB repository with sync table
             table = await sync_to_async(DynamoDBClient.get_table)()
             problem_repo = AsyncProblemRepository(table)
 
@@ -323,7 +324,6 @@ class ExecuteTestCasesView(APIView):
 
             # Save task_id to Problem metadata if platform and problem_id provided
             if platform and problem_id:
-                from api.dynamodb.client import DynamoDBClient
                 table = await sync_to_async(DynamoDBClient.get_table)()
                 from api.dynamodb.async_repositories import AsyncProblemRepository
                 problem_repo = AsyncProblemRepository(table)
@@ -372,7 +372,7 @@ class DraftProblemsView(APIView):
             }
         """
         try:
-            # Initialize async DynamoDB repository
+            # Initialize async DynamoDB repository with sync table
             table = await sync_to_async(DynamoDBClient.get_table)()
             problem_repo = AsyncProblemRepository(table)
 
@@ -497,9 +497,9 @@ class JobListView(APIView):
             platform = request.query_params.get('platform')
             problem_id = request.query_params.get('problem_id')
 
-            # List jobs using JobHelper
-            from ..utils.job_helper import JobHelper
-            jobs, _ = await sync_to_async(JobHelper.list_script_generation_jobs)(
+            # List jobs using AsyncJobHelper (true async, no sync_to_async wrapper)
+            from ..utils.async_job_helper import AsyncJobHelper
+            jobs, _ = await AsyncJobHelper.list_script_generation_jobs(
                 status=status_filter.upper() if status_filter else None,
                 platform=platform,
                 problem_id=problem_id
@@ -508,7 +508,7 @@ class JobListView(APIView):
             # Format jobs for serializer (convert timestamps)
             formatted_jobs = []
             for job in jobs:
-                formatted_job = await sync_to_async(JobHelper.format_job_for_serializer)(job)
+                formatted_job = AsyncJobHelper.format_job_for_serializer(job)  # Not async
                 formatted_jobs.append(formatted_job)
 
             # Exclude generator_code field from list view for optimization
@@ -520,6 +520,7 @@ class JobListView(APIView):
             }, status=status.HTTP_200_OK)
 
         except Exception as e:
+            logger.exception(f"Failed to fetch jobs: {str(e)}")
             return Response(
                 {'error': f'Failed to fetch jobs: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -1158,7 +1159,7 @@ class ExtractProblemInfoView(APIView):
 
             logger.info(f"[ExtractProblemInfoView] Parsed URL: platform={platform}, problem_id={problem_id}")
 
-            # Initialize async DynamoDB repository
+            # Initialize async DynamoDB repository with sync table
             table = await sync_to_async(DynamoDBClient.get_table)()
             problem_repo = AsyncProblemRepository(table)
 

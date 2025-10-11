@@ -1,11 +1,16 @@
 """
 SubscriptionPlan Repository - DynamoDB Implementation
 
-Data Structure:
-- PK: PLAN#{plan_id}
-- SK: META
+Data Structure (NEW):
+- PK: PLAN (shared by all plans)
+- SK: META#{plan_id}
 - Type: plan
 - Data: {plan details with short field names}
+
+Benefits:
+- Efficient Query instead of Scan
+- Lower RCU costs
+- Better DynamoDB design pattern
 """
 import time
 from typing import Dict, List, Optional
@@ -48,10 +53,10 @@ class SubscriptionPlanRepository(BaseRepository):
         timestamp = int(time.time())
 
         # Prepare item with short field names for storage efficiency
-        # Note: plan_id is stored in PK, not in dat (to avoid redundancy)
+        # Note: plan_id is stored in SK (META#{plan_id}), not in dat
         item = {
-            'PK': f'PLAN#{plan_id}',
-            'SK': 'META',
+            'PK': 'PLAN',  # All plans share same PK
+            'SK': f'META#{plan_id}',  # Plan ID in SK
             'tp': 'plan',  # type
             'dat': {
                 'nm': plan_data['name'],  # name
@@ -85,8 +90,8 @@ class SubscriptionPlanRepository(BaseRepository):
         try:
             response = self.table.get_item(
                 Key={
-                    'PK': f'PLAN#{plan_id}',
-                    'SK': 'META'
+                    'PK': 'PLAN',
+                    'SK': f'META#{plan_id}'
                 }
             )
 
@@ -100,32 +105,39 @@ class SubscriptionPlanRepository(BaseRepository):
                 return None
             raise
 
-    def list_plans(self, limit: int = 100) -> List[Dict]:
+    def list_plans(self) -> List[Dict]:
         """
-        List all subscription plans using Scan
+        List all subscription plans using efficient Query
 
-        Note: Uses Scan instead of Query because SubscriptionPlan is configuration data
-        with only ~5 items (static). Scan cost is negligible for this use case.
-
-        Args:
-            limit: Maximum number of plans to return
+        Uses Query with PK=PLAN instead of Scan for better performance.
 
         Returns:
             List of plans with long field names
         """
         try:
-            # Use Scan with filter since subscription plans are few (5 items max)
-            # and don't populate GSI1 attributes
-            from boto3.dynamodb.conditions import Attr
-
-            items = self.scan(
-                filter_expression=Attr('tp').eq('plan') & Attr('SK').eq('META'),
-                limit=limit
-            )
+            from boto3.dynamodb.conditions import Key
 
             plans = []
-            for item in items:
-                plans.append(self._transform_to_long_format(item))
+            last_evaluated_key = None
+
+            # Query with PK=PLAN to get all plans efficiently
+            while True:
+                query_kwargs = {
+                    'KeyConditionExpression': Key('PK').eq('PLAN') & Key('SK').begins_with('META#')
+                }
+
+                if last_evaluated_key:
+                    query_kwargs['ExclusiveStartKey'] = last_evaluated_key
+
+                response = self.table.query(**query_kwargs)
+
+                for item in response.get('Items', []):
+                    plans.append(self._transform_to_long_format(item))
+
+                # Check if there are more items to query
+                last_evaluated_key = response.get('LastEvaluatedKey')
+                if not last_evaluated_key:
+                    break
 
             return plans
 
@@ -184,8 +196,8 @@ class SubscriptionPlanRepository(BaseRepository):
 
         response = self.table.update_item(
             Key={
-                'PK': f'PLAN#{plan_id}',
-                'SK': 'META'
+                'PK': 'PLAN',
+                'SK': f'META#{plan_id}'
             },
             UpdateExpression=update_expression,
             ExpressionAttributeNames=expression_attribute_names,
@@ -208,8 +220,8 @@ class SubscriptionPlanRepository(BaseRepository):
         try:
             self.table.delete_item(
                 Key={
-                    'PK': f'PLAN#{plan_id}',
-                    'SK': 'META'
+                    'PK': 'PLAN',
+                    'SK': f'META#{plan_id}'
                 }
             )
             return True
@@ -229,8 +241,8 @@ class SubscriptionPlanRepository(BaseRepository):
         """
         dat = item.get('dat', {})
 
-        # Extract plan_id from PK (format: PLAN#{plan_id})
-        plan_id = int(item['PK'].replace('PLAN#', ''))
+        # Extract plan_id from SK (format: META#{plan_id})
+        plan_id = int(item['SK'].replace('META#', ''))
 
         return {
             'id': plan_id,

@@ -1,11 +1,11 @@
-"""Serializer Helper for DynamoDB Users"""
+"""Serializer Helper for DynamoDB Users - ASYNC VERSION"""
 from typing import Dict, Any
 from django.conf import settings
 
 
-def serialize_dynamodb_user(user_dict: Dict[str, Any]) -> Dict[str, Any]:
+async def serialize_dynamodb_user(user_dict: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Serialize DynamoDB user dict to match UserSerializer output format
+    Serialize DynamoDB user dict to match UserSerializer output format (ASYNC)
 
     Args:
         user_dict: User data dictionary from UserRepository
@@ -20,12 +20,13 @@ def serialize_dynamodb_user(user_dict: Dict[str, Any]) -> Dict[str, Any]:
 
     if subscription_plan_id:
         try:
-            from ..dynamodb.client import DynamoDBClient
-            from ..dynamodb.repositories import SubscriptionPlanRepository
+            from ..dynamodb.async_client import AsyncDynamoDBClient
+            from ..dynamodb.async_repositories import AsyncSubscriptionPlanRepository
 
-            table = DynamoDBClient.get_table()
-            plan_repo = SubscriptionPlanRepository(table)
-            plan = plan_repo.get_plan(subscription_plan_id)
+            async with AsyncDynamoDBClient.get_resource() as resource:
+                table = await resource.Table(AsyncDynamoDBClient._table_name)
+                plan_repo = AsyncSubscriptionPlanRepository(table)
+                plan = await plan_repo.get_plan(subscription_plan_id)
 
             if plan:
                 plan_name = plan.get('name')

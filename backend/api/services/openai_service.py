@@ -178,15 +178,52 @@ class OpenAIService:
 
             update_progress("Extracting problem content...")
             problem_content = None
+            extracted_tags = []
 
+            # Codeforces: Extract problem statement div and tags
             if 'codeforces.com' in problem_url:
                 problem_div = soup.find('div', class_='problem-statement')
                 if problem_div:
                     problem_content = problem_div
+                    logger.info("Found Codeforces problem-statement div")
+                else:
+                    logger.warning("Could not find problem-statement div, using full content")
+
+                # Extract tags from tag-box class
+                tag_elements = soup.find_all('span', class_='tag-box')
+                if tag_elements:
+                    for tag_elem in tag_elements:
+                        tag_text = tag_elem.get_text(strip=True).lower()
+                        # Remove special characters and asterisks
+                        tag_text = tag_text.replace('*', '').strip()
+                        if tag_text and tag_text not in extracted_tags:
+                            extracted_tags.append(tag_text)
+                    logger.info(f"Extracted {len(extracted_tags)} tags from Codeforces: {extracted_tags}")
+                else:
+                    logger.warning("Could not find tag-box elements on Codeforces page")
+
+            # Baekjoon: Extract problem content and tags
             elif 'acmicpc.net' in problem_url:
                 problem_div = soup.find('div', id='problem-body') or soup.find('div', id='problem_description')
                 if problem_div:
                     problem_content = problem_div
+                    logger.info("Found Baekjoon problem content div")
+                else:
+                    logger.warning("Could not find problem body div, using full content")
+
+                # Extract tags from problem-tag or algorithm tags
+                tag_section = soup.find('div', class_='problem-tag') or soup.find('section', id='problem_tags')
+                if tag_section:
+                    tag_links = tag_section.find_all('a')
+                    for tag_link in tag_links:
+                        tag_text = tag_link.get_text(strip=True).lower()
+                        # Clean up Korean classification markers
+                        tag_text = tag_text.replace('분류:', '').replace('알고리즘:', '').strip()
+                        if tag_text and tag_text not in extracted_tags:
+                            extracted_tags.append(tag_text)
+                    logger.info(f"Extracted {len(extracted_tags)} tags from Baekjoon: {extracted_tags}")
+                else:
+                    logger.warning("Could not find tag section on Baekjoon page")
 
             if problem_content:
                 soup = BeautifulSoup(str(problem_content), 'html.parser')
@@ -327,7 +364,14 @@ Return ONLY valid JSON."""
             result['platform'] = platform
             result['problem_id'] = problem_id
 
-            logger.info(f"Extracted: {result['title']}, {len(result.get('samples', []))} samples")
+            # Add extracted tags
+            if extracted_tags:
+                result['tags'] = extracted_tags
+                logger.info(f"Extracted: {result['title']}, {len(result.get('samples', []))} samples, {len(extracted_tags)} tags: {extracted_tags}")
+            else:
+                result['tags'] = []
+                logger.info(f"Extracted: {result['title']}, {len(result.get('samples', []))} samples, no tags found")
+
             return result
 
         except Exception as e:

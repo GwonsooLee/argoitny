@@ -54,8 +54,8 @@ class UserProfileView(APIView):
                         status=status.HTTP_404_NOT_FOUND
                     )
 
-            # Serialize with latest plan information (sync operation)
-            serialized_user = await sync_to_async(serialize_dynamodb_user)(user_dict)
+            # Serialize with latest plan information (ASYNC)
+            serialized_user = await serialize_dynamodb_user(user_dict)
 
             return Response(serialized_user, status=status.HTTP_200_OK)
 
@@ -147,8 +147,8 @@ class UpdatePlanView(APIView):
             cache_key = CacheKeyGenerator.user_stats_key(user_email)
             await sync_to_async(cache.delete)(cache_key)
 
-            # Serialize and return updated user info
-            serialized_user = await sync_to_async(serialize_dynamodb_user)(updated_user)
+            # Serialize and return updated user info (ASYNC)
+            serialized_user = await serialize_dynamodb_user(updated_user)
             return Response(serialized_user, status=status.HTTP_200_OK)
 
         except Exception as e:

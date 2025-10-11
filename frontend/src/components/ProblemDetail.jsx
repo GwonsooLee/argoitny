@@ -106,6 +106,12 @@ function ProblemDetail({ platform, problemId, onBack }) {
   const [generatingHints, setGeneratingHints] = useState(false);
   const [hints, setHints] = useState([]);
 
+  // Custom Test Case State
+  const [addTestCaseDialogOpen, setAddTestCaseDialogOpen] = useState(false);
+  const [customTestCaseInput, setCustomTestCaseInput] = useState('');
+  const [customTestCaseOutput, setCustomTestCaseOutput] = useState('');
+  const [addingTestCase, setAddingTestCase] = useState(false);
+
   const fetchProblemAndJobs = async () => {
     // Don't show refreshing indicator on initial load
     if (!loading) {
@@ -659,6 +665,47 @@ function ProblemDetail({ platform, problemId, onBack }) {
       console.error('Error generating hints:', error);
       showSnackbar('Failed to generate hints: ' + error.message, 'error');
       setGeneratingHints(false);
+    }
+  };
+
+  const handleAddCustomTestCase = async () => {
+    // Validate input
+    if (!customTestCaseInput.trim()) {
+      showSnackbar('Test case input cannot be empty', 'warning');
+      return;
+    }
+
+    setAddingTestCase(true);
+    try {
+      const response = await apiPost(
+        `${API_ENDPOINTS.problems}${problem.platform}/${problem.problem_id}/testcases/`,
+        {
+          input: customTestCaseInput,
+          output: customTestCaseOutput
+        },
+        { requireAuth: true }
+      );
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to add test case');
+      }
+
+      const data = await response.json();
+      showSnackbar(data.message || 'Test case added successfully!', 'success');
+
+      // Clear form and close dialog
+      setCustomTestCaseInput('');
+      setCustomTestCaseOutput('');
+      setAddTestCaseDialogOpen(false);
+
+      // Refresh problem to show the new test case
+      fetchProblemAndJobs();
+    } catch (error) {
+      console.error('Error adding test case:', error);
+      showSnackbar('Failed to add test case: ' + error.message, 'error');
+    } finally {
+      setAddingTestCase(false);
     }
   };
 
@@ -1472,9 +1519,20 @@ function ProblemDetail({ platform, problemId, onBack }) {
         {!isDraft && problem.test_cases && problem.test_cases.length > 0 && (
           <>
             <Divider sx={{ my: 2 }} />
-            <Typography variant="subtitle2" gutterBottom sx={{ fontWeight: 600, color: 'text.primary' }}>
-              Test Cases ({problem.test_cases.length}):
-            </Typography>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'text.primary' }}>
+                Test Cases ({problem.test_cases.length}):
+              </Typography>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<AddIcon />}
+                onClick={() => setAddTestCaseDialogOpen(true)}
+                disabled={isCompleted}
+              >
+                Add Custom Test Case
+              </Button>
+            </Box>
             {problem.test_cases.map((tc, idx) => {
               const truncatedInput = truncateText(tc.input);
               const truncatedOutput = truncateText(tc.output);
@@ -2162,6 +2220,76 @@ function ProblemDetail({ platform, problemId, onBack }) {
             disabled={saving}
           >
             {saving ? 'Saving...' : 'Save Changes'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Add Custom Test Case Dialog */}
+      <Dialog
+        open={addTestCaseDialogOpen}
+        onClose={() => !addingTestCase && setAddTestCaseDialogOpen(false)}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>
+          Add Custom Test Case
+          <IconButton
+            onClick={() => setAddTestCaseDialogOpen(false)}
+            disabled={addingTestCase}
+            sx={{ position: 'absolute', right: 8, top: 8 }}
+          >
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+            Add a custom test case to validate your solution. The input field is required, while the output field is optional.
+          </Typography>
+
+          <TextField
+            fullWidth
+            multiline
+            rows={6}
+            label="Test Case Input *"
+            placeholder="Enter test case input (e.g., 3&#10;1 2 3)"
+            value={customTestCaseInput}
+            onChange={(e) => setCustomTestCaseInput(e.target.value)}
+            disabled={addingTestCase}
+            required
+            sx={{ mb: 2 }}
+            helperText="Required: Provide the input for the test case"
+          />
+
+          <TextField
+            fullWidth
+            multiline
+            rows={4}
+            label="Expected Output (Optional)"
+            placeholder="Enter expected output (e.g., 6)"
+            value={customTestCaseOutput}
+            onChange={(e) => setCustomTestCaseOutput(e.target.value)}
+            disabled={addingTestCase}
+            helperText="Optional: Provide the expected output for validation"
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => {
+              setAddTestCaseDialogOpen(false);
+              setCustomTestCaseInput('');
+              setCustomTestCaseOutput('');
+            }}
+            disabled={addingTestCase}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={handleAddCustomTestCase}
+            variant="contained"
+            disabled={addingTestCase || !customTestCaseInput.trim()}
+            startIcon={<AddIcon />}
+          >
+            {addingTestCase ? 'Adding...' : 'Add Test Case'}
           </Button>
         </DialogActions>
       </Dialog>
