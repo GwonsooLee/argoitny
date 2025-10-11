@@ -1,8 +1,9 @@
 """API Views"""
 from .auth import GoogleLoginView, TokenRefreshView, LogoutView, AvailablePlansView
-from .problems import ProblemListView, ProblemDetailView, ProblemDraftsView, ProblemRegisteredView
+from .problems import ProblemListView, ProblemDetailView, ProblemStatusView, ProblemDraftsView, ProblemRegisteredView
 from .execute import ExecuteCodeView
 from .history import SearchHistoryListView, SearchHistoryDetailView, GenerateHintsView, GetHintsView
+from .problem_hints import GenerateProblemHintsView, GetProblemHintsView
 from .register import (
     RegisterProblemView,
     GenerateTestCasesView,
@@ -28,6 +29,7 @@ __all__ = [
     'AvailablePlansView',
     'ProblemListView',
     'ProblemDetailView',
+    'ProblemStatusView',
     'ProblemDraftsView',
     'ProblemRegisteredView',
     'ExecuteCodeView',
@@ -35,6 +37,8 @@ __all__ = [
     'SearchHistoryDetailView',
     'GenerateHintsView',
     'GetHintsView',
+    'GenerateProblemHintsView',
+    'GetProblemHintsView',
     'RegisterProblemView',
     'GenerateTestCasesView',
     'ExecuteTestCasesView',

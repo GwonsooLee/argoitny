@@ -79,6 +79,13 @@ function App() {
     }
   }, [testResults]);
 
+  // Refresh plan usage when hints loading completes
+  useEffect(() => {
+    if (!hintsLoading && user) {
+      fetchPlanUsage();
+    }
+  }, [hintsLoading]);
+
   useEffect(() => {
     if (isAuthenticated()) {
       const currentUser = getUser();
@@ -207,14 +214,33 @@ function App() {
           window.history.pushState({}, '', '/login');
           showSnackbar('Please log in to test problems', 'warning');
         } else {
-          // Fetch the problem
-          apiGet(`${API_ENDPOINTS.problems}${platform}/${problemId}/`, { requireAuth: true }).then(async (response) => {
-            if (response.ok) {
-              const problem = await response.json();
-              setSelectedProblem(problem);
+          // Check problem status first (is_completed)
+          apiGet(API_ENDPOINTS.problemStatus(platform, problemId), { requireAuth: true }).then(async (statusResponse) => {
+            if (statusResponse.ok) {
+              const statusData = await statusResponse.json();
+
+              // Check if problem is completed
+              if (!statusData.is_completed) {
+                showSnackbar('Problem not found', 'error');
+                setCurrentView('search');
+                window.history.pushState({}, '', '/');
+                return;
+              }
+
+              // Problem is completed - set it for test view
+              setSelectedProblem({
+                platform: statusData.platform,
+                problem_id: statusData.problem_id,
+                title: statusData.title,
+                is_completed: statusData.is_completed
+              });
               setCurrentView('test');
-            } else {
+            } else if (statusResponse.status === 404) {
               showSnackbar('Problem not found', 'error');
+              setCurrentView('search');
+              window.history.pushState({}, '', '/');
+            } else {
+              showSnackbar('Failed to load problem status', 'error');
               setCurrentView('search');
               window.history.pushState({}, '', '/');
             }
@@ -255,14 +281,38 @@ function App() {
     };
   }, []);
 
-  const handleSelectProblem = (problem) => {
+  const handleSelectProblem = async (problem) => {
     if (!isAuthenticated()) {
       handleRequestLogin('test');
       return;
     }
-    setSelectedProblem(problem);
-    setCurrentView('test');
-    window.history.pushState({}, '', `/test/${problem.platform}/${problem.problem_id}`);
+
+    // Check problem status before allowing test
+    try {
+      const statusResponse = await apiGet(API_ENDPOINTS.problemStatus(problem.platform, problem.problem_id), { requireAuth: true });
+
+      if (statusResponse.ok) {
+        const statusData = await statusResponse.json();
+
+        // Check if problem is completed
+        if (!statusData.is_completed) {
+          showSnackbar('Problem not found', 'error');
+          return;
+        }
+
+        // Problem is completed - proceed to test
+        setSelectedProblem(problem);
+        setCurrentView('test');
+        window.history.pushState({}, '', `/test/${problem.platform}/${problem.problem_id}`);
+      } else if (statusResponse.status === 404) {
+        showSnackbar('Problem not found', 'error');
+      } else {
+        showSnackbar('Failed to load problem status', 'error');
+      }
+    } catch (error) {
+      console.error('Error checking problem status:', error);
+      showSnackbar('Failed to load problem', 'error');
+    }
   };
 
   const handleBackToSearch = () => {
@@ -509,49 +559,6 @@ function App() {
                       </Typography>
                     </Box>
                   )}
-                  {planUsage && (
-                    <Box
-                      sx={{
-                        display: { xs: 'none', md: 'flex' },
-                        gap: 1.5,
-                        px: 1.5,
-                        py: 0.5,
-                        borderRadius: 1,
-                        bgcolor: 'rgba(0, 0, 0, 0.04)',
-                      }}
-                    >
-                      <Typography
-                        variant="caption"
-                        sx={{
-                          color: 'text.secondary',
-                          fontSize: '0.75rem'
-                        }}
-                      >
-                        Problems: {planUsage.usage.total_problems}
-                        {planUsage.limits.max_problems !== -1 && `/${planUsage.limits.max_problems}`}
-                      </Typography>
-                      <Typography
-                        variant="caption"
-                        sx={{
-                          color: 'text.secondary',
-                          fontSize: '0.75rem'
-                        }}
-                      >
-                        Hints: {planUsage.usage.hints_today}
-                        {planUsage.limits.max_hints_per_day !== -1 && `/${planUsage.limits.max_hints_per_day}`}
-                      </Typography>
-                      <Typography
-                        variant="caption"
-                        sx={{
-                          color: 'text.secondary',
-                          fontSize: '0.75rem'
-                        }}
-                      >
-                        Executions: {planUsage.usage.executions_today}
-                        {planUsage.limits.max_executions_per_day !== -1 && `/${planUsage.limits.max_executions_per_day}`}
-                      </Typography>
-                    </Box>
-                  )}
                   <IconButton onClick={(e) => setAnchorEl(e.currentTarget)} sx={{ p: 0.5 }}>
                     <Avatar
                       src={user.picture}
@@ -608,25 +615,64 @@ function App() {
                       </Box>
                     )}
                   </Box>
-                  {user.is_admin && [
-                    <Divider key="admin-divider-1" />,
-                    <MenuItem key="admin-users" onClick={() => {
-                      setAnchorEl(null);
-                      setCurrentView('admin-users');
-                      window.history.pushState({}, '', '/admin/users');
-                    }}>
-                      <AdminIcon sx={{ mr: 1 }} fontSize="small" />
-                      User Management
-                    </MenuItem>,
-                    <MenuItem key="admin-plans" onClick={() => {
-                      setAnchorEl(null);
-                      setCurrentView('admin-plans');
-                      window.history.pushState({}, '', '/admin/plans');
-                    }}>
-                      <AdminIcon sx={{ mr: 1 }} fontSize="small" />
-                      Plan Management
-                    </MenuItem>
-                  ]}
+                  {planUsage && (
+                    <>
+                      <Divider sx={{ my: 1 }} />
+                      <Box sx={{ px: 2, py: 1.5 }}>
+                        <Typography variant="caption" sx={{
+                          fontWeight: 600,
+                          color: 'text.secondary',
+                          textTransform: 'uppercase',
+                          fontSize: '0.688rem',
+                          display: 'block',
+                          mb: 1
+                        }}>
+                          Usage Statistics
+                        </Typography>
+                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <Typography variant="body2" sx={{ color: 'text.secondary', fontSize: '0.813rem' }}>
+                              Hints (Today):
+                            </Typography>
+                            <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.813rem' }}>
+                              {planUsage.usage.hints_today}
+                              {planUsage.limits.max_hints_per_day !== -1 && ` / ${planUsage.limits.max_hints_per_day}`}
+                            </Typography>
+                          </Box>
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <Typography variant="body2" sx={{ color: 'text.secondary', fontSize: '0.813rem' }}>
+                              Executions (Today):
+                            </Typography>
+                            <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.813rem' }}>
+                              {planUsage.usage.executions_today}
+                              {planUsage.limits.max_executions_per_day !== -1 && ` / ${planUsage.limits.max_executions_per_day}`}
+                            </Typography>
+                          </Box>
+                        </Box>
+                      </Box>
+                    </>
+                  )}
+                  {user.is_admin && (
+                    <>
+                      <Divider />
+                      <MenuItem onClick={() => {
+                        setAnchorEl(null);
+                        setCurrentView('admin-users');
+                        window.history.pushState({}, '', '/admin/users');
+                      }}>
+                        <AdminIcon sx={{ mr: 1 }} fontSize="small" />
+                        User Management
+                      </MenuItem>
+                      <MenuItem onClick={() => {
+                        setAnchorEl(null);
+                        setCurrentView('admin-plans');
+                        window.history.pushState({}, '', '/admin/plans');
+                      }}>
+                        <AdminIcon sx={{ mr: 1 }} fontSize="small" />
+                        Plan Management
+                      </MenuItem>
+                    </>
+                  )}
                   {!user.is_admin && (
                     <>
                       <Divider />
@@ -736,7 +782,13 @@ function App() {
                     onTestResults={setTestResults}
                     hintsLoading={hintsLoading}
                   />
-                  {testResults && <TestResults results={testResults} executionId={testResults.execution_id} onHintsLoadingChange={setHintsLoading} />}
+                  {testResults && <TestResults
+                    results={testResults}
+                    executionId={testResults.execution_id}
+                    platform={selectedProblem.platform}
+                    problemId={selectedProblem.problem_id}
+                    onHintsLoadingChange={setHintsLoading}
+                  />}
                 </>
               )}
             </Container>

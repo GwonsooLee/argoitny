@@ -48,8 +48,22 @@ function HintsDisplay({ hints = [], loading = false, error = null, displayMode =
   const normalizedHints = (hints || []).map((hint, index) => {
     if (typeof hint === 'string') {
       return {
-        title: `힌트 ${index + 1}`,
+        title: `Hint ${index + 1}`,
         content: hint
+      };
+    }
+    // Handle backend format: {level: 1, hint: '...'}
+    if (hint.hint && hint.level) {
+      return {
+        title: `Hint ${hint.level}`,
+        content: hint.hint
+      };
+    }
+    // Handle format with 'content' field
+    if (hint.content) {
+      return {
+        title: hint.title || `Hint ${index + 1}`,
+        content: hint.content
       };
     }
     return hint;
@@ -164,7 +178,7 @@ function HintsDisplay({ hints = [], loading = false, error = null, displayMode =
 
         <Stepper activeStep={activeStep} orientation="vertical">
           {normalizedHints.map((hint, index) => (
-            <Step key={index} expanded={revealedHints.has(index)}>
+            <Step key={index} expanded={index === activeStep && revealedHints.has(index)}>
               <StepLabel
                 onClick={() => handleStepClick(index)}
                 sx={{

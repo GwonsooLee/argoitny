@@ -102,6 +102,10 @@ function ProblemDetail({ platform, problemId, onBack }) {
   const [reasoningEffort, setReasoningEffort] = useState('medium');
   const [maxOutputTokens, setMaxOutputTokens] = useState(8192);
 
+  // Hints State
+  const [generatingHints, setGeneratingHints] = useState(false);
+  const [hints, setHints] = useState([]);
+
   const fetchProblemAndJobs = async () => {
     // Don't show refreshing indicator on initial load
     if (!loading) {
@@ -141,6 +145,11 @@ function ProblemDetail({ platform, problemId, onBack }) {
 
         // Backend already decodes solution_code from base64, no need to decode again
         setProblem(problemData);
+
+        // Load hints if available
+        if (problemData.metadata?.hints) {
+          setHints(problemData.metadata.hints);
+        }
       } else if (problemResponse.status === 403) {
         // Access denied - redirect immediately
         onBack();
@@ -578,6 +587,81 @@ function ProblemDetail({ platform, problemId, onBack }) {
     }
   };
 
+  const handleGenerateHints = async () => {
+    setGeneratingHints(true);
+    try {
+      const response = await apiPost(
+        `${API_ENDPOINTS.problems}${problem.platform}/${problem.problem_id}/generate-hints/`,
+        {},
+        { requireAuth: true }
+      );
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to generate hints');
+      }
+
+      const data = await response.json();
+
+      // If hints already exist (returned immediately)
+      if (data.hints) {
+        setHints(data.hints);
+        showSnackbar(`Hints already exist (${data.hints.length} hints)`, 'info');
+        setGeneratingHints(false);
+        return;
+      }
+
+      // Task started - poll for completion
+      showSnackbar('Generating hints in background...', 'info');
+
+      // Poll every 3 seconds for hint generation completion
+      const pollInterval = setInterval(async () => {
+        try {
+          const pollResponse = await apiGet(
+            `${API_ENDPOINTS.problems}${problem.platform}/${problem.problem_id}/`,
+            { requireAuth: true }
+          );
+
+          if (!pollResponse.ok) {
+            clearInterval(pollInterval);
+            setGeneratingHints(false);
+            showSnackbar('Failed to check hint generation status', 'error');
+            return;
+          }
+
+          const pollData = await pollResponse.json();
+
+          // Check if hints have been generated
+          if (pollData.metadata?.hints) {
+            clearInterval(pollInterval);
+            setHints(pollData.metadata.hints);
+            setGeneratingHints(false);
+            showSnackbar(`Generated ${pollData.metadata.hints.length} hints successfully!`, 'success');
+
+            // Refresh problem to update all data
+            fetchProblemAndJobs();
+          }
+        } catch (pollError) {
+          console.error('Error polling for hints:', pollError);
+        }
+      }, 3000);
+
+      // Stop polling after 5 minutes
+      setTimeout(() => {
+        clearInterval(pollInterval);
+        if (generatingHints) {
+          setGeneratingHints(false);
+          showSnackbar('Hint generation is taking longer than expected. Please refresh the page.', 'warning');
+        }
+      }, 300000);
+
+    } catch (error) {
+      console.error('Error generating hints:', error);
+      showSnackbar('Failed to generate hints: ' + error.message, 'error');
+      setGeneratingHints(false);
+    }
+  };
+
   const handleDelete = async () => {
     setDeleting(true);
     try {
@@ -934,16 +1018,32 @@ function ProblemDetail({ platform, problemId, onBack }) {
             </Button>
           )}
           {isCompleted && (
-            <Button
-              variant="outlined"
-              onClick={handleMakeDraft}
-              sx={{
-                fontSize: { xs: '0.813rem', sm: '0.875rem' },
-                py: { xs: 1, sm: 0.75 }
-              }}
-            >
-              Make Draft
-            </Button>
+            <>
+              <Button
+                variant="outlined"
+                onClick={handleMakeDraft}
+                sx={{
+                  fontSize: { xs: '0.813rem', sm: '0.875rem' },
+                  py: { xs: 1, sm: 0.75 }
+                }}
+              >
+                Make Draft
+              </Button>
+              {problem.solution_code && !problem.needs_review && !hints.length && (
+                <Button
+                  variant="contained"
+                  color="secondary"
+                  onClick={handleGenerateHints}
+                  disabled={generatingHints}
+                  sx={{
+                    fontSize: { xs: '0.813rem', sm: '0.875rem' },
+                    py: { xs: 1, sm: 0.75 }
+                  }}
+                >
+                  {generatingHints ? 'Generating Hints...' : 'Generate Hints'}
+                </Button>
+              )}
+            </>
           )}
           {isDraft && !isCompleted && !isExtracting && (
             <Button
@@ -1152,6 +1252,11 @@ function ProblemDetail({ platform, problemId, onBack }) {
             </Typography>
           </Grid>
           <Grid item xs={12} md={6}>
+            <Typography variant="body2" color="text.secondary">
+              <strong>Solution Model:</strong> {problem.solution_model || 'N/A'}
+            </Typography>
+          </Grid>
+          <Grid item xs={12} md={6}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <Typography variant="body2" color="text.secondary" component="span">
                 <strong>Test Cases:</strong> {problem.test_case_count || 0}
@@ -1332,6 +1437,35 @@ function ProblemDetail({ platform, problemId, onBack }) {
                 {problem.solution_code}
               </pre>
             </Paper>
+          </>
+        )}
+
+        {hints && hints.length > 0 && (
+          <>
+            <Divider sx={{ my: 2 }} />
+            <Typography variant="subtitle2" gutterBottom sx={{ fontWeight: 600, color: 'text.primary' }}>
+              Solution Hints ({hints.length}):
+            </Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+              Progressive hints to help solve this problem. Start with the first hint and progress as needed.
+            </Typography>
+            {hints.map((hint, idx) => (
+              <Accordion
+                key={idx}
+                sx={{ mb: 1, '&:before': { display: 'none' } }}
+              >
+                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                  <Typography sx={{ fontWeight: 500 }}>
+                    Hint {hint.level} {idx === 0 && '(Start here)'}
+                  </Typography>
+                </AccordionSummary>
+                <AccordionDetails>
+                  <Typography variant="body2" color="text.secondary">
+                    {hint.hint}
+                  </Typography>
+                </AccordionDetails>
+              </Accordion>
+            ))}
           </>
         )}
 

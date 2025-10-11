@@ -120,9 +120,9 @@ def generate_script_task(self, job_id):
             logger.info(f"[generate_script_task] Retry attempt with previous failure context")
             logger.info(f"[generate_script_task] Previous error: {job['error_message'][:200]}...")
 
-        # Generate script using LLM service (Gemini or OpenAI based on settings)
+        # Generate script using LLM service (use Gemini Flash for cost efficiency)
         logger.info(f"[generate_script_task] Calling LLM API to generate test case generator...")
-        llm_service = LLMServiceFactory.create_service()
+        llm_service = LLMServiceFactory.create_service(task_tier='simple')
         generator_code = llm_service.generate_test_case_generator_code(problem_info, previous_failure=previous_failure)
         logger.info(f"[generate_script_task] Gemini returned generator code ({len(generator_code)} chars)")
 
@@ -899,17 +899,17 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
             update_progress("Loading from cache...")
             problem_info = cached_info
         else:
-            # STEP 1: Extract problem metadata (title, constraints, samples) using GEMINI
-            # ALWAYS use Gemini for metadata extraction (ignores llm_config)
-            # Gemini is more reliable and cost-effective for metadata extraction
-            update_progress("📄 Step 1/2: Extracting problem metadata with Gemini...")
-            gemini_service = LLMServiceFactory.create_service('gemini')
-            problem_metadata = gemini_service.extract_problem_metadata_from_url(
+            # STEP 1: Extract problem metadata (title, constraints, samples) using GEMINI FLASH
+            # Use Gemini Flash (94% cheaper) for simple metadata extraction
+            # Flash is ideal for title, constraints, and sample extraction tasks
+            update_progress("📄 Step 1/2: Extracting problem metadata with Gemini Flash...")
+            flash_service = LLMServiceFactory.create_service(task_tier='simple')
+            problem_metadata = flash_service.extract_problem_metadata_from_url(
                 problem_url,
                 progress_callback=lambda msg: update_progress(f"📄 {msg}"),
                 user_samples=samples  # Pass user-provided samples
             )
-            logger.info(f"Extracted metadata with Gemini: {problem_metadata['title']}, {len(problem_metadata.get('samples', []))} samples")
+            logger.info(f"[FLASH] Extracted metadata: {problem_metadata['title']}, {len(problem_metadata.get('samples', []))} samples")
 
             # Add additional_context to problem_metadata for solution generation
             if additional_context:
@@ -1055,6 +1055,7 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
                         'problem_url': problem_url,
                         'constraints': problem_info['constraints'],
                         'solution_code': problem_info['solution_code'],
+                        'solution_model': llm_config.get('model', 'gpt-5'),  # Store model used for solution
                         'language': 'cpp',
                         'tags': problem_info.get('tags', []),
                         'is_completed': False,  # Keep as draft
@@ -1091,6 +1092,7 @@ def extract_problem_info_task(self, problem_url, job_id=None, additional_context
                             'problem_url': problem_url,
                             'constraints': problem_info['constraints'],
                             'solution_code': problem_info['solution_code'],
+                            'solution_model': llm_config.get('model', 'gpt-5'),  # Store model used for solution
                             'language': 'cpp',
                             'tags': problem_info.get('tags', []),
                             'is_completed': False,  # Draft state
@@ -1363,10 +1365,10 @@ def generate_hints_task(self, history_id):
             'language': language
         }
 
-        # Generate hints using Gemini ONLY (ignores llm_config)
-        # ALWAYS use Gemini for hint generation - it's more cost-effective and reliable
-        logger.info(f"[HINTS] History {history_id}: Calling Gemini API to generate hints")
-        llm_service = LLMServiceFactory.create_service('gemini')
+        # Generate hints using Gemini Flash for cost efficiency
+        # Use Flash tier for simple hint generation tasks
+        logger.info(f"[HINTS] History {history_id}: Calling Gemini Flash API to generate hints")
+        llm_service = LLMServiceFactory.create_service(task_tier='simple')
         generated_hints = llm_service.generate_hints(
             user_code=code,
             solution_code=decoded_solution,
@@ -1394,6 +1396,162 @@ def generate_hints_task(self, history_id):
     except Exception as e:
         logger.error(f"[HINTS] History {history_id}: Task failed with error: {str(e)}", exc_info=True)
         # Don't retry - handled by autoretry_for
+        raise
+
+
+# ============================================================================
+# PROBLEM HINTS GENERATION TASK
+# ============================================================================
+@shared_task(
+    bind=True,
+    max_retries=MAX_RETRIES,
+    time_limit=600,  # 10 minutes hard limit
+    soft_time_limit=540,  # 9 minutes soft limit
+    acks_late=False,
+    reject_on_worker_lost=True,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_jitter=True,
+)
+def generate_problem_hints_task(self, platform, problem_id):
+    """
+    Async task to generate hints for a problem based on its solution
+
+    Args:
+        platform: Platform name (e.g., 'baekjoon', 'codeforces')
+        problem_id: Problem identifier
+
+    Returns:
+        dict: Result with status and hints
+    """
+    from api.dynamodb.client import DynamoDBClient
+    from api.dynamodb.repositories import ProblemRepository
+    import json
+
+    logger.info(f"[PROBLEM HINTS] Starting hint generation for {platform}/{problem_id}")
+
+    try:
+        # Get problem from DynamoDB
+        table = DynamoDBClient.get_table()
+        problem_repo = ProblemRepository(table)
+        problem = problem_repo.get_problem(platform, problem_id)
+
+        if not problem:
+            logger.error(f"[PROBLEM HINTS] Problem not found: {platform}/{problem_id}")
+            return {
+                'status': 'FAILED',
+                'error': 'Problem not found'
+            }
+
+        # Check if problem has solution and is not under review
+        solution_code = problem.get('solution_code', '')
+        if not solution_code:
+            logger.error(f"[PROBLEM HINTS] Problem {platform}/{problem_id} has no solution")
+            return {
+                'status': 'FAILED',
+                'error': 'Problem must have a solution to generate hints'
+            }
+
+        if problem.get('needs_review', False):
+            logger.error(f"[PROBLEM HINTS] Problem {platform}/{problem_id} needs review")
+            return {
+                'status': 'FAILED',
+                'error': 'Cannot generate hints for problems under review'
+            }
+
+        # Check if hints already exist
+        metadata = problem.get('metadata', {})
+        if metadata.get('hints'):
+            logger.info(f"[PROBLEM HINTS] Hints already exist for {platform}/{problem_id}")
+            return {
+                'status': 'COMPLETED',
+                'hints': metadata['hints'],
+                'message': 'Hints already exist'
+            }
+
+        # Generate hints using LLM (Gemini Flash for cost efficiency)
+        llm_service = LLMServiceFactory.create_service(task_tier='simple')
+
+        title = problem.get('title', 'Unknown')
+        tags = problem.get('tags', [])
+        constraints = problem.get('constraints', 'Not specified')
+        language = problem.get('language', 'python')
+
+        prompt = f"""You are an expert algorithm tutor. Given a problem and its solution, generate 3-5 progressive hints that guide a student toward solving the problem without giving away the answer directly.
+
+Problem Information:
+- Title: {title}
+- Tags: {', '.join(tags)}
+- Constraints: {constraints}
+
+Solution Code:
+```{language}
+{solution_code}
+```
+
+Generate hints following these guidelines:
+1. Start with a gentle nudge about the problem type or approach
+2. Progress to more specific algorithmic insights
+3. Include hints about edge cases or common pitfalls
+4. Each hint should be progressively more specific
+5. The last hint should be very close to the solution but not reveal it completely
+
+Return ONLY a JSON array of hints in this format (no markdown, no extra text):
+[
+    {{"level": 1, "hint": "First gentle hint..."}},
+    {{"level": 2, "hint": "Second more specific hint..."}},
+    {{"level": 3, "hint": "Third hint about the approach..."}},
+    {{"level": 4, "hint": "Fourth hint about implementation..."}},
+    {{"level": 5, "hint": "Final hint very close to solution..."}}
+]"""
+
+        logger.info(f"[PROBLEM HINTS] Calling LLM API to generate hints for {platform}/{problem_id}")
+        response_text = llm_service.generate_content(prompt)
+
+        # Parse the response
+        try:
+            # Remove markdown code blocks if present
+            cleaned_response = response_text.strip()
+            if cleaned_response.startswith('```'):
+                lines = cleaned_response.split('\n')
+                cleaned_response = '\n'.join(lines[1:-1]) if len(lines) > 2 else cleaned_response
+
+            hints = json.loads(cleaned_response)
+
+            # Validate hints structure
+            if not isinstance(hints, list):
+                raise ValueError("Hints must be a list")
+
+            if not (3 <= len(hints) <= 5):
+                raise ValueError("Must have 3-5 hints")
+
+            for hint in hints:
+                if not isinstance(hint, dict) or 'level' not in hint or 'hint' not in hint:
+                    raise ValueError("Each hint must have 'level' and 'hint' fields")
+
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.error(f"[PROBLEM HINTS] Failed to parse LLM response: {e}")
+            logger.error(f"[PROBLEM HINTS] Raw response: {response_text}")
+            return {
+                'status': 'FAILED',
+                'error': f'Failed to generate valid hints format: {str(e)}'
+            }
+
+        # Store hints in problem metadata
+        metadata['hints'] = hints
+        problem_repo.update_problem(platform, problem_id, {'metadata': metadata})
+
+        logger.info(f"[PROBLEM HINTS] Generated {len(hints)} hints for {platform}/{problem_id}")
+
+        return {
+            'status': 'COMPLETED',
+            'hints': hints,
+            'message': f'Generated {len(hints)} hints successfully'
+        }
+
+    except Exception as e:
+        logger.error(f"[PROBLEM HINTS] Error for {platform}/{problem_id}: {str(e)}", exc_info=True)
         raise
 
 

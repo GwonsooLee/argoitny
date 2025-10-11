@@ -48,9 +48,127 @@ class TestCaseGenerator:
     SAFE_MODULES = ['random', 'math', 'string', 'itertools', 'collections']
 
     @staticmethod
+    def _check_undefined_names(tree: ast.AST, code: str) -> None:
+        """
+        Check for undefined names in the code using static analysis
+
+        Args:
+            tree: AST tree of the code
+            code: Original code string for error messages
+
+        Raises:
+            ValueError: If undefined names are found
+        """
+        # Built-in names that are always available
+        builtin_names = set(TestCaseGenerator.SAFE_BUILTINS.keys())
+        builtin_names.update(['True', 'False', 'None'])
+
+        # Track defined names at module level and function level
+        class NameChecker(ast.NodeVisitor):
+            def __init__(self):
+                self.defined_names = set(builtin_names)
+                self.undefined_names = []
+                self.current_scope_stack = [set()]  # Stack of scopes
+
+            def visit_Import(self, node):
+                for alias in node.names:
+                    name = alias.asname if alias.asname else alias.name.split('.')[0]
+                    self.current_scope_stack[-1].add(name)
+                self.generic_visit(node)
+
+            def visit_ImportFrom(self, node):
+                for alias in node.names:
+                    name = alias.asname if alias.asname else alias.name
+                    self.current_scope_stack[-1].add(name)
+                self.generic_visit(node)
+
+            def visit_FunctionDef(self, node):
+                # Add function name to current scope
+                self.current_scope_stack[-1].add(node.name)
+
+                # Create new scope for function body
+                self.current_scope_stack.append(set())
+
+                # Add parameters to function scope
+                for arg in node.args.args:
+                    self.current_scope_stack[-1].add(arg.arg)
+
+                # Visit function body
+                for child in node.body:
+                    self.visit(child)
+
+                # Pop function scope
+                self.current_scope_stack.pop()
+
+            def visit_Assign(self, node):
+                # Add assigned names to current scope
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        self.current_scope_stack[-1].add(target.id)
+                    elif isinstance(target, (ast.Tuple, ast.List)):
+                        for elt in target.elts:
+                            if isinstance(elt, ast.Name):
+                                self.current_scope_stack[-1].add(elt.id)
+                self.generic_visit(node)
+
+            def visit_For(self, node):
+                # Add loop variable to current scope
+                if isinstance(node.target, ast.Name):
+                    self.current_scope_stack[-1].add(node.target.id)
+                elif isinstance(node.target, (ast.Tuple, ast.List)):
+                    for elt in node.target.elts:
+                        if isinstance(elt, ast.Name):
+                            self.current_scope_stack[-1].add(elt.id)
+                self.generic_visit(node)
+
+            def visit_With(self, node):
+                # Add context manager variables to current scope
+                for item in node.items:
+                    if item.optional_vars:
+                        if isinstance(item.optional_vars, ast.Name):
+                            self.current_scope_stack[-1].add(item.optional_vars.id)
+                self.generic_visit(node)
+
+            def visit_comprehension(self, node):
+                # Add comprehension variables
+                if isinstance(node.target, ast.Name):
+                    self.current_scope_stack[-1].add(node.target.id)
+                self.generic_visit(node)
+
+            def visit_Name(self, node):
+                # Check if name is being loaded (used) and not defined
+                if isinstance(node.ctx, ast.Load):
+                    # Check all scopes from innermost to outermost
+                    is_defined = False
+                    for scope in reversed(self.current_scope_stack):
+                        if node.id in scope:
+                            is_defined = True
+                            break
+
+                    if not is_defined and node.id not in self.defined_names:
+                        self.undefined_names.append((node.id, node.lineno, node.col_offset))
+
+                self.generic_visit(node)
+
+        checker = NameChecker()
+        checker.visit(tree)
+
+        if checker.undefined_names:
+            # Get first undefined name for error message
+            name, line, col = checker.undefined_names[0]
+            code_lines = code.split('\n')
+            error_line = code_lines[line - 1] if line <= len(code_lines) else ''
+
+            raise ValueError(
+                f'Undefined name detected: "{name}" at line {line}\n'
+                f'Line: {error_line.strip()}\n'
+                f'This variable/constant must be defined before use.'
+            )
+
+    @staticmethod
     def validate_code(code: str) -> bool:
         """
-        Validate that the code is safe to execute
+        Validate that the code is safe to execute and has no undefined names
 
         Args:
             code: Python code to validate
@@ -59,7 +177,7 @@ class TestCaseGenerator:
             True if code is safe, raises ValueError otherwise
 
         Raises:
-            ValueError: If code contains unsafe operations
+            ValueError: If code contains unsafe operations or undefined names
         """
         try:
             tree = ast.parse(code)
@@ -83,6 +201,9 @@ class TestCaseGenerator:
             if isinstance(node, ast.ImportFrom):
                 if node.module and node.module.split('.')[0] not in TestCaseGenerator.SAFE_MODULES:
                     raise ValueError(f'Unsafe module import: {node.module}')
+
+        # Check for undefined names
+        TestCaseGenerator._check_undefined_names(tree, code)
 
         return True
 

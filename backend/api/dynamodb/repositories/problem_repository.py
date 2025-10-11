@@ -74,6 +74,7 @@ class ProblemRepository(BaseRepository):
             'url': problem_data.get('problem_url', ''),
             'tag': problem_data.get('tags', []),
             'sol': solution_code_encoded,
+            'slm': problem_data.get('solution_model', ''),  # Model used for solution generation
             'lng': problem_data.get('language', ''),
             'con': problem_data.get('constraints', ''),
             'cmp': problem_data.get('is_completed', False),
@@ -147,6 +148,7 @@ class ProblemRepository(BaseRepository):
                 'problem_url': item['dat'].get('url', ''),
                 'tags': item['dat'].get('tag', []),
                 'solution_code': solution_code,
+                'solution_model': item['dat'].get('slm', ''),  # Model used for solution generation
                 'language': item['dat'].get('lng', ''),
                 'constraints': item['dat'].get('con', ''),
                 'is_completed': item['dat'].get('cmp', False),
@@ -209,6 +211,7 @@ class ProblemRepository(BaseRepository):
                     'problem_url': item['dat'].get('url', ''),
                     'tags': item['dat'].get('tag', []),
                     'solution_code': solution_code,
+                    'solution_model': item['dat'].get('slm', ''),  # Model used for solution generation
                     'language': item['dat'].get('lng', ''),
                     'constraints': item['dat'].get('con', ''),
                     'is_completed': item['dat'].get('cmp', False),
@@ -270,6 +273,7 @@ class ProblemRepository(BaseRepository):
             'problem_url': 'url',
             'tags': 'tag',
             'solution_code': 'sol',
+            'solution_model': 'slm',  # Model used for solution generation
             'language': 'lng',
             'constraints': 'con',
             'is_completed': 'cmp',

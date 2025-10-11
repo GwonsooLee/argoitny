@@ -291,6 +291,7 @@ class ProblemDetailView(APIView):
                 'problem_url': dat.get('url', ''),
                 'tags': dat.get('tag', []),
                 'solution_code': solution_code,
+                'solution_model': dat.get('slm', ''),
                 'language': dat.get('lng', ''),
                 'constraints': dat.get('con', ''),
                 'is_completed': dat.get('cmp', False),
@@ -574,6 +575,7 @@ class ProblemDetailView(APIView):
                     'problem_url': updated_dat.get('url', ''),
                     'tags': updated_dat.get('tag', []),
                     'solution_code': decoded_solution_code,
+                    'solution_model': updated_dat.get('slm', ''),
                     'language': updated_dat.get('lng', ''),
                     'constraints': updated_dat.get('con', ''),
                     'is_completed': updated_dat.get('cmp', False),
@@ -731,6 +733,7 @@ class ProblemDetailView(APIView):
                         'problem_url': dat.get('url', ''),
                         'tags': dat.get('tag', []),
                         'solution_code': solution_code,
+                'solution_model': dat.get('slm', ''),
                         'language': dat.get('lng', ''),
                         'constraints': dat.get('con', ''),
                         'is_completed': dat.get('cmp', False),
@@ -865,6 +868,80 @@ class ProblemDraftsView(APIView):
             logger.error(f"Error fetching drafts: {e}")
             return Response(
                 {'error': f'Failed to fetch drafts: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class ProblemStatusView(APIView):
+    """Check if problem is completed - Authenticated users only"""
+    permission_classes = [IsAuthenticated]
+
+    async def get(self, request, platform=None, problem_identifier=None):
+        """
+        Check if a problem is completed (accessible to all authenticated users)
+
+        Returns:
+            {
+                "platform": "codeforces",
+                "problem_id": "276D",
+                "title": "Problem Title",
+                "is_completed": true/false
+            }
+        """
+        try:
+            # Validate parameters
+            if not platform or not problem_identifier:
+                return Response(
+                    {'error': 'Please provide both platform and problem_identifier'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Async DynamoDB operations
+            async with AsyncDynamoDBClient.get_resource() as resource:
+                table = await resource.Table(AsyncDynamoDBClient._table_name)
+
+                # Get problem metadata
+                problem_response = await table.get_item(
+                    Key={
+                        'PK': f'PROB#{platform}#{problem_identifier}',
+                        'SK': 'META'
+                    }
+                )
+
+                if 'Item' not in problem_response:
+                    return Response(
+                        {'error': 'Problem not found'},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+
+                problem = problem_response['Item']
+
+                # Check if problem is deleted
+                if problem.get('is_deleted', False):
+                    return Response(
+                        {'error': 'Problem not found'},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+
+                # Extract data from compact storage format
+                dat = problem.get('dat', {})
+                pk_parts = problem['PK'].split('#')
+                parsed_platform = pk_parts[1] if len(pk_parts) >= 3 else platform
+                parsed_problem_id = '#'.join(pk_parts[2:]) if len(pk_parts) >= 3 else problem_identifier
+
+                response_data = {
+                    'platform': parsed_platform,
+                    'problem_id': parsed_problem_id,
+                    'title': dat.get('tit', ''),
+                    'is_completed': dat.get('cmp', False)
+                }
+
+                return Response(response_data, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.error(f"Error checking problem status: {e}")
+            return Response(
+                {'error': f'Failed to check problem status: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 

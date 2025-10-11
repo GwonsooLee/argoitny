@@ -48,6 +48,7 @@ class ProblemSerializer(serializers.Serializer):
     problem_url = serializers.URLField(required=False, allow_blank=True)
     tags = serializers.ListField(child=serializers.CharField(), required=False, default=list)
     solution_code = serializers.CharField(required=False, allow_blank=True)
+    solution_model = serializers.CharField(max_length=50, required=False, allow_blank=True)
     language = serializers.CharField(max_length=50, required=False)
     constraints = serializers.CharField(required=False, allow_blank=True)
     generator_code = serializers.CharField(required=False, allow_blank=True)
@@ -197,17 +198,17 @@ class LLMConfigSerializer(serializers.Serializer):
     LLM configuration serializer for SOLUTION CODE GENERATION ONLY
 
     NOTE: This config ONLY affects solution code generation.
-    Metadata extraction and hint generation always use Gemini regardless of this config.
+    Metadata extraction always uses Gemini Flash (most cost-effective).
     """
     model = serializers.ChoiceField(
-        choices=['gpt-5', 'gemini'],
+        choices=['gemini-flash', 'gemini-pro', 'gpt-4o', 'gpt-5'],
         default='gpt-5',
-        help_text="LLM model to use for solution code generation (does NOT affect metadata/hints)"
+        help_text="LLM model to use for solution code generation (metadata extraction always uses Gemini Flash)"
     )
     reasoning_effort = serializers.ChoiceField(
         choices=['low', 'medium', 'high'],
         default='medium',
-        help_text="Reasoning effort level for GPT-5 (only used with gpt-5 model)"
+        help_text="Reasoning effort level (mainly for GPT-5, some effect on other models)"
     )
     max_output_tokens = serializers.IntegerField(
         default=8192,

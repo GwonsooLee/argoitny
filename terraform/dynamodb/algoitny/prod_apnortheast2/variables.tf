@@ -25,14 +25,44 @@ variable "billing_mode" {
   default     = "PAY_PER_REQUEST"
 }
 
-variable "enable_streams" {
-  description = "Enable DynamoDB Streams"
+variable "read_capacity" {
+  description = "Read capacity units for PROVISIONED billing mode"
+  default     = 5
+}
+
+variable "write_capacity" {
+  description = "Write capacity units for PROVISIONED billing mode"
+  default     = 2
+}
+
+variable "enable_autoscaling" {
+  description = "Enable auto-scaling for DynamoDB tables"
   default     = true
 }
 
-variable "stream_view_type" {
-  description = "Stream view type (NEW_IMAGE, OLD_IMAGE, NEW_AND_OLD_IMAGES, KEYS_ONLY)"
-  default     = "NEW_AND_OLD_IMAGES"
+variable "min_read_capacity" {
+  description = "Minimum read capacity for auto-scaling"
+  default     = 3
+}
+
+variable "max_read_capacity" {
+  description = "Maximum read capacity for auto-scaling"
+  default     = 50
+}
+
+variable "min_write_capacity" {
+  description = "Minimum write capacity for auto-scaling"
+  default     = 1
+}
+
+variable "max_write_capacity" {
+  description = "Maximum write capacity for auto-scaling"
+  default     = 20
+}
+
+variable "target_utilization" {
+  description = "Target utilization percentage for auto-scaling (recommended: 70)"
+  default     = 70
 }
 
 variable "enable_point_in_time_recovery" {

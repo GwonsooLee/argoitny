@@ -40,16 +40,6 @@ output "gsi3_name" {
   value       = "GSI3"
 }
 
-output "cloudwatch_alarm_read_throttle_id" {
-  description = "ID of the read throttle CloudWatch alarm"
-  value       = aws_cloudwatch_metric_alarm.read_throttle_events.id
-}
-
-output "cloudwatch_alarm_write_throttle_id" {
-  description = "ID of the write throttle CloudWatch alarm"
-  value       = aws_cloudwatch_metric_alarm.write_throttle_events.id
-}
-
 # Django Table Outputs
 
 output "django_table_name" {
@@ -80,14 +70,4 @@ output "django_table_stream_label" {
 output "django_type_index_name" {
   description = "Name of TypeIndex GSI for Django table"
   value       = "TypeIndex"
-}
-
-output "django_cloudwatch_alarm_read_throttle_id" {
-  description = "ID of the read throttle CloudWatch alarm for Django table"
-  value       = aws_cloudwatch_metric_alarm.django_read_throttle_events.id
-}
-
-output "django_cloudwatch_alarm_write_throttle_id" {
-  description = "ID of the write throttle CloudWatch alarm for Django table"
-  value       = aws_cloudwatch_metric_alarm.django_write_throttle_events.id
 }

@@ -7,7 +7,6 @@ import {
   AccordionSummary,
   AccordionDetails,
   Chip,
-  Grid,
   Alert,
   IconButton,
   Button,
@@ -16,16 +15,15 @@ import {
 } from '@mui/material';
 import {
   ExpandMore as ExpandMoreIcon,
-  CheckCircle as CheckCircleIcon,
-  Error as ErrorIcon,
   Download as DownloadIcon,
-  Lightbulb as LightbulbIcon
+  Lightbulb as LightbulbIcon,
+  Psychology as PsychologyIcon
 } from '@mui/icons-material';
 import { apiPost, apiGet } from '../utils/api-client';
 import { API_ENDPOINTS } from '../config/api';
 import HintsDisplay from './HintsDisplay';
 
-function TestResults({ results, executionId, onHintsLoadingChange }) {
+function TestResults({ results, executionId, platform, problemId, onHintsLoadingChange }) {
   // Handle both old format (array) and new format (object with results and summary)
   const testResults = Array.isArray(results) ? results : (results?.results || []);
   const summary = results?.summary || {
@@ -34,16 +32,47 @@ function TestResults({ results, executionId, onHintsLoadingChange }) {
     total: testResults.length,
   };
 
-  // Hints state
-  const [hints, setHints] = useState(null);
-  const [hintsLoading, setHintsLoading] = useState(false);
+  // Two-tier hints system
+  const [problemHints, setProblemHints] = useState(null); // Tier 1: Problem's general hints
+  const [codeHints, setCodeHints] = useState(null); // Tier 2: Code analysis hints
+  const [problemHintsLoading, setProblemHintsLoading] = useState(false);
+  const [codeHintsLoading, setCodeHintsLoading] = useState(false);
   const [hintsError, setHintsError] = useState(null);
-  const [hintsRequested, setHintsRequested] = useState(false);
+  const [problemHintsVisible, setProblemHintsVisible] = useState(false);
+  const [codeHintsRequested, setCodeHintsRequested] = useState(false);
   const [pollingInterval, setPollingInterval] = useState(null);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
 
-  // Check if test cases have failed (to show "Get Hints" button)
+  // Check if test cases have failed
   const hasFailedTests = summary.failed > 0;
+
+  // Load existing code analysis hints
+  useEffect(() => {
+    const loadCodeHints = async () => {
+      if (!executionId || !hasFailedTests) {
+        return;
+      }
+
+      try {
+        const response = await apiGet(
+          API_ENDPOINTS.getHints(executionId),
+          { requireAuth: true }
+        );
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.status === 'available' && data.hints && Array.isArray(data.hints) && data.hints.length > 0) {
+            setCodeHints(data.hints);
+            setCodeHintsRequested(true);
+          }
+        }
+      } catch (error) {
+        console.error('[Code Hints] Error loading:', error);
+      }
+    };
+
+    loadCodeHints();
+  }, [executionId, hasFailedTests]);
 
   // Clean up polling on unmount
   useEffect(() => {
@@ -57,26 +86,74 @@ function TestResults({ results, executionId, onHintsLoadingChange }) {
   // Notify parent when hints loading state changes
   useEffect(() => {
     if (onHintsLoadingChange) {
-      onHintsLoadingChange(hintsLoading);
+      onHintsLoadingChange(codeHintsLoading);
     }
-  }, [hintsLoading, onHintsLoadingChange]);
+  }, [codeHintsLoading, onHintsLoadingChange]);
 
   const showSnackbar = (message, severity = 'info') => {
     setSnackbar({ open: true, message, severity });
   };
 
-  const requestHints = async () => {
+  const handleShowProblemHints = async () => {
+    if (!platform || !problemId) {
+      showSnackbar('Cannot load hints: Missing problem information', 'error');
+      return;
+    }
+
+    // Check if hints are already loaded
+    if (problemHints && problemHints.length > 0) {
+      // Just show existing hints
+      setProblemHintsVisible(true);
+      showSnackbar('Problem hints loaded', 'info');
+      return;
+    }
+
+    // Fetch hints from API (rate limit is checked in backend)
+    setProblemHintsLoading(true);
+    try {
+      const response = await apiGet(
+        API_ENDPOINTS.getProblemHints(platform, problemId),
+        { requireAuth: true }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.hints && Array.isArray(data.hints) && data.hints.length > 0) {
+          setProblemHints(data.hints);
+          setProblemHintsVisible(true);
+          showSnackbar('Problem hints loaded', 'success');
+        } else {
+          showSnackbar('No hints available for this problem', 'info');
+        }
+      } else if (response.status === 429) {
+        // Plan limit exceeded
+        const errorData = await response.json();
+        showSnackbar(
+          errorData.message || 'Daily hint limit exceeded. Please upgrade your plan.',
+          'warning'
+        );
+      } else {
+        showSnackbar('Failed to load hints', 'error');
+      }
+    } catch (error) {
+      console.error('Error loading hints:', error);
+      showSnackbar('Failed to load hints', 'error');
+    } finally {
+      setProblemHintsLoading(false);
+    }
+  };
+
+  const requestCodeAnalysis = async () => {
     if (!executionId) {
       showSnackbar('Cannot request hints: No execution ID available', 'error');
       return;
     }
 
-    setHintsLoading(true);
+    setCodeHintsLoading(true);
     setHintsError(null);
-    setHintsRequested(true);
+    setCodeHintsRequested(true);
 
     try {
-      // Request hints generation
       const response = await apiPost(
         API_ENDPOINTS.requestHints(executionId),
         {},
@@ -84,12 +161,9 @@ function TestResults({ results, executionId, onHintsLoadingChange }) {
       );
 
       if (!response.ok) {
-        // Check if it's a rate limit error (429)
         if (response.status === 429) {
-          const errorData = await response.json();
           throw new Error('RATE_LIMIT_EXCEEDED');
         }
-        // Check if feature is not implemented (501)
         if (response.status === 501) {
           throw new Error('FEATURE_NOT_IMPLEMENTED');
         }
@@ -98,39 +172,36 @@ function TestResults({ results, executionId, onHintsLoadingChange }) {
 
       const data = await response.json();
 
-      // If hints are immediately available
       if (data.hints && data.hints.length > 0) {
-        setHints(data.hints);
-        setHintsLoading(false);
-        showSnackbar('Hints loaded successfully!', 'success');
+        setCodeHints(data.hints);
+        setCodeHintsLoading(false);
+        showSnackbar('Code analysis complete!', 'success');
       } else {
-        // Start polling for hints
-        showSnackbar('Generating hints... This may take a moment', 'info');
-        startPollingForHints();
+        showSnackbar('Analyzing code... Please wait', 'info');
+        startPollingForCodeHints();
       }
     } catch (error) {
-      console.error('Error requesting hints:', error);
+      console.error('Error requesting code analysis:', error);
 
-      // Show user-friendly message for rate limit
       if (error.message === 'RATE_LIMIT_EXCEEDED') {
-        setHintsError('You have reached your plan limit for hints. Please upgrade your plan to continue.');
-        showSnackbar('Plan limit reached. Please upgrade to get more hints.', 'warning');
+        setHintsError('Plan limit reached. Upgrade required.');
+        showSnackbar('Plan limit reached', 'warning');
       } else if (error.message === 'FEATURE_NOT_IMPLEMENTED') {
-        setHintsError('Hint generation is currently disabled. This feature will be available soon.');
-        showSnackbar('Hint feature is temporarily disabled', 'info');
+        setHintsError('Hint feature is temporarily disabled.');
+        showSnackbar('Feature temporarily disabled', 'info');
       } else {
         setHintsError(error.message || 'Failed to request hints');
         showSnackbar('Failed to request hints', 'error');
       }
 
-      setHintsLoading(false);
-      setHintsRequested(false); // Reset so button reappears
+      setCodeHintsLoading(false);
+      setCodeHintsRequested(false);
     }
   };
 
-  const startPollingForHints = () => {
+  const startPollingForCodeHints = () => {
     let pollCount = 0;
-    const maxPolls = 36; // Poll for up to 180 seconds (36 * 5s = 3 minutes)
+    const maxPolls = 36;
 
     const interval = setInterval(async () => {
       pollCount++;
@@ -147,56 +218,32 @@ function TestResults({ results, executionId, onHintsLoadingChange }) {
 
         const data = await response.json();
 
-        if (data.hints && data.hints.length > 0) {
-          setHints(data.hints);
-          setHintsLoading(false);
+        if (data.status === 'available' && data.hints && data.hints.length > 0) {
+          setCodeHints(data.hints);
+          setCodeHintsLoading(false);
           clearInterval(interval);
           setPollingInterval(null);
-          showSnackbar('Hints loaded successfully!', 'success');
+          showSnackbar('Code analysis complete!', 'success');
         } else if (pollCount >= maxPolls) {
-          // Stop polling after max attempts
           clearInterval(interval);
           setPollingInterval(null);
-          setHintsLoading(false);
-          setHintsRequested(false); // Reset so button reappears
-          setHintsError('Hint generation timed out. Please try again later.');
-          showSnackbar('Hint generation timed out. Please try again.', 'warning');
+          setCodeHintsLoading(false);
+          setCodeHintsRequested(false);
+          setHintsError('Hint generation timed out');
+          showSnackbar('Timeout - please try again', 'warning');
         }
       } catch (error) {
         console.error('Error polling for hints:', error);
         clearInterval(interval);
         setPollingInterval(null);
-        setHintsLoading(false);
-        setHintsRequested(false); // Reset so button reappears
+        setCodeHintsLoading(false);
+        setCodeHintsRequested(false);
         setHintsError(error.message || 'Failed to fetch hints');
-        showSnackbar('Failed to fetch hints. Please try again.', 'error');
+        showSnackbar('Failed to fetch hints', 'error');
       }
-    }, 5000); // Poll every 5 seconds
+    }, 5000);
 
     setPollingInterval(interval);
-  };
-
-  const truncateText = (text, maxLines = 10, maxChars = 1000) => {
-    if (!text) return { text: '', isTruncated: false };
-
-    // First check character limit
-    if (text.length > maxChars) {
-      return {
-        text: text.substring(0, maxChars) + '\n...',
-        isTruncated: true
-      };
-    }
-
-    // Then check line limit
-    const lines = text.split('\n');
-    if (lines.length <= maxLines) {
-      return { text, isTruncated: false };
-    }
-
-    return {
-      text: lines.slice(0, maxLines).join('\n') + '\n...',
-      isTruncated: true
-    };
   };
 
   const downloadText = (text, filename) => {
@@ -262,45 +309,96 @@ function TestResults({ results, executionId, onHintsLoadingChange }) {
         />
       </Box>
 
-      {/* Get Hints Button - Only show when there are failed tests */}
-      {hasFailedTests && executionId && !hintsRequested && (
+      {/* Two-Tier Hints System */}
+      {hasFailedTests && (
         <Box sx={{ mb: 3 }}>
-          <Button
-            variant="contained"
-            startIcon={<LightbulbIcon />}
-            onClick={requestHints}
-            disabled={hintsLoading}
-            sx={{
-              backgroundColor: '#f57c00',
-              '&:hover': { backgroundColor: '#e65100' },
-              fontSize: { xs: '0.875rem', sm: '1rem' },
-              px: { xs: 2, sm: 3 },
-              py: { xs: 1, sm: 1.25 },
-              fontWeight: 600,
-              boxShadow: 2,
-              '&:hover': {
-                boxShadow: 4
-              }
-            }}
-          >
-            Get Hints to Fix Failing Tests
-          </Button>
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, fontSize: { xs: '0.75rem', sm: '0.813rem' } }}>
-            Get AI-powered hints to help debug your failing test cases
-          </Typography>
+          {/* Tier 1: Problem Hints Button */}
+          {!problemHintsVisible && !codeHintsRequested && (
+            <Box sx={{ mb: 2 }}>
+              <Button
+                variant="outlined"
+                startIcon={<LightbulbIcon />}
+                onClick={handleShowProblemHints}
+                disabled={problemHintsLoading}
+                sx={{
+                  borderColor: '#2196f3',
+                  color: '#2196f3',
+                  fontSize: { xs: '0.875rem', sm: '1rem' },
+                  px: { xs: 2, sm: 3 },
+                  py: { xs: 1, sm: 1.25 },
+                  fontWeight: 600,
+                  '&:hover': {
+                    borderColor: '#1976d2',
+                    backgroundColor: '#e3f2fd'
+                  }
+                }}
+                fullWidth
+              >
+                {problemHintsLoading ? 'Loading hints...' : '💡 Show Step-by-Step Hints'}
+              </Button>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, fontSize: { xs: '0.75rem', sm: '0.813rem' } }}>
+                View general problem-solving approaches and hints
+              </Typography>
+            </Box>
+          )}
+
+          {/* Tier 2: Code Analysis Button */}
+          {!codeHintsRequested && problemHintsVisible && (
+            <Box>
+              <Button
+                variant="contained"
+                startIcon={<PsychologyIcon />}
+                onClick={requestCodeAnalysis}
+                disabled={codeHintsLoading}
+                sx={{
+                  backgroundColor: '#f57c00',
+                  fontSize: { xs: '0.875rem', sm: '1rem' },
+                  px: { xs: 2, sm: 3 },
+                  py: { xs: 1, sm: 1.25 },
+                  fontWeight: 600,
+                  boxShadow: 2,
+                  '&:hover': {
+                    backgroundColor: '#e65100',
+                    boxShadow: 4
+                  }
+                }}
+                fullWidth
+              >
+                🔍 Request Code Analysis
+              </Button>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, fontSize: { xs: '0.75rem', sm: '0.813rem' } }}>
+                AI will analyze your code and provide specific bug fixes and solutions
+              </Typography>
+            </Box>
+          )}
         </Box>
       )}
 
-      {/* Hints Display */}
-      {(hintsLoading || hints) && (
-        <HintsDisplay
-          hints={hints}
-          loading={hintsLoading}
-          error={null}
-          displayMode="accordion"
-        />
+      {/* Display Problem Hints (Tier 1) */}
+      {problemHintsVisible && problemHints && (
+        <Box sx={{ mb: 3 }}>
+          <HintsDisplay
+            hints={problemHints}
+            loading={false}
+            error={null}
+            displayMode="stepper"
+          />
+        </Box>
       )}
 
+      {/* Display Code Analysis Hints (Tier 2) */}
+      {(codeHintsLoading || codeHints) && (
+        <Box sx={{ mb: 3 }}>
+          <HintsDisplay
+            hints={codeHints}
+            loading={codeHintsLoading}
+            error={hintsError}
+            displayMode="accordion"
+          />
+        </Box>
+      )}
+
+      {/* Test Cases */}
       {testResults.length > 0 ? (
         <>
           <Typography variant="subtitle1" gutterBottom sx={{ color: 'text.primary', fontWeight: 600, mt: 2, mb: 2 }}>

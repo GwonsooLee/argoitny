@@ -13,22 +13,11 @@ import {
   ListItemText,
   Chip,
   Divider,
-  Accordion,
-  AccordionSummary,
-  AccordionDetails,
-  FormControl,
-  FormLabel,
-  RadioGroup,
-  FormControlLabel,
-  Radio,
-  Select,
-  MenuItem,
-  InputLabel,
-  FormHelperText,
 } from '@mui/material';
-import { Add as AddIcon, CheckCircle as CheckCircleIcon, ExpandMore as ExpandMoreIcon } from '@mui/icons-material';
+import { Add as AddIcon, CheckCircle as CheckCircleIcon } from '@mui/icons-material';
 import { apiPost, apiGet, apiPatch } from '../utils/api-client';
 import { API_ENDPOINTS } from '../config/api';
+import ModelSelector from './ModelSelector';
 
 function ProblemRegister({ onBack }) {
   const [problemUrl, setProblemUrl] = useState('');
@@ -173,20 +162,6 @@ function ProblemRegister({ onBack }) {
     }
   };
 
-  const handleReasoningEffortChange = (value) => {
-    setReasoningEffort(value);
-    // Auto-adjust tokens for high reasoning
-    if (value === 'high' && maxOutputTokens < 96000) {
-      setMaxOutputTokens(128000);
-    }
-  };
-
-  const handleResetLlmConfig = () => {
-    setLlmModel('gpt-5');
-    setReasoningEffort('medium');
-    setMaxOutputTokens(8192);
-  };
-
   const handleFormChange = (field, value) => {
     setFormData(prev => ({ ...prev, [field]: value }));
   };
@@ -216,7 +191,7 @@ function ProblemRegister({ onBack }) {
         constraints: formData.constraints
       };
 
-      const response = await apiPost(API_ENDPOINTS.saveProblem, {
+      const response = await apiPost(API_ENDPOINTS.saveDraft, {
         id: editDraft.id,
         ...updateData
       });
@@ -433,127 +408,18 @@ function ProblemRegister({ onBack }) {
 
           <Divider sx={{ my: 3 }} />
 
-          {/* LLM Configuration Section */}
-          <Accordion sx={{ mb: 2, boxShadow: 'none', border: '1px solid', borderColor: 'divider' }}>
-            <AccordionSummary
-              expandIcon={<ExpandMoreIcon />}
-              sx={{ bgcolor: 'grey.50' }}
-            >
-              <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-                LLM Configuration (Advanced Settings)
-              </Typography>
-            </AccordionSummary>
-            <AccordionDetails>
-              <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 2 }}>
-                Configure the AI model settings for problem extraction and solution generation.
-              </Typography>
-
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                {/* Model Selection */}
-                <FormControl component="fieldset">
-                  <FormLabel component="legend" sx={{ mb: 1, fontSize: '0.875rem', fontWeight: 600 }}>
-                    AI Model
-                  </FormLabel>
-                  <RadioGroup
-                    row
-                    value={llmModel}
-                    onChange={(e) => setLlmModel(e.target.value)}
-                    disabled={submitting}
-                  >
-                    <FormControlLabel
-                      value="gpt-5"
-                      control={<Radio />}
-                      label="GPT-5"
-                      disabled={submitting}
-                    />
-                    <FormControlLabel
-                      value="gemini"
-                      control={<Radio />}
-                      label="Gemini"
-                      disabled={submitting}
-                    />
-                  </RadioGroup>
-                  <FormHelperText>Select the AI model to use for problem extraction</FormHelperText>
-                </FormControl>
-
-                {/* GPT-5 Specific Configuration */}
-                {llmModel === 'gpt-5' && (
-                  <>
-                    {/* Reasoning Effort */}
-                    <FormControl fullWidth>
-                      <InputLabel id="reasoning-effort-label">Reasoning Effort</InputLabel>
-                      <Select
-                        labelId="reasoning-effort-label"
-                        value={reasoningEffort}
-                        label="Reasoning Effort"
-                        onChange={(e) => handleReasoningEffortChange(e.target.value)}
-                        disabled={submitting}
-                      >
-                        <MenuItem value="low">Low</MenuItem>
-                        <MenuItem value="medium">Medium</MenuItem>
-                        <MenuItem value="high">High</MenuItem>
-                      </Select>
-                      <FormHelperText>
-                        Higher reasoning uses more tokens but may produce better solutions. High reasoning is recommended for complex problems.
-                      </FormHelperText>
-                    </FormControl>
-
-                    {/* Max Output Tokens */}
-                    <FormControl fullWidth>
-                      <TextField
-                        type="number"
-                        label="Max Output Tokens"
-                        value={maxOutputTokens}
-                        onChange={(e) => {
-                          const value = parseInt(e.target.value, 10);
-                          if (value >= 1024 && value <= 128000) {
-                            setMaxOutputTokens(value);
-                          }
-                        }}
-                        disabled={submitting}
-                        inputProps={{ min: 1024, max: 128000, step: 1024 }}
-                        helperText={
-                          reasoningEffort === 'high' && maxOutputTokens < 96000
-                            ? 'Warning: High reasoning requires more tokens. Recommended: 128000'
-                            : 'Recommended: 8192 for medium, 128000 for high reasoning (Range: 1024-128000)'
-                        }
-                        error={reasoningEffort === 'high' && maxOutputTokens < 96000}
-                      />
-                    </FormControl>
-                  </>
-                )}
-
-                {/* Gemini Information */}
-                {llmModel === 'gemini' && (
-                  <Box sx={{
-                    p: 2,
-                    bgcolor: 'info.lighter',
-                    borderRadius: 1,
-                    border: '1px solid',
-                    borderColor: 'info.light'
-                  }}>
-                    <Typography variant="body2" color="info.dark">
-                      Gemini uses fixed optimization settings (temperature and top_p) for consistent results. No additional configuration is required.
-                    </Typography>
-                  </Box>
-                )}
-
-                {/* Reset Button - Only show for GPT-5 */}
-                {llmModel === 'gpt-5' && (
-                  <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-                    <Button
-                      variant="outlined"
-                      size="small"
-                      onClick={handleResetLlmConfig}
-                      disabled={submitting}
-                    >
-                      Reset to Defaults
-                    </Button>
-                  </Box>
-                )}
-              </Box>
-            </AccordionDetails>
-          </Accordion>
+          {/* Model Selection Section */}
+          <Paper sx={{ p: 3, mb: 2, bgcolor: 'grey.50' }}>
+            <ModelSelector
+              selectedModel={llmModel}
+              onModelChange={setLlmModel}
+              reasoningEffort={reasoningEffort}
+              onReasoningEffortChange={setReasoningEffort}
+              maxOutputTokens={maxOutputTokens}
+              onMaxOutputTokensChange={setMaxOutputTokens}
+              disabled={submitting}
+            />
+          </Paper>
         </Paper>
       )}
 

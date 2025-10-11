@@ -27,6 +27,7 @@ export const API_ENDPOINTS = {
   problems: '/problems/',
   problemDetail: (id) => `/problems/${id}/`,
   problemDetailByPlatform: (platform, problemId) => `/problems/${platform}/${problemId}/`,
+  problemStatus: (platform, problemId) => `/problems/${platform}/${problemId}/status/`,
   problemDrafts: '/problems/drafts/',
   problemRegistered: '/problems/registered/',
 
@@ -46,6 +47,10 @@ export const API_ENDPOINTS = {
   saveDraft: '/register/save/',
   extractProblemInfo: '/register/extract-problem-info/',
 
+  // Model Selection
+  availableModels: '/register/models/',
+  recommendModel: '/register/models/recommend/',
+
   // Script Generation Jobs
   jobs: '/register/jobs/',
   jobDetail: (id) => `/register/jobs/${id}/`,
@@ -55,6 +60,7 @@ export const API_ENDPOINTS = {
   // Hints
   requestHints: (executionId) => `/history/${executionId}/hints/generate/`,
   getHints: (executionId) => `/history/${executionId}/hints/`,
+  getProblemHints: (platform, problemId) => `/problems/${platform}/${problemId}/hints/`,
 
   // Account
   accountStats: '/account/stats/',

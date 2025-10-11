@@ -7,6 +7,7 @@ from .views import (
     AvailablePlansView,
     ProblemListView,
     ProblemDetailView,
+    ProblemStatusView,
     ProblemDraftsView,
     ProblemRegisteredView,
     ExecuteCodeView,
@@ -14,6 +15,8 @@ from .views import (
     SearchHistoryDetailView,
     GenerateHintsView,
     GetHintsView,
+    GenerateProblemHintsView,
+    GetProblemHintsView,
     RegisterProblemView,
     GenerateTestCasesView,
     ExecuteTestCasesView,
@@ -50,6 +53,10 @@ from .views.legal import (
     list_legal_document_versions,
     get_all_active_documents
 )
+from .views.models import (
+    AvailableModelsView,
+    ModelRecommendationView
+)
 
 urlpatterns = [
     # Health Checks
@@ -69,7 +76,10 @@ urlpatterns = [
     path('problems/registered/', ProblemRegisteredView.as_view(), name='problem-registered'),
     path('problems/<int:problem_id>/', ProblemDetailView.as_view(), name='problem-detail'),
     path('problems/<str:platform>/<str:problem_identifier>/', ProblemDetailView.as_view(), name='problem-detail-by-platform'),
+    path('problems/<str:platform>/<str:problem_identifier>/status/', ProblemStatusView.as_view(), name='problem-status'),
     path('problems/<str:platform>/<str:problem_id>/testcases/', GetTestCasesView.as_view(), name='get-testcases'),
+    path('problems/<str:platform>/<str:problem_id>/generate-hints/', GenerateProblemHintsView.as_view(), name='generate-problem-hints'),
+    path('problems/<str:platform>/<str:problem_id>/hints/', GetProblemHintsView.as_view(), name='get-problem-hints'),
 
     # Code Execution
     path('execute/', ExecuteCodeView.as_view(), name='execute-code'),
@@ -99,6 +109,10 @@ urlpatterns = [
 
     # Extract Problem Info
     path('register/extract-problem-info/', ExtractProblemInfoView.as_view(), name='extract-problem-info'),
+
+    # LLM Models
+    path('register/models/', AvailableModelsView.as_view(), name='available-models'),
+    path('register/models/recommend/', ModelRecommendationView.as_view(), name='model-recommendation'),
 
     # Regenerate Solution
     path('register/problems/<str:platform>/<str:problem_id>/regenerate-solution/', RegenerateSolutionView.as_view(), name='regenerate-solution'),

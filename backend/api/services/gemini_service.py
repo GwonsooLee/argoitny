@@ -192,6 +192,32 @@ vector<int> KMP(string text, string pattern) {
         else:
             self.model = None
 
+    def generate_content(self, prompt, temperature=0.0):
+        """
+        Generate content using Gemini model
+
+        Args:
+            prompt: The prompt to send to the model
+            temperature: Temperature for generation (default 0.0 for deterministic output)
+
+        Returns:
+            str: Generated text response
+        """
+        if not self.model:
+            raise ValueError('Gemini model not configured')
+
+        generation_config = genai.types.GenerationConfig(
+            temperature=temperature,
+            top_p=0.95,
+        )
+
+        response = self.model.generate_content(
+            prompt,
+            generation_config=generation_config
+        )
+
+        return response.text
+
     def get_optimal_temperature(self, difficulty_rating):
         """
         Get optimal temperature for ACCURATE, DETERMINISTIC solution generation.
@@ -531,6 +557,81 @@ The function MUST accept a 'size' parameter at runtime to control test case size
 
 - size='mixed' (default): Mix of 50% small, 30% medium, 20% large
 
+CRITICAL RANDOMNESS AND DIVERSITY REQUIREMENTS:
+To ensure high-quality, diverse test cases that don't repeat:
+
+1. **Improve Randomness**:
+   - Use random.randint() with WIDE ranges to avoid repetition
+   - Vary ALL parameters (not just one) - change sizes, values, patterns together
+   - Add random.random() < 0.X checks to create unpredictable variations
+   - Example: Instead of always random.randint(1, 10), sometimes use (1, 5), sometimes (5, 10), sometimes (1, 100)
+
+2. **Prevent Duplicate Test Cases**:
+   - Use a set to track generated test case hashes to avoid duplicates
+   - If a duplicate is detected, regenerate until unique
+   - Example pattern:
+     ```python
+     seen = set()
+     while len(test_cases) < n:
+         test_case = generate_single_case()
+         case_hash = hash(test_case)
+         if case_hash not in seen:
+             seen.add(case_hash)
+             test_cases.append(test_case)
+     ```
+
+3. **Mandatory Edge Cases** (MUST include at least 10% of test cases as edge cases):
+   - Minimum constraint values (n=1, arr=[min_val], empty strings where valid)
+   - Maximum constraint values (n=max, arr=[max_val], longest strings)
+   - Boundary values (n=2, n=max-1, values at constraint boundaries)
+   - Special patterns:
+     * All elements identical: [x, x, x, x, ...]
+     * Sorted ascending: [1, 2, 3, 4, ...]
+     * Sorted descending: [10, 9, 8, 7, ...]
+     * Alternating: [1, 10, 1, 10, ...]
+     * Single element repeated
+   - For strings: empty (if valid), single char, all same char, palindromes
+   - For graphs/trees: star graph, path graph, complete binary tree
+
+4. **Increase Diversity Within Each Size Category**:
+   - Don't always use the same config selection pattern
+   - Add random variations to value ranges within each case
+   - Example for arrays: Mix of [mostly small values], [mostly large values], [mixed], [clustered around middle]
+   - Example for numbers: Prime numbers, powers of 2, random, sequential
+
+5. **Implementation Pattern for High Diversity**:
+   ```python
+   # Example: Instead of this (low diversity)
+   for _ in range(n):
+       size = random.randint(1, 10)
+       arr = [random.randint(1, 100) for _ in range(size)]
+
+   # Do this (high diversity)
+   edge_cases_count = max(1, n // 10)  # At least 10% edge cases
+
+   # Add explicit edge cases
+   for _ in range(edge_cases_count):
+       case_type = random.choice(['min', 'max', 'boundary', 'pattern'])
+       if case_type == 'min':
+           # Minimum values
+       elif case_type == 'max':
+           # Maximum values
+       elif case_type == 'boundary':
+           # Boundary conditions
+       else:
+           # Special patterns
+
+   # Generate remaining cases with high variation
+   for _ in range(n - edge_cases_count):
+       # Randomly vary ALL parameters
+       size = random.randint(random.randint(1, 3), random.randint(5, 10))
+       value_range = random.choice([(1, 10), (1, 100), (50, 150), (1, 1000)])
+       if random.random() < 0.3:  # 30% chance of sorted
+           arr = sorted([random.randint(*value_range) for _ in range(size)])
+       else:
+           arr = [random.randint(*value_range) for _ in range(size)]
+   ```
+
 IMPORTANT REQUIREMENTS:
 - Create a function named `generate_test_cases(n, size='mixed')` that takes number of cases AND size parameter
 - Returns a list of exactly `n` input strings
@@ -540,6 +641,22 @@ IMPORTANT REQUIREMENTS:
 - For multi-line inputs, use newline character (\\n)
 - Include edge cases: minimum values, maximum values, boundary conditions
 - Match the EXACT input format from the solution code
+
+CRITICAL CODE VALIDATION:
+Your generated code will be validated for:
+1. **Syntax errors**: Code must be syntactically correct Python
+2. **Undefined names**: ALL variables, constants, and functions MUST be defined before use
+   - ❌ WRONG: `val = random.randint(1, MAX_VAL)` if MAX_VAL is not defined
+   - ✅ CORRECT: Define it first: `MAX_VAL = 1000000` then `val = random.randint(1, MAX_VAL)`
+3. **Scope errors**: Variables must be defined in the scope where they are used
+   - If you use a constant in a nested function, define it in that function or pass it as parameter
+4. **Module imports**: Only allowed modules are random, math, string, itertools, collections
+
+COMMON MISTAKES TO AVOID:
+- Using undefined constants like MAX_N, MAX_VAL, MIN_VAL without defining them
+- Referencing outer scope variables from nested functions (Python scoping rules)
+- Using variables before assignment
+- Typos in variable names
 
 CRITICAL: Return ONLY executable Python code. Do NOT include:
 - Markdown code blocks (```python or ```)
@@ -563,71 +680,130 @@ Then your generator should look like:
 '''
 def generate_test_cases(n, size='mixed'):
     import random
-    test_cases = []
 
-    # Determine distribution based on size parameter
-    if size == 'small':
-        # ALL small cases
-        for _ in range(n):
+    def generate_single_case(size_type):
+        if size_type == 'small':
             t = random.randint(1, 5)
             cases = []
             for _ in range(t):
                 arr_size = random.randint(1, 10)
-                arr = [random.randint(1, 100) for _ in range(arr_size)]
-                cases.append(f"{{arr_size}}\\n{{' '.join(map(str, arr))}}")
-            test_cases.append(f"{{t}}\\n{{chr(10).join(cases)}}")
-    elif size == 'medium':
-        # ALL medium cases
-        for _ in range(n):
+                # Add variety: sometimes sorted, sometimes all same, sometimes random
+                pattern = random.choice(['random', 'sorted', 'reversed', 'all_same'])
+                if pattern == 'random':
+                    arr = [random.randint(1, 100) for _ in range(arr_size)]
+                elif pattern == 'sorted':
+                    arr = sorted([random.randint(1, 100) for _ in range(arr_size)])
+                elif pattern == 'reversed':
+                    arr = sorted([random.randint(1, 100) for _ in range(arr_size)], reverse=True)
+                else:  # all_same
+                    val = random.randint(1, 100)
+                    arr = [val] * arr_size
+                cases.append("{{}}\\n{{}}".format(arr_size, ' '.join(map(str, arr))))
+            return "{{}}\\n{{}}".format(t, chr(10).join(cases))
+        elif size_type == 'medium':
             t = random.randint(5, 50)
             cases = []
             for _ in range(t):
                 arr_size = random.randint(100, 1000)
-                arr = [random.randint(1, 10**6) for _ in range(arr_size)]
-                cases.append(f"{{arr_size}}\\n{{' '.join(map(str, arr))}}")
-            test_cases.append(f"{{t}}\\n{{chr(10).join(cases)}}")
-    elif size == 'large':
-        # ALL large cases
-        for _ in range(n):
+                # Vary value ranges
+                val_range = random.choice([(1, 1000), (1, 10**4), (1, 10**6)])
+                arr = [random.randint(*val_range) for _ in range(arr_size)]
+                cases.append("{{}}\\n{{}}".format(arr_size, ' '.join(map(str, arr))))
+            return "{{}}\\n{{}}".format(t, chr(10).join(cases))
+        else:  # large
             t = random.randint(1, 5)
             cases = []
             for _ in range(t):
                 arr_size = random.randint(90000, 100000)
                 arr = [random.randint(10**8, 10**9) for _ in range(arr_size)]
-                cases.append(f"{{arr_size}}\\n{{' '.join(map(str, arr))}}")
-            test_cases.append(f"{{t}}\\n{{chr(10).join(cases)}}")
-    else:  # mixed (default)
-        # 50% small, 30% medium, 20% large
-        num_small = n // 2
-        num_medium = (n * 3) // 10
-        num_large = n - num_small - num_medium
+                cases.append("{{}}\\n{{}}".format(arr_size, ' '.join(map(str, arr))))
+            return "{{}}\\n{{}}".format(t, chr(10).join(cases))
+
+    test_cases = []
+    seen = set()
+
+    # Add edge cases (at least 10%)
+    edge_count = max(1, n // 10)
+    for _ in range(edge_count):
+        edge_type = random.choice(['min_n', 'max_n', 'single_element', 'all_same'])
+        if edge_type == 'min_n':
+            # Minimum n=1
+            t = 1
+            cases = ["1\\n1"]
+            case = "{{}}\\n{{}}".format(t, chr(10).join(cases))
+        elif edge_type == 'max_n':
+            # Maximum n
+            t = 1
+            arr_size = 100000
+            arr = [random.randint(1, 10**9) for _ in range(arr_size)]
+            case = "1\\n{{}}\\n{{}}".format(arr_size, ' '.join(map(str, arr)))
+        elif edge_type == 'single_element':
+            # Single element array
+            t = random.randint(1, 3)
+            cases = ["1\\n{{}}".format(random.randint(1, 10**9)) for _ in range(t)]
+            case = "{{}}\\n{{}}".format(t, chr(10).join(cases))
+        else:  # all_same
+            # All elements same value
+            t = random.randint(1, 3)
+            cases = []
+            for _ in range(t):
+                arr_size = random.randint(2, 10)
+                val = random.randint(1, 100)
+                cases.append("{{}}\\n{{}}".format(arr_size, ' '.join([str(val)] * arr_size)))
+            case = "{{}}\\n{{}}".format(t, chr(10).join(cases))
+
+        case_hash = hash(case)
+        if case_hash not in seen:
+            seen.add(case_hash)
+            test_cases.append(case)
+
+    # Generate remaining cases based on size parameter
+    if size == 'small':
+        while len(test_cases) < n:
+            case = generate_single_case('small')
+            case_hash = hash(case)
+            if case_hash not in seen:
+                seen.add(case_hash)
+                test_cases.append(case)
+    elif size == 'medium':
+        while len(test_cases) < n:
+            case = generate_single_case('medium')
+            case_hash = hash(case)
+            if case_hash not in seen:
+                seen.add(case_hash)
+                test_cases.append(case)
+    elif size == 'large':
+        while len(test_cases) < n:
+            case = generate_single_case('large')
+            case_hash = hash(case)
+            if case_hash not in seen:
+                seen.add(case_hash)
+                test_cases.append(case)
+    else:  # mixed
+        num_small = (n - edge_count) // 2
+        num_medium = ((n - edge_count) * 3) // 10
+        num_large = n - edge_count - num_small - num_medium
 
         for _ in range(num_small):
-            t = random.randint(1, 5)
-            cases = []
-            for _ in range(t):
-                arr_size = random.randint(1, 10)
-                arr = [random.randint(1, 100) for _ in range(arr_size)]
-                cases.append(f"{{arr_size}}\\n{{' '.join(map(str, arr))}}")
-            test_cases.append(f"{{t}}\\n{{chr(10).join(cases)}}")
+            case = generate_single_case('small')
+            case_hash = hash(case)
+            if case_hash not in seen:
+                seen.add(case_hash)
+                test_cases.append(case)
 
         for _ in range(num_medium):
-            t = random.randint(5, 50)
-            cases = []
-            for _ in range(t):
-                arr_size = random.randint(100, 1000)
-                arr = [random.randint(1, 10**6) for _ in range(arr_size)]
-                cases.append(f"{{arr_size}}\\n{{' '.join(map(str, arr))}}")
-            test_cases.append(f"{{t}}\\n{{chr(10).join(cases)}}")
+            case = generate_single_case('medium')
+            case_hash = hash(case)
+            if case_hash not in seen:
+                seen.add(case_hash)
+                test_cases.append(case)
 
         for _ in range(num_large):
-            t = random.randint(1, 5)
-            cases = []
-            for _ in range(t):
-                arr_size = random.randint(90000, 100000)
-                arr = [random.randint(10**8, 10**9) for _ in range(arr_size)]
-                cases.append(f"{{arr_size}}\\n{{' '.join(map(str, arr))}}")
-            test_cases.append(f"{{t}}\\n{{chr(10).join(cases)}}")
+            case = generate_single_case('large')
+            case_hash = hash(case)
+            if case_hash not in seen:
+                seen.add(case_hash)
+                test_cases.append(case)
 
     random.shuffle(test_cases)
     return test_cases
@@ -642,46 +818,104 @@ Then your generator should look like:
 '''
 def generate_test_cases(n, size='mixed'):
     import random
-    test_cases = []
 
-    if size == 'small':
-        # ALL small cases (short strings)
-        for _ in range(n):
+    def generate_single_string(size_type):
+        if size_type == 'small':
             length = random.randint(1, 100)
-            s = ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(length))
-            test_cases.append(s)
-    elif size == 'medium':
-        # ALL medium cases
-        for _ in range(n):
+        elif size_type == 'medium':
             length = random.randint(100, 10000)
-            s = ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(length))
-            test_cases.append(s)
-    elif size == 'large':
-        # ALL large cases (maximum constraint)
-        for _ in range(n):
+        else:  # large
             length = random.randint(900000, 1000000)
-            s = ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(length))
-            test_cases.append(s)
-    else:  # mixed (default)
-        # 50% small, 30% medium, 20% large
-        num_small = n // 2
-        num_medium = (n * 3) // 10
-        num_large = n - num_small - num_medium
+
+        # Add variety in string patterns
+        pattern = random.choice(['random', 'all_same', 'palindrome', 'repeating'])
+        if pattern == 'random':
+            return ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(length))
+        elif pattern == 'all_same':
+            char = random.choice('abcdefghijklmnopqrstuvwxyz')
+            return char * length
+        elif pattern == 'palindrome':
+            half = ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(length // 2))
+            if length % 2 == 1:
+                return half + random.choice('abcdefghijklmnopqrstuvwxyz') + half[::-1]
+            else:
+                return half + half[::-1]
+        else:  # repeating
+            pattern_str = ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(min(5, length)))
+            return (pattern_str * (length // len(pattern_str) + 1))[:length]
+
+    test_cases = []
+    seen = set()
+
+    # Add edge cases (at least 10%)
+    edge_count = max(1, n // 10)
+    for _ in range(edge_count):
+        edge_type = random.choice(['single_char', 'max_length', 'all_same', 'palindrome'])
+        if edge_type == 'single_char':
+            case = random.choice('abcdefghijklmnopqrstuvwxyz')
+        elif edge_type == 'max_length':
+            case = ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(1000000))
+        elif edge_type == 'all_same':
+            char = random.choice('abcdefghijklmnopqrstuvwxyz')
+            length = random.randint(10, 100)
+            case = char * length
+        else:  # palindrome
+            length = random.randint(5, 50)
+            half = ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(length // 2))
+            case = half + half[::-1]
+
+        case_hash = hash(case)
+        if case_hash not in seen:
+            seen.add(case_hash)
+            test_cases.append(case)
+
+    # Generate remaining cases based on size parameter
+    if size == 'small':
+        while len(test_cases) < n:
+            case = generate_single_string('small')
+            case_hash = hash(case)
+            if case_hash not in seen:
+                seen.add(case_hash)
+                test_cases.append(case)
+    elif size == 'medium':
+        while len(test_cases) < n:
+            case = generate_single_string('medium')
+            case_hash = hash(case)
+            if case_hash not in seen:
+                seen.add(case_hash)
+                test_cases.append(case)
+    elif size == 'large':
+        while len(test_cases) < n:
+            case = generate_single_string('large')
+            case_hash = hash(case)
+            if case_hash not in seen:
+                seen.add(case_hash)
+                test_cases.append(case)
+    else:  # mixed
+        num_small = (n - edge_count) // 2
+        num_medium = ((n - edge_count) * 3) // 10
+        num_large = n - edge_count - num_small - num_medium
 
         for _ in range(num_small):
-            length = random.randint(1, 100)
-            s = ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(length))
-            test_cases.append(s)
+            case = generate_single_string('small')
+            case_hash = hash(case)
+            if case_hash not in seen:
+                seen.add(case_hash)
+                test_cases.append(case)
 
         for _ in range(num_medium):
-            length = random.randint(100, 10000)
-            s = ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(length))
-            test_cases.append(s)
+            case = generate_single_string('medium')
+            case_hash = hash(case)
+            if case_hash not in seen:
+                seen.add(case_hash)
+                test_cases.append(case)
 
         for _ in range(num_large):
-            length = random.randint(900000, 1000000)
-            s = ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(length))
-            test_cases.append(s)
+            case = generate_single_string('large')
+            case_hash = hash(case)
+            if case_hash not in seen:
+                seen.add(case_hash)
+                test_cases.append(case)
 
     random.shuffle(test_cases)
     return test_cases
@@ -1382,7 +1616,7 @@ Remember:
         else:
             error_context = "Note: The code compiles but produces incorrect output. Focus hints on logic errors and algorithm correctness. DO NOT mention syntax or compilation issues."
 
-        prompt = f"""You are an expert programming tutor helping a student debug their code.
+        prompt = f"""You are an expert programming tutor helping a student debug their failing code.
 
 Problem Information:
 - Title: {problem_info.get('title', 'N/A')}
@@ -1390,15 +1624,15 @@ Problem Information:
 - Problem ID: {problem_info.get('problem_id', 'N/A')}
 - Language: {problem_info.get('language', 'N/A')}
 
-Student's Code (INCORRECT):
+Student's Code (INCORRECT - Contains bugs):
 ```
 {user_code}
 ```
 
-Failed Test Cases:
+Failed Test Cases (showing where the code fails):
 {failures_text}
 
-Reference Solution (DO NOT REVEAL THIS DIRECTLY):
+Reference Solution (Use this to identify what's wrong in student's code):
 ```
 {solution_code}
 ```
@@ -1406,36 +1640,45 @@ Reference Solution (DO NOT REVEAL THIS DIRECTLY):
 {error_context}
 
 Task:
-Generate 3-5 progressive hints to help the student fix their code. The hints should:
+Your goal is to help the student identify and fix the SPECIFIC BUGS in their code by comparing it with the correct solution.
+Generate 3-5 progressive hints that:
 
-1. Start with general debugging approaches (e.g., "Check edge cases", "Review your logic for...")
-2. Gradually become more specific (e.g., "Look at how you handle...", "Consider the data type of...")
-3. Guide toward the solution WITHOUT giving away the exact answer
-4. Be encouraging and educational
-5. Each hint should be a single, clear statement (1-2 sentences max)
-6. Never reveal the solution code directly
-7. Focus on the specific errors shown in the test cases
-8. IMPORTANT: Each hint must be UNIQUE and DISTINCT - do NOT repeat the same advice in different words
-9. IMPORTANT: If there are no syntax or compilation errors, DO NOT mention syntax, compilation, or parsing issues at all
-10. Provide hints that progressively guide the student from identifying the problem to understanding how to fix it
+**REQUIREMENTS:**
+1. **COMPARE** the student's code with the reference solution to identify the SPECIFIC differences
+2. **POINT OUT** the exact lines or logic that are causing the failures
+3. **EXPLAIN** why the student's approach is incorrect and what needs to change
+4. **GUIDE** them step-by-step from understanding the bug to fixing it
+5. Each hint must be UNIQUE, SPECIFIC, and directly address a bug in their code
 
-CRITICAL: Return ONLY a valid JSON array of hint strings. Do NOT include:
-- Any text before or after the JSON array
-- Markdown code blocks (```json or ```)
-- Explanations or comments
-- Any formatting except the JSON array
-- Duplicate or repetitive hints
+**HINT PROGRESSION:**
+- Hint 1: Identify the MAIN BUG or incorrect logic in their code (e.g., "Your code fails because you're using X instead of Y on line Z")
+- Hint 2: Explain WHY this causes the failure (e.g., "This causes issues when...", "The problem is that...")
+- Hint 3: Compare with correct approach (e.g., "Instead of doing X, you should...", "The correct solution does Y because...")
+- Hint 4: Suggest specific code changes (e.g., "Try changing line X from... to...", "Add a check for...")
+- Hint 5: Additional edge cases or improvements (if applicable)
 
-Example format (replace with your actual hints):
+**CRITICAL RULES:**
+- Focus on SPECIFIC BUGS, not generic advice
+- Use the FAILED TEST CASES to pinpoint exact issues
+- Compare student's logic with reference solution
+- Be CONCRETE and ACTIONABLE, not vague
+- Each hint must add NEW information, no repetition
+- If no syntax errors, DO NOT mention syntax/compilation
+- Never reveal the complete solution, only guide to fixes
+
+**OUTPUT FORMAT:**
+Return ONLY a valid JSON array of hint strings. NO markdown, NO explanations, NO extra text.
+
+Example (replace with your actual analysis):
 [
-    "Start by checking if your code handles edge cases like empty input or single elements.",
-    "Look carefully at how you're processing the input - are you reading all the values correctly?",
-    "Consider the data type of your variables - integers vs strings can cause unexpected behavior.",
-    "Review your loop logic - are you iterating through all elements or missing some?",
-    "The issue might be in how you're formatting the output - check for extra spaces or newlines."
+    "Your code fails because you're reading input incorrectly - you're using int(input()) but the problem requires reading multiple values per line. Look at line 5 in your code.",
+    "The reference solution uses split() to parse multiple integers from one line. Your current approach only reads one integer, which causes all subsequent inputs to be misaligned.",
+    "Instead of 'n = int(input())', you should use 'n, m = map(int, input().split())' to read both values from the first line. This is why your output is wrong for all test cases.",
+    "After fixing the input parsing, check your loop range - you're iterating i in range(n) but need to also process m values. The correct approach is to process both dimensions.",
+    "Edge case: When n=1 or m=1, your code doesn't handle the boundary correctly. Add a condition to check if either dimension is 1 before accessing adjacent elements."
 ]
 
-Now generate the hints:"""
+Now analyze the student's code and generate SPECIFIC, BUG-FOCUSED hints:"""
 
         try:
             response = self.model.generate_content(prompt)

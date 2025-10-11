@@ -602,13 +602,13 @@ class GenerateHintsView(APIView):
             # Start async task
             task = await sync_to_async(generate_hints_task.delay)(history_id)
 
-            # Log usage (optional - can be enabled later if needed)
-            # await sync_to_async(log_usage)(
-            #     user=request.user,
-            #     action='hint',
-            #     problem=None,
-            #     metadata={'history_id': history_id, 'task_id': task.id}
-            # )
+            # Log usage for hint request
+            await sync_to_async(log_usage)(
+                user=request.user,
+                action='hint',
+                problem={'platform': dat.get('plt'), 'number': dat.get('pno')},
+                metadata={'history_id': history_id, 'task_id': task.id, 'hint_type': 'code_analysis'}
+            )
 
             return Response({
                 'task_id': task.id,

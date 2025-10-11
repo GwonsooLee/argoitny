@@ -17,6 +17,10 @@ resource "aws_dynamodb_table" "algoitny_main" {
   hash_key       = "PK"
   range_key      = "SK"
 
+  # Capacity settings for PROVISIONED mode
+  read_capacity  = var.billing_mode == "PROVISIONED" ? var.read_capacity : null
+  write_capacity = var.billing_mode == "PROVISIONED" ? var.write_capacity : null
+
   # Enable deletion protection in production
   deletion_protection_enabled = var.enable_deletion_protection
 
@@ -79,6 +83,8 @@ resource "aws_dynamodb_table" "algoitny_main" {
     hash_key        = "GSI1PK"
     range_key       = "GSI1SK"
     projection_type = "ALL"
+    read_capacity   = var.billing_mode == "PROVISIONED" ? var.read_capacity : null
+    write_capacity  = var.billing_mode == "PROVISIONED" ? var.write_capacity : null
   }
 
   # GSI2: Multi-purpose index for Google auth and public content
@@ -93,6 +99,8 @@ resource "aws_dynamodb_table" "algoitny_main" {
     hash_key        = "GSI2PK"
     range_key       = "GSI2SK"
     projection_type = "KEYS_ONLY"
+    read_capacity   = var.billing_mode == "PROVISIONED" ? var.read_capacity : null
+    write_capacity  = var.billing_mode == "PROVISIONED" ? var.write_capacity : null
   }
 
   # GSI3: Problem status index for admin/filtering queries
@@ -104,11 +112,9 @@ resource "aws_dynamodb_table" "algoitny_main" {
     hash_key        = "GSI3PK"
     range_key       = "GSI3SK"
     projection_type = "ALL"
+    read_capacity   = var.billing_mode == "PROVISIONED" ? var.read_capacity : null
+    write_capacity  = var.billing_mode == "PROVISIONED" ? var.write_capacity : null
   }
-
-  # DynamoDB Streams for event processing
-  stream_enabled   = var.enable_streams
-  stream_view_type = var.enable_streams ? var.stream_view_type : null
 
   # Point-in-Time Recovery for data protection
   point_in_time_recovery {
@@ -142,78 +148,6 @@ resource "aws_dynamodb_table" "algoitny_main" {
   )
 }
 
-# CloudWatch Alarms for DynamoDB monitoring
-
-# Alarm for Read Throttle Events
-resource "aws_cloudwatch_metric_alarm" "read_throttle_events" {
-  alarm_name          = "${var.project_name}-dynamodb-read-throttle"
-  comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 2
-  metric_name         = "ReadThrottleEvents"
-  namespace           = "AWS/DynamoDB"
-  period              = 300
-  statistic           = "Sum"
-  threshold           = 10
-  alarm_description   = "This metric monitors DynamoDB read throttle events"
-  treat_missing_data  = "notBreaching"
-
-  dimensions = {
-    TableName = aws_dynamodb_table.algoitny_main.name
-  }
-
-  tags = {
-    Environment = var.environment
-    ManagedBy   = "Terraform"
-  }
-}
-
-# Alarm for Write Throttle Events
-resource "aws_cloudwatch_metric_alarm" "write_throttle_events" {
-  alarm_name          = "${var.project_name}-dynamodb-write-throttle"
-  comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 2
-  metric_name         = "WriteThrottleEvents"
-  namespace           = "AWS/DynamoDB"
-  period              = 300
-  statistic           = "Sum"
-  threshold           = 10
-  alarm_description   = "This metric monitors DynamoDB write throttle events"
-  treat_missing_data  = "notBreaching"
-
-  dimensions = {
-    TableName = aws_dynamodb_table.algoitny_main.name
-  }
-
-  tags = {
-    Environment = var.environment
-    ManagedBy   = "Terraform"
-  }
-}
-
-# Alarm for High Consumed Read Capacity (for cost monitoring)
-resource "aws_cloudwatch_metric_alarm" "high_read_capacity" {
-  count               = var.billing_mode == "PAY_PER_REQUEST" ? 1 : 0
-  alarm_name          = "${var.project_name}-dynamodb-high-read-capacity"
-  comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 2
-  metric_name         = "ConsumedReadCapacityUnits"
-  namespace           = "AWS/DynamoDB"
-  period              = 3600
-  statistic           = "Sum"
-  threshold           = 1000000 # 1M RCU per hour
-  alarm_description   = "Alert when read capacity is unusually high (cost monitoring)"
-  treat_missing_data  = "notBreaching"
-
-  dimensions = {
-    TableName = aws_dynamodb_table.algoitny_main.name
-  }
-
-  tags = {
-    Environment = var.environment
-    ManagedBy   = "Terraform"
-  }
-}
-
 # ============================================================================
 # Django/Celery DynamoDB Table
 # ============================================================================
@@ -233,6 +167,10 @@ resource "aws_dynamodb_table" "algoitny_django" {
   billing_mode   = var.billing_mode
   hash_key       = "PK"
   range_key      = "SK"
+
+  # Capacity settings for PROVISIONED mode
+  read_capacity  = var.billing_mode == "PROVISIONED" ? var.read_capacity : null
+  write_capacity = var.billing_mode == "PROVISIONED" ? var.write_capacity : null
 
   # Enable deletion protection in production
   deletion_protection_enabled = var.enable_deletion_protection
@@ -263,11 +201,9 @@ resource "aws_dynamodb_table" "algoitny_django" {
     hash_key        = "tp"
     range_key       = "SK"
     projection_type = "ALL"
+    read_capacity   = var.billing_mode == "PROVISIONED" ? var.read_capacity : null
+    write_capacity  = var.billing_mode == "PROVISIONED" ? var.write_capacity : null
   }
-
-  # DynamoDB Streams for event processing
-  stream_enabled   = var.enable_streams
-  stream_view_type = var.enable_streams ? var.stream_view_type : null
 
   # Point-in-Time Recovery for data protection
   point_in_time_recovery {
@@ -302,50 +238,336 @@ resource "aws_dynamodb_table" "algoitny_django" {
   )
 }
 
-# CloudWatch Alarms for Django Table
+# ============================================================================
+# Auto-Scaling Configuration
+# ============================================================================
+# Auto-scaling for DynamoDB tables and GSIs to automatically adjust capacity
+# based on utilization (target: 70%)
 
-# Alarm for Read Throttle Events
-resource "aws_cloudwatch_metric_alarm" "django_read_throttle_events" {
-  alarm_name          = "${var.project_name}-django-dynamodb-read-throttle"
-  comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 2
-  metric_name         = "ReadThrottleEvents"
-  namespace           = "AWS/DynamoDB"
-  period              = 300
-  statistic           = "Sum"
-  threshold           = 10
-  alarm_description   = "This metric monitors DynamoDB read throttle events for Django table"
-  treat_missing_data  = "notBreaching"
+# ---------------------------------------------------------------------------
+# Main Table Auto-Scaling
+# ---------------------------------------------------------------------------
 
-  dimensions = {
-    TableName = aws_dynamodb_table.algoitny_django.name
-  }
+# Main Table - Read Capacity
+resource "aws_appautoscaling_target" "main_table_read" {
+  count              = var.enable_autoscaling && var.billing_mode == "PROVISIONED" ? 1 : 0
+  max_capacity       = var.max_read_capacity
+  min_capacity       = var.min_read_capacity
+  resource_id        = "table/${aws_dynamodb_table.algoitny_main.name}"
+  scalable_dimension = "dynamodb:table:ReadCapacityUnits"
+  service_namespace  = "dynamodb"
+}
 
-  tags = {
-    Environment = var.environment
-    ManagedBy   = "Terraform"
+resource "aws_appautoscaling_policy" "main_table_read_policy" {
+  count              = var.enable_autoscaling && var.billing_mode == "PROVISIONED" ? 1 : 0
+  name               = "${var.project_name}_main_read_scaling"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.main_table_read[0].resource_id
+  scalable_dimension = aws_appautoscaling_target.main_table_read[0].scalable_dimension
+  service_namespace  = aws_appautoscaling_target.main_table_read[0].service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "DynamoDBReadCapacityUtilization"
+    }
+    target_value = var.target_utilization
   }
 }
 
-# Alarm for Write Throttle Events
-resource "aws_cloudwatch_metric_alarm" "django_write_throttle_events" {
-  alarm_name          = "${var.project_name}-django-dynamodb-write-throttle"
-  comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 2
-  metric_name         = "WriteThrottleEvents"
-  namespace           = "AWS/DynamoDB"
-  period              = 300
-  statistic           = "Sum"
-  threshold           = 10
-  alarm_description   = "This metric monitors DynamoDB write throttle events for Django table"
-  treat_missing_data  = "notBreaching"
+# Main Table - Write Capacity
+resource "aws_appautoscaling_target" "main_table_write" {
+  count              = var.enable_autoscaling && var.billing_mode == "PROVISIONED" ? 1 : 0
+  max_capacity       = var.max_write_capacity
+  min_capacity       = var.min_write_capacity
+  resource_id        = "table/${aws_dynamodb_table.algoitny_main.name}"
+  scalable_dimension = "dynamodb:table:WriteCapacityUnits"
+  service_namespace  = "dynamodb"
+}
 
-  dimensions = {
-    TableName = aws_dynamodb_table.algoitny_django.name
+resource "aws_appautoscaling_policy" "main_table_write_policy" {
+  count              = var.enable_autoscaling && var.billing_mode == "PROVISIONED" ? 1 : 0
+  name               = "${var.project_name}_main_write_scaling"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.main_table_write[0].resource_id
+  scalable_dimension = aws_appautoscaling_target.main_table_write[0].scalable_dimension
+  service_namespace  = aws_appautoscaling_target.main_table_write[0].service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "DynamoDBWriteCapacityUtilization"
+    }
+    target_value = var.target_utilization
   }
+}
 
-  tags = {
-    Environment = var.environment
-    ManagedBy   = "Terraform"
+# ---------------------------------------------------------------------------
+# Main Table GSI1 Auto-Scaling
+# ---------------------------------------------------------------------------
+
+resource "aws_appautoscaling_target" "main_gsi1_read" {
+  count              = var.enable_autoscaling && var.billing_mode == "PROVISIONED" ? 1 : 0
+  max_capacity       = var.max_read_capacity
+  min_capacity       = var.min_read_capacity
+  resource_id        = "table/${aws_dynamodb_table.algoitny_main.name}/index/GSI1"
+  scalable_dimension = "dynamodb:index:ReadCapacityUnits"
+  service_namespace  = "dynamodb"
+}
+
+resource "aws_appautoscaling_policy" "main_gsi1_read_policy" {
+  count              = var.enable_autoscaling && var.billing_mode == "PROVISIONED" ? 1 : 0
+  name               = "${var.project_name}_main_gsi1_read_scaling"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.main_gsi1_read[0].resource_id
+  scalable_dimension = aws_appautoscaling_target.main_gsi1_read[0].scalable_dimension
+  service_namespace  = aws_appautoscaling_target.main_gsi1_read[0].service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "DynamoDBReadCapacityUtilization"
+    }
+    target_value = var.target_utilization
+  }
+}
+
+resource "aws_appautoscaling_target" "main_gsi1_write" {
+  count              = var.enable_autoscaling && var.billing_mode == "PROVISIONED" ? 1 : 0
+  max_capacity       = var.max_write_capacity
+  min_capacity       = var.min_write_capacity
+  resource_id        = "table/${aws_dynamodb_table.algoitny_main.name}/index/GSI1"
+  scalable_dimension = "dynamodb:index:WriteCapacityUnits"
+  service_namespace  = "dynamodb"
+}
+
+resource "aws_appautoscaling_policy" "main_gsi1_write_policy" {
+  count              = var.enable_autoscaling && var.billing_mode == "PROVISIONED" ? 1 : 0
+  name               = "${var.project_name}_main_gsi1_write_scaling"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.main_gsi1_write[0].resource_id
+  scalable_dimension = aws_appautoscaling_target.main_gsi1_write[0].scalable_dimension
+  service_namespace  = aws_appautoscaling_target.main_gsi1_write[0].service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "DynamoDBWriteCapacityUtilization"
+    }
+    target_value = var.target_utilization
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Main Table GSI2 Auto-Scaling
+# ---------------------------------------------------------------------------
+
+resource "aws_appautoscaling_target" "main_gsi2_read" {
+  count              = var.enable_autoscaling && var.billing_mode == "PROVISIONED" ? 1 : 0
+  max_capacity       = var.max_read_capacity
+  min_capacity       = var.min_read_capacity
+  resource_id        = "table/${aws_dynamodb_table.algoitny_main.name}/index/GSI2"
+  scalable_dimension = "dynamodb:index:ReadCapacityUnits"
+  service_namespace  = "dynamodb"
+}
+
+resource "aws_appautoscaling_policy" "main_gsi2_read_policy" {
+  count              = var.enable_autoscaling && var.billing_mode == "PROVISIONED" ? 1 : 0
+  name               = "${var.project_name}_main_gsi2_read_scaling"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.main_gsi2_read[0].resource_id
+  scalable_dimension = aws_appautoscaling_target.main_gsi2_read[0].scalable_dimension
+  service_namespace  = aws_appautoscaling_target.main_gsi2_read[0].service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "DynamoDBReadCapacityUtilization"
+    }
+    target_value = var.target_utilization
+  }
+}
+
+resource "aws_appautoscaling_target" "main_gsi2_write" {
+  count              = var.enable_autoscaling && var.billing_mode == "PROVISIONED" ? 1 : 0
+  max_capacity       = var.max_write_capacity
+  min_capacity       = var.min_write_capacity
+  resource_id        = "table/${aws_dynamodb_table.algoitny_main.name}/index/GSI2"
+  scalable_dimension = "dynamodb:index:WriteCapacityUnits"
+  service_namespace  = "dynamodb"
+}
+
+resource "aws_appautoscaling_policy" "main_gsi2_write_policy" {
+  count              = var.enable_autoscaling && var.billing_mode == "PROVISIONED" ? 1 : 0
+  name               = "${var.project_name}_main_gsi2_write_scaling"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.main_gsi2_write[0].resource_id
+  scalable_dimension = aws_appautoscaling_target.main_gsi2_write[0].scalable_dimension
+  service_namespace  = aws_appautoscaling_target.main_gsi2_write[0].service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "DynamoDBWriteCapacityUtilization"
+    }
+    target_value = var.target_utilization
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Main Table GSI3 Auto-Scaling
+# ---------------------------------------------------------------------------
+
+resource "aws_appautoscaling_target" "main_gsi3_read" {
+  count              = var.enable_autoscaling && var.billing_mode == "PROVISIONED" ? 1 : 0
+  max_capacity       = var.max_read_capacity
+  min_capacity       = var.min_read_capacity
+  resource_id        = "table/${aws_dynamodb_table.algoitny_main.name}/index/GSI3"
+  scalable_dimension = "dynamodb:index:ReadCapacityUnits"
+  service_namespace  = "dynamodb"
+}
+
+resource "aws_appautoscaling_policy" "main_gsi3_read_policy" {
+  count              = var.enable_autoscaling && var.billing_mode == "PROVISIONED" ? 1 : 0
+  name               = "${var.project_name}_main_gsi3_read_scaling"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.main_gsi3_read[0].resource_id
+  scalable_dimension = aws_appautoscaling_target.main_gsi3_read[0].scalable_dimension
+  service_namespace  = aws_appautoscaling_target.main_gsi3_read[0].service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "DynamoDBReadCapacityUtilization"
+    }
+    target_value = var.target_utilization
+  }
+}
+
+resource "aws_appautoscaling_target" "main_gsi3_write" {
+  count              = var.enable_autoscaling && var.billing_mode == "PROVISIONED" ? 1 : 0
+  max_capacity       = var.max_write_capacity
+  min_capacity       = var.min_write_capacity
+  resource_id        = "table/${aws_dynamodb_table.algoitny_main.name}/index/GSI3"
+  scalable_dimension = "dynamodb:index:WriteCapacityUnits"
+  service_namespace  = "dynamodb"
+}
+
+resource "aws_appautoscaling_policy" "main_gsi3_write_policy" {
+  count              = var.enable_autoscaling && var.billing_mode == "PROVISIONED" ? 1 : 0
+  name               = "${var.project_name}_main_gsi3_write_scaling"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.main_gsi3_write[0].resource_id
+  scalable_dimension = aws_appautoscaling_target.main_gsi3_write[0].scalable_dimension
+  service_namespace  = aws_appautoscaling_target.main_gsi3_write[0].service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "DynamoDBWriteCapacityUtilization"
+    }
+    target_value = var.target_utilization
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Django Table Auto-Scaling
+# ---------------------------------------------------------------------------
+
+# Django Table - Read Capacity
+resource "aws_appautoscaling_target" "django_table_read" {
+  count              = var.enable_autoscaling && var.billing_mode == "PROVISIONED" ? 1 : 0
+  max_capacity       = var.max_read_capacity
+  min_capacity       = var.min_read_capacity
+  resource_id        = "table/${aws_dynamodb_table.algoitny_django.name}"
+  scalable_dimension = "dynamodb:table:ReadCapacityUnits"
+  service_namespace  = "dynamodb"
+}
+
+resource "aws_appautoscaling_policy" "django_table_read_policy" {
+  count              = var.enable_autoscaling && var.billing_mode == "PROVISIONED" ? 1 : 0
+  name               = "${var.project_name}_django_read_scaling"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.django_table_read[0].resource_id
+  scalable_dimension = aws_appautoscaling_target.django_table_read[0].scalable_dimension
+  service_namespace  = aws_appautoscaling_target.django_table_read[0].service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "DynamoDBReadCapacityUtilization"
+    }
+    target_value = var.target_utilization
+  }
+}
+
+# Django Table - Write Capacity
+resource "aws_appautoscaling_target" "django_table_write" {
+  count              = var.enable_autoscaling && var.billing_mode == "PROVISIONED" ? 1 : 0
+  max_capacity       = var.max_write_capacity
+  min_capacity       = var.min_write_capacity
+  resource_id        = "table/${aws_dynamodb_table.algoitny_django.name}"
+  scalable_dimension = "dynamodb:table:WriteCapacityUnits"
+  service_namespace  = "dynamodb"
+}
+
+resource "aws_appautoscaling_policy" "django_table_write_policy" {
+  count              = var.enable_autoscaling && var.billing_mode == "PROVISIONED" ? 1 : 0
+  name               = "${var.project_name}_django_write_scaling"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.django_table_write[0].resource_id
+  scalable_dimension = aws_appautoscaling_target.django_table_write[0].scalable_dimension
+  service_namespace  = aws_appautoscaling_target.django_table_write[0].service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "DynamoDBWriteCapacityUtilization"
+    }
+    target_value = var.target_utilization
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Django Table TypeIndex GSI Auto-Scaling
+# ---------------------------------------------------------------------------
+
+resource "aws_appautoscaling_target" "django_typeindex_read" {
+  count              = var.enable_autoscaling && var.billing_mode == "PROVISIONED" ? 1 : 0
+  max_capacity       = var.max_read_capacity
+  min_capacity       = var.min_read_capacity
+  resource_id        = "table/${aws_dynamodb_table.algoitny_django.name}/index/TypeIndex"
+  scalable_dimension = "dynamodb:index:ReadCapacityUnits"
+  service_namespace  = "dynamodb"
+}
+
+resource "aws_appautoscaling_policy" "django_typeindex_read_policy" {
+  count              = var.enable_autoscaling && var.billing_mode == "PROVISIONED" ? 1 : 0
+  name               = "${var.project_name}_django_typeindex_read_scaling"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.django_typeindex_read[0].resource_id
+  scalable_dimension = aws_appautoscaling_target.django_typeindex_read[0].scalable_dimension
+  service_namespace  = aws_appautoscaling_target.django_typeindex_read[0].service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "DynamoDBReadCapacityUtilization"
+    }
+    target_value = var.target_utilization
+  }
+}
+
+resource "aws_appautoscaling_target" "django_typeindex_write" {
+  count              = var.enable_autoscaling && var.billing_mode == "PROVISIONED" ? 1 : 0
+  max_capacity       = var.max_write_capacity
+  min_capacity       = var.min_write_capacity
+  resource_id        = "table/${aws_dynamodb_table.algoitny_django.name}/index/TypeIndex"
+  scalable_dimension = "dynamodb:index:WriteCapacityUnits"
+  service_namespace  = "dynamodb"
+}
+
+resource "aws_appautoscaling_policy" "django_typeindex_write_policy" {
+  count              = var.enable_autoscaling && var.billing_mode == "PROVISIONED" ? 1 : 0
+  name               = "${var.project_name}_django_typeindex_write_scaling"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.django_typeindex_write[0].resource_id
+  scalable_dimension = aws_appautoscaling_target.django_typeindex_write[0].scalable_dimension
+  service_namespace  = aws_appautoscaling_target.django_typeindex_write[0].service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "DynamoDBWriteCapacityUtilization"
+    }
+    target_value = var.target_utilization
   }
 }

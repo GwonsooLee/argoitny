@@ -136,8 +136,18 @@ function SearchHistory({ onRequestLogin }) {
         showSnackbar('Code not available', 'warning');
         return;
       }
+
+      // Decode base64 encoded code
+      let decodedCode = item.code;
+      try {
+        decodedCode = atob(item.code);
+      } catch (error) {
+        console.error('Failed to decode code:', error);
+        // If decoding fails, use the code as is (might already be decoded)
+      }
+
       setSelectedCode({
-        code: item.code,
+        code: decodedCode,
         language: item.language,
         problemTitle: item.problem_title,
         platform: item.platform,
