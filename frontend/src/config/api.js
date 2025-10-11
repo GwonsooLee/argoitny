@@ -32,7 +32,7 @@ export const API_ENDPOINTS = {
 
   // Code Execution
   execute: '/execute/',
-  taskStatus: (taskId) => `/register/task-status/${taskId}/`,
+  // taskStatus: REMOVED - Celery result backend disabled, task status no longer available
 
   // Search History
   history: '/history/',

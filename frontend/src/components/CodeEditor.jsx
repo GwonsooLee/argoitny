@@ -16,7 +16,7 @@ import {
   Alert
 } from '@mui/material';
 import { PlayArrow as PlayArrowIcon } from '@mui/icons-material';
-import { apiPost, apiGet } from '../utils/api-client';
+import { apiPost } from '../utils/api-client';
 import { API_ENDPOINTS } from '../config/api';
 import { getUser, isAuthenticated } from '../utils/auth';
 
@@ -103,47 +103,16 @@ function CodeEditor({ platform, problemId, onTestResults, hintsLoading = false }
       }
 
       const data = await response.json();
-      const taskId = data.task_id;
 
-      showSnackbar('Code execution started...', 'info');
+      // TODO: Code execution is async but Celery result backend was removed
+      // Need to implement one of the following:
+      // 1. Make execution synchronous (wait for results)
+      // 2. Create new polling endpoint that queries DynamoDB SearchHistory
+      // 3. Use WebSockets for real-time updates
+      // For now, showing a message that execution is in progress
 
-      // Poll for task completion
-      const pollInterval = setInterval(async () => {
-        try {
-          const statusResponse = await apiGet(API_ENDPOINTS.taskStatus(taskId), { requireAuth: true });
-          if (!statusResponse.ok) {
-            clearInterval(pollInterval);
-            setLoading(false);
-            return;
-          }
-
-          const statusData = await statusResponse.json();
-
-          if (statusData.status === 'COMPLETED') {
-            clearInterval(pollInterval);
-            setLoading(false);
-            setProgress({ current: 0, total: 0 });
-            console.log('[CodeEditor] Task completed, result:', statusData.result);
-            onTestResults(statusData.result);
-            showSnackbar('Code executed successfully', 'success');
-          } else if (statusData.status === 'FAILED') {
-            clearInterval(pollInterval);
-            setLoading(false);
-            setProgress({ current: 0, total: 0 });
-            showSnackbar(`Execution failed: ${statusData.result?.error || 'Unknown error'}`, 'error');
-          } else if (statusData.status === 'PROGRESS' && statusData.result) {
-            // Update progress
-            setProgress({
-              current: statusData.result.current || 0,
-              total: statusData.result.total || 0
-            });
-          }
-        } catch (pollError) {
-          clearInterval(pollInterval);
-          setLoading(false);
-          showSnackbar('Error checking execution status', 'error');
-        }
-      }, 3000); // Poll every 3 seconds
+      setLoading(false);
+      showSnackbar('Code execution started. Please refresh to see results.', 'info');
 
     } catch (error) {
       console.error('Error executing code:', error);

@@ -925,65 +925,6 @@ class GenerateOutputsView(APIView):
             )
 
 
-class CheckTaskStatusView(APIView):
-    """Check the status of an async task"""
-    permission_classes = [AllowAny]
-
-    async def get(self, request, task_id):
-        """
-        Check the status of a Celery task
-
-        Returns:
-            {
-                "status": "PENDING|PROCESSING|COMPLETED|FAILED",
-                "result": {...} or "error": "..."
-            }
-        """
-        from celery.result import AsyncResult
-
-        # Wrap synchronous Celery operations
-        task = await sync_to_async(AsyncResult)(task_id)
-        state = await sync_to_async(lambda: task.state)()
-
-        if state == 'PENDING':
-            response = {
-                'status': 'PENDING',
-                'message': 'Task is waiting to be executed'
-            }
-        elif state == 'PROCESSING':
-            response = {
-                'status': 'PROCESSING',
-                'message': 'Task is being processed'
-            }
-        elif state == 'PROGRESS':
-            # Handle progress updates from task
-            info = await sync_to_async(lambda: task.info)()
-            response = {
-                'status': 'PROGRESS',
-                'result': info if info else {}
-            }
-        elif state == 'SUCCESS':
-            result = await sync_to_async(lambda: task.result)()
-            response = {
-                'status': 'COMPLETED',
-                'result': result
-            }
-        elif state == 'FAILURE':
-            info = await sync_to_async(lambda: task.info)()
-            response = {
-                'status': 'FAILED',
-                'error': str(info)
-            }
-        else:
-            info = await sync_to_async(lambda: task.info)()
-            response = {
-                'status': state,
-                'message': str(info)
-            }
-
-        return Response(response, status=status.HTTP_200_OK)
-
-
 class ToggleCompletionView(APIView):
     """Toggle problem completion status"""
     permission_classes = [AllowAny]

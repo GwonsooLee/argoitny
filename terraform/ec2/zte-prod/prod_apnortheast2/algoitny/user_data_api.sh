@@ -78,7 +78,8 @@ cache:
     long: 1800
 
 celery:
-  result_backend: "django-db"
+  # result_backend: REMOVED - Not using Celery result backend
+  # Job state is tracked in DynamoDB (Job tables), not in Celery result backend
   task_time_limit: 1800
   task_soft_time_limit: 1680
   task_acks_late: false
@@ -89,8 +90,7 @@ celery:
   broker_connection_retry_on_startup: true
   broker_connection_max_retries: 10
   broker_pool_limit: 10
-  result_expires: 86400
-  result_compression: "gzip"
+  # result_expires/result_compression: REMOVED - CELERY_RESULT_BACKEND=None
   task_queue_max_priority: 10
   task_default_priority: 5
 

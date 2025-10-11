@@ -482,57 +482,6 @@ class TestGenerateOutputs:
 
 
 @pytest.mark.django_db
-class TestCheckTaskStatus:
-    """Test task status check endpoint"""
-
-    def test_check_task_status_success(self, authenticated_client):
-        """Test checking task status"""
-        with patch('celery.result.AsyncResult') as mock_result:
-            mock_task = Mock()
-            mock_task.state = 'SUCCESS'
-            mock_task.result = {'test': 'result'}
-            mock_result.return_value = mock_task
-
-            response = authenticated_client.get('/api/register/task-status/test-task-123/')
-
-            assert response.status_code == status.HTTP_200_OK
-            assert response.data['status'] == 'COMPLETED'
-            assert 'result' in response.data
-
-    def test_check_task_status_pending(self, authenticated_client):
-        """Test checking pending task"""
-        with patch('celery.result.AsyncResult') as mock_result:
-            mock_task = Mock()
-            mock_task.state = 'PENDING'
-            mock_result.return_value = mock_task
-
-            response = authenticated_client.get('/api/register/task-status/test-task-123/')
-
-            assert response.status_code == status.HTTP_200_OK
-            assert response.data['status'] == 'PENDING'
-
-    def test_check_task_status_failed(self, authenticated_client):
-        """Test checking failed task"""
-        with patch('celery.result.AsyncResult') as mock_result:
-            mock_task = Mock()
-            mock_task.state = 'FAILURE'
-            mock_task.info = Exception('Task failed')
-            mock_result.return_value = mock_task
-
-            response = authenticated_client.get('/api/register/task-status/test-task-123/')
-
-            assert response.status_code == status.HTTP_200_OK
-            assert response.data['status'] == 'FAILED'
-            assert 'error' in response.data
-
-    def test_check_task_status_unauthenticated(self, api_client):
-        """Test checking task status without authentication"""
-        response = api_client.get('/api/register/task-status/test-task-123/')
-
-        assert response.status_code == status.HTTP_401_UNAUTHORIZED
-
-
-@pytest.mark.django_db
 class TestJobDelete:
     """Test script generation job deletion endpoint"""
 

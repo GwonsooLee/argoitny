@@ -68,7 +68,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt',
     'corsheaders',
-    'django_celery_results',
+    # 'django_celery_results',  # REMOVED: Using DynamoDB for job state tracking
     'api',
 ]
 
@@ -478,8 +478,9 @@ else:
         default=f'sqs://{AWS_ACCESS_KEY_ID}:{AWS_SECRET_ACCESS_KEY}@'
     )
 
-CELERY_RESULT_BACKEND = 'django-db'
-CELERY_CACHE_BACKEND = 'default'
+# CELERY_RESULT_BACKEND disabled - not using Celery result backend
+# Job state is tracked in DynamoDB (Job tables), not in Celery result backend
+CELERY_RESULT_BACKEND = None
 
 # Serialization
 CELERY_ACCEPT_CONTENT = ['application/json']
@@ -551,10 +552,8 @@ else:
         }
     }
 
-# Result backend optimization
-CELERY_RESULT_EXTENDED = True
-CELERY_RESULT_EXPIRES = config.get_int('celery.result_expires', default=86400)
-CELERY_RESULT_COMPRESSION = config.get('celery.result_compression', default='gzip')
+# Result backend optimization removed - CELERY_RESULT_BACKEND=None
+# (Job state tracked in DynamoDB, not Celery result backend)
 
 # Default queue configuration
 # Queue name in SQS: algoitny-jobs-prod (created by Terraform)

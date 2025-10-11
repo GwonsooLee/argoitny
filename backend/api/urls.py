@@ -21,7 +21,6 @@ from .views import (
     SaveProblemView,
     SaveTestCaseInputsView,
     GenerateOutputsView,
-    CheckTaskStatusView,
     ToggleCompletionView,
     JobListView,
     JobDetailView,
@@ -97,9 +96,6 @@ urlpatterns = [
 
     # Regenerate Solution
     path('register/problems/<str:platform>/<str:problem_id>/regenerate-solution/', RegenerateSolutionView.as_view(), name='regenerate-solution'),
-
-    # Task Status
-    path('register/task-status/<str:task_id>/', CheckTaskStatusView.as_view(), name='register-task-status'),
 
     # Toggle Completion
     path('problems/toggle-completion/', ToggleCompletionView.as_view(), name='toggle-completion'),
