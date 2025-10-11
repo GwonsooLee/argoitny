@@ -17,6 +17,6 @@ worker_max_size         = 5
 worker_desired_capacity = 1
 
 # Application Configuration
-image_tag        = "v0.0.17"
+image_tag        = "v0.0.18"
 allowed_hosts    = "*"
 gunicorn_workers = 4
