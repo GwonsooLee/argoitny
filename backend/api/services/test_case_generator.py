@@ -43,6 +43,7 @@ class TestCaseGenerator:
         'hash': hash,  # Allow hash for duplicate detection
         'print': print,  # Allow print for debugging
         '__import__': __import__,  # Allow __import__ for module imports
+        'ValueError': ValueError,  # Allow ValueError for validation
     }
 
     # Allowed modules
@@ -136,7 +137,87 @@ class TestCaseGenerator:
                 # Add comprehension variables
                 if isinstance(node.target, ast.Name):
                     self.current_scope_stack[-1].add(node.target.id)
+                elif isinstance(node.target, (ast.Tuple, ast.List)):
+                    for elt in node.target.elts:
+                        if isinstance(elt, ast.Name):
+                            self.current_scope_stack[-1].add(elt.id)
                 self.generic_visit(node)
+
+            def visit_ListComp(self, node):
+                # List comprehensions have their own scope
+                self.current_scope_stack.append(set())
+
+                # Add comprehension variables to the new scope
+                for generator in node.generators:
+                    if isinstance(generator.target, ast.Name):
+                        self.current_scope_stack[-1].add(generator.target.id)
+                    elif isinstance(generator.target, (ast.Tuple, ast.List)):
+                        for elt in generator.target.elts:
+                            if isinstance(elt, ast.Name):
+                                self.current_scope_stack[-1].add(elt.id)
+
+                # Visit all parts of the comprehension
+                self.generic_visit(node)
+
+                # Pop comprehension scope
+                self.current_scope_stack.pop()
+
+            def visit_SetComp(self, node):
+                # Set comprehensions have their own scope
+                self.current_scope_stack.append(set())
+
+                # Add comprehension variables to the new scope
+                for generator in node.generators:
+                    if isinstance(generator.target, ast.Name):
+                        self.current_scope_stack[-1].add(generator.target.id)
+                    elif isinstance(generator.target, (ast.Tuple, ast.List)):
+                        for elt in generator.target.elts:
+                            if isinstance(elt, ast.Name):
+                                self.current_scope_stack[-1].add(elt.id)
+
+                # Visit all parts of the comprehension
+                self.generic_visit(node)
+
+                # Pop comprehension scope
+                self.current_scope_stack.pop()
+
+            def visit_DictComp(self, node):
+                # Dict comprehensions have their own scope
+                self.current_scope_stack.append(set())
+
+                # Add comprehension variables to the new scope
+                for generator in node.generators:
+                    if isinstance(generator.target, ast.Name):
+                        self.current_scope_stack[-1].add(generator.target.id)
+                    elif isinstance(generator.target, (ast.Tuple, ast.List)):
+                        for elt in generator.target.elts:
+                            if isinstance(elt, ast.Name):
+                                self.current_scope_stack[-1].add(elt.id)
+
+                # Visit all parts of the comprehension
+                self.generic_visit(node)
+
+                # Pop comprehension scope
+                self.current_scope_stack.pop()
+
+            def visit_GeneratorExp(self, node):
+                # Generator expressions have their own scope
+                self.current_scope_stack.append(set())
+
+                # Add comprehension variables to the new scope
+                for generator in node.generators:
+                    if isinstance(generator.target, ast.Name):
+                        self.current_scope_stack[-1].add(generator.target.id)
+                    elif isinstance(generator.target, (ast.Tuple, ast.List)):
+                        for elt in generator.target.elts:
+                            if isinstance(elt, ast.Name):
+                                self.current_scope_stack[-1].add(elt.id)
+
+                # Visit all parts of the comprehension
+                self.generic_visit(node)
+
+                # Pop comprehension scope
+                self.current_scope_stack.pop()
 
             def visit_Name(self, node):
                 # Check if name is being loaded (used) and not defined

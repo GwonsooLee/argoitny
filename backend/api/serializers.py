@@ -165,6 +165,12 @@ class GenerateTestCasesSerializer(serializers.Serializer):
     )
     language = serializers.CharField(max_length=50)
     constraints = serializers.CharField()
+    model = serializers.ChoiceField(
+        choices=['gemini-flash', 'gemini-pro', 'gpt-4o', 'gpt-5'],
+        default='gpt-5',
+        required=False,
+        help_text="LLM model to use for test case generation"
+    )
 
 
 class RegisterProblemSerializer(serializers.Serializer):

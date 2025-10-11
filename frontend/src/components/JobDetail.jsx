@@ -116,6 +116,7 @@ function JobDetail({ jobId, onBack }) {
         solution_code: job.solution_code || '',
         language: job.language,
         constraints: job.constraints,
+        model: job.model || 'gpt-5',  // Use the same model as the original job
       });
 
       if (!response.ok) {

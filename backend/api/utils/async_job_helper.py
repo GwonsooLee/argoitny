@@ -16,7 +16,7 @@ class AsyncJobHelper:
         Create a ScriptGenerationJob in DynamoDB (async)
 
         Args:
-            platform, problem_id, title, language, constraints, problem_url, tags, status
+            platform, problem_id, title, language, constraints, problem_url, tags, model, status
             Note: solution_code is NOT stored in SGJOB - it should be fetched from Problem entity
 
         Returns:
@@ -38,6 +38,7 @@ class AsyncJobHelper:
                 constraints=kwargs.get('constraints', ''),
                 problem_url=kwargs.get('problem_url', ''),
                 tags=kwargs.get('tags', []),
+                model=kwargs.get('model', 'gpt-5'),
                 status=kwargs.get('status', 'PENDING')
             )
 

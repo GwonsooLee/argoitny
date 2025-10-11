@@ -31,6 +31,7 @@ class ScriptGenerationJobRepository(BaseRepository):
             'lng': language,
             'con': constraints,
             'gen': generator_code,
+            'mdl': model (LLM model used for generation),
             'sts': status (PENDING, PROCESSING, COMPLETED, FAILED),
             'tid': celery_task_id,
             'err': error_message
@@ -54,6 +55,7 @@ class ScriptGenerationJobRepository(BaseRepository):
         constraints: str,
         problem_url: str = '',
         tags: List[str] = None,
+        model: str = 'gpt-5',
         status: str = 'PENDING',
         job_id: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -68,6 +70,7 @@ class ScriptGenerationJobRepository(BaseRepository):
             constraints: Problem constraints
             problem_url: URL to problem (optional)
             tags: Problem tags (optional)
+            model: LLM model to use (default: gpt-5)
             status: Job status (default: PENDING)
             job_id: Optional job ID (if not provided, UUID will be generated)
 
@@ -96,6 +99,7 @@ class ScriptGenerationJobRepository(BaseRepository):
                 'lng': language,
                 'con': constraints,
                 'gen': '',  # generator_code initially empty
+                'mdl': model,  # LLM model used for generation
                 'sts': status,
                 'tid': '',  # celery_task_id initially empty
                 'err': ''   # error_message initially empty
@@ -181,6 +185,7 @@ class ScriptGenerationJobRepository(BaseRepository):
             'tags': ('dat.tag', 'tag'),
             'language': ('dat.lng', 'lng'),
             'constraints': ('dat.con', 'con'),
+            'model': ('dat.mdl', 'mdl'),
         }
 
         for key, value in updates.items():
@@ -491,6 +496,7 @@ class ScriptGenerationJobRepository(BaseRepository):
             'language': dat.get('lng', ''),
             'constraints': dat.get('con', ''),
             'generator_code': generator_code,
+            'model': dat.get('mdl', 'gpt-5'),  # LLM model used for generation
             'status': dat.get('sts', 'PENDING'),
             'celery_task_id': dat.get('tid', ''),
             'error_message': dat.get('err', ''),

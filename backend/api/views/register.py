@@ -83,6 +83,7 @@ class GenerateTestCasesView(APIView):
                 tags=serializer.validated_data.get('tags', []),
                 language=serializer.validated_data['language'],
                 constraints=serializer.validated_data['constraints'],
+                model=serializer.validated_data.get('model', 'gpt-5'),
                 status='PENDING'
             )
 
@@ -1136,10 +1137,18 @@ class ExtractProblemInfoView(APIView):
             'max_output_tokens': 8192
         })
 
-        # Auto-adjust max_output_tokens based on reasoning_effort
-        if llm_config.get('reasoning_effort') == 'high' and llm_config.get('max_output_tokens', 0) < 96000:
-            llm_config['max_output_tokens'] = 128000  # High reasoning needs more tokens
-            logger.info(f"[ExtractProblemInfoView] Auto-adjusted max_output_tokens to 128000 for high reasoning")
+        # Auto-adjust max_output_tokens based on model and reasoning_effort
+        model = llm_config.get('model', 'gpt-5')
+        current_tokens = llm_config.get('max_output_tokens', 0)
+
+        if model in ['gpt-4o', 'gpt-5']:
+            # gpt-4o and gpt-5 support high output tokens
+            if llm_config.get('reasoning_effort') == 'high' and current_tokens < 96000:
+                llm_config['max_output_tokens'] = 128000  # High reasoning needs more tokens
+                logger.info(f"[ExtractProblemInfoView] Auto-adjusted max_output_tokens to 128000 for {model} with high reasoning")
+            elif current_tokens < 16000:
+                llm_config['max_output_tokens'] = 32000  # Default higher for gpt-4o/gpt-5
+                logger.info(f"[ExtractProblemInfoView] Auto-adjusted max_output_tokens to 32000 for {model}")
 
         # Add logging
         logger.info(f"[ExtractProblemInfoView] Received URL: {problem_url}")
@@ -1485,10 +1494,18 @@ class RegenerateSolutionView(APIView):
                 'max_output_tokens': 8192
             })
 
-            # Auto-adjust max_output_tokens based on reasoning_effort
-            if llm_config.get('reasoning_effort') == 'high' and llm_config.get('max_output_tokens', 0) < 96000:
-                llm_config['max_output_tokens'] = 128000  # High reasoning needs more tokens
-                logger.info(f"[RegenerateSolutionView] Auto-adjusted max_output_tokens to 128000 for high reasoning")
+            # Auto-adjust max_output_tokens based on model and reasoning_effort
+            model = llm_config.get('model', 'gpt-5')
+            current_tokens = llm_config.get('max_output_tokens', 0)
+
+            if model in ['gpt-4o', 'gpt-5']:
+                # gpt-4o and gpt-5 support high output tokens
+                if llm_config.get('reasoning_effort') == 'high' and current_tokens < 96000:
+                    llm_config['max_output_tokens'] = 128000  # High reasoning needs more tokens
+                    logger.info(f"[RegenerateSolutionView] Auto-adjusted max_output_tokens to 128000 for {model} with high reasoning")
+                elif current_tokens < 16000:
+                    llm_config['max_output_tokens'] = 32000  # Default higher for gpt-4o/gpt-5
+                    logger.info(f"[RegenerateSolutionView] Auto-adjusted max_output_tokens to 32000 for {model}")
 
             # Validate problem URL exists
             problem_url = problem.get('problem_url', '')
