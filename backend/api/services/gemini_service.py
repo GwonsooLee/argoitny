@@ -642,21 +642,80 @@ IMPORTANT REQUIREMENTS:
 - Include edge cases: minimum values, maximum values, boundary conditions
 - Match the EXACT input format from the solution code
 
-CRITICAL CODE VALIDATION:
-Your generated code will be validated for:
-1. **Syntax errors**: Code must be syntactically correct Python
-2. **Undefined names**: ALL variables, constants, and functions MUST be defined before use
-   - ❌ WRONG: `val = random.randint(1, MAX_VAL)` if MAX_VAL is not defined
-   - ✅ CORRECT: Define it first: `MAX_VAL = 1000000` then `val = random.randint(1, MAX_VAL)`
-3. **Scope errors**: Variables must be defined in the scope where they are used
-   - If you use a constant in a nested function, define it in that function or pass it as parameter
-4. **Module imports**: Only allowed modules are random, math, string, itertools, collections
+⚠️⚠️⚠️ CRITICAL CODE VALIDATION - READ CAREFULLY ⚠️⚠️⚠️
 
-COMMON MISTAKES TO AVOID:
-- Using undefined constants like MAX_N, MAX_VAL, MIN_VAL without defining them
-- Referencing outer scope variables from nested functions (Python scoping rules)
-- Using variables before assignment
-- Typos in variable names
+Your generated code WILL BE REJECTED if it contains ANY undefined names or variables.
+
+MANDATORY RULES FOR ALL VARIABLES AND CONSTANTS:
+1. **ALWAYS define variables BEFORE using them** - no exceptions!
+2. **NEVER use undefined constants** like MAX_N, MAX_VAL, MIN_VAL, LIMIT, etc.
+3. **ALWAYS define constants at the TOP of your function or nested function**
+4. **Check EVERY variable name** - if it's not defined earlier, you MUST define it first
+
+CORRECT PATTERN (ALWAYS DO THIS):
+```python
+def generate_test_cases(n, size='mixed'):
+    import random
+
+    # ✅ CORRECT: Define ALL constants at the top
+    MAX_N = 100000
+    MAX_VAL = 1000000000
+    MIN_VAL = 1
+
+    def generate_single_case(size_type):
+        # ✅ CORRECT: Define constants in nested function scope if needed
+        if size_type == 'small':
+            max_size = 10
+            max_value = 100
+        elif size_type == 'medium':
+            max_size = 1000
+            max_value = 10000
+        else:  # large
+            max_size = MAX_N  # ✅ Can use parent scope variable
+            max_value = MAX_VAL
+
+        size = random.randint(1, max_size)
+        arr = [random.randint(MIN_VAL, max_value) for _ in range(size)]
+        return "{{}}\\n{{}}".format(size, ' '.join(map(str, arr)))
+
+    test_cases = []
+    for _ in range(n):
+        test_cases.append(generate_single_case(size))
+    return test_cases
+```
+
+WRONG PATTERNS (NEVER DO THIS):
+```python
+# ❌ WRONG: Using MAX_VAL without defining it
+val = random.randint(1, MAX_VAL)  # This will cause "Undefined name: MAX_VAL" error
+
+# ❌ WRONG: Using constants without defining them first
+arr = [random.randint(1, MAX_VALUE) for _ in range(MAX_SIZE)]
+
+# ❌ WRONG: Typo in variable name
+max_val = 1000
+val = random.randint(1, max_value)  # Typo: max_value vs max_val
+
+# ❌ WRONG: Using variable before defining
+result.append(case)  # Error if result was never defined
+result = []
+```
+
+STEP-BY-STEP CHECKLIST BEFORE WRITING CODE:
+1. ✅ Identify ALL constants from problem constraints (e.g., max N, max value, min value)
+2. ✅ Define these constants at the TOP of your function
+3. ✅ For each nested function, define its own constants OR use parent scope variables
+4. ✅ DOUBLE-CHECK every variable name - is it defined before use?
+5. ✅ VERIFY no typos in variable names
+6. ✅ Import all needed modules (random, math, string, etc.) at the START
+
+VALIDATION CHECKS YOUR CODE MUST PASS:
+- ✅ No undefined variables or constants
+- ✅ All imports at the top
+- ✅ All constants defined before use
+- ✅ No scope errors
+- ✅ No typos in variable names
+- ✅ Syntactically correct Python
 
 CRITICAL: Return ONLY executable Python code. Do NOT include:
 - Markdown code blocks (```python or ```)
@@ -680,6 +739,11 @@ Then your generator should look like:
 '''
 def generate_test_cases(n, size='mixed'):
     import random
+
+    # ✅ IMPORTANT: Define all constants from constraints at the TOP
+    # Even though not used in this example, if you need MAX_N or MAX_VAL, define them here:
+    # MAX_N = 100000
+    # MAX_VAL = 1000000000
 
     def generate_single_case(size_type):
         if size_type == 'small':
@@ -819,29 +883,33 @@ Then your generator should look like:
 def generate_test_cases(n, size='mixed'):
     import random
 
+    # ✅ IMPORTANT: Define all constants from constraints at the TOP
+    MAX_LENGTH = 1000000
+    ALPHABET = 'abcdefghijklmnopqrstuvwxyz'
+
     def generate_single_string(size_type):
         if size_type == 'small':
             length = random.randint(1, 100)
         elif size_type == 'medium':
             length = random.randint(100, 10000)
         else:  # large
-            length = random.randint(900000, 1000000)
+            length = random.randint(int(MAX_LENGTH * 0.9), MAX_LENGTH)  # ✅ Using defined constant
 
         # Add variety in string patterns
         pattern = random.choice(['random', 'all_same', 'palindrome', 'repeating'])
         if pattern == 'random':
-            return ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(length))
+            return ''.join(random.choice(ALPHABET) for _ in range(length))  # ✅ Using defined constant
         elif pattern == 'all_same':
-            char = random.choice('abcdefghijklmnopqrstuvwxyz')
+            char = random.choice(ALPHABET)  # ✅ Using defined constant
             return char * length
         elif pattern == 'palindrome':
-            half = ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(length // 2))
+            half = ''.join(random.choice(ALPHABET) for _ in range(length // 2))  # ✅ Using defined constant
             if length % 2 == 1:
-                return half + random.choice('abcdefghijklmnopqrstuvwxyz') + half[::-1]
+                return half + random.choice(ALPHABET) + half[::-1]  # ✅ Using defined constant
             else:
                 return half + half[::-1]
         else:  # repeating
-            pattern_str = ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(min(5, length)))
+            pattern_str = ''.join(random.choice(ALPHABET) for _ in range(min(5, length)))  # ✅ Using defined constant
             return (pattern_str * (length // len(pattern_str) + 1))[:length]
 
     test_cases = []
@@ -852,16 +920,16 @@ def generate_test_cases(n, size='mixed'):
     for _ in range(edge_count):
         edge_type = random.choice(['single_char', 'max_length', 'all_same', 'palindrome'])
         if edge_type == 'single_char':
-            case = random.choice('abcdefghijklmnopqrstuvwxyz')
+            case = random.choice(ALPHABET)  # ✅ Using defined constant
         elif edge_type == 'max_length':
-            case = ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(1000000))
+            case = ''.join(random.choice(ALPHABET) for _ in range(MAX_LENGTH))  # ✅ Using defined constant
         elif edge_type == 'all_same':
-            char = random.choice('abcdefghijklmnopqrstuvwxyz')
+            char = random.choice(ALPHABET)  # ✅ Using defined constant
             length = random.randint(10, 100)
             case = char * length
         else:  # palindrome
             length = random.randint(5, 50)
-            half = ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(length // 2))
+            half = ''.join(random.choice(ALPHABET) for _ in range(length // 2))  # ✅ Using defined constant
             case = half + half[::-1]
 
         case_hash = hash(case)
@@ -920,7 +988,15 @@ def generate_test_cases(n, size='mixed'):
     random.shuffle(test_cases)
     return test_cases
 
-Now write the COMPLETE function based on the solution code format and constraints:"""
+⚠️ FINAL REMINDER BEFORE YOU START:
+1. Define ALL constants at the TOP of your function (MAX_N, MAX_VAL, MIN_VAL, etc.)
+2. NEVER use undefined variables - check EVERY variable name
+3. Import all modules at the START (import random, import math, etc.)
+4. DOUBLE-CHECK for typos in variable names
+5. If you use a constant, it MUST be defined earlier in the code
+
+Now write the COMPLETE function based on the solution code format and constraints.
+Your code MUST have ZERO undefined names or it will be rejected:"""
 
         try:
             response = self.model.generate_content(prompt)
